@@ -1,0 +1,370 @@
+<?php
+
+namespace Unified\SsoClient\Http;
+
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Routing\Controller;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
+
+class SsoWebhookController extends Controller
+{
+    /**
+     * Handle incoming webhook from the SSO server.
+     *
+     * Verifies the HMAC signature, then dispatches to the appropriate handler
+     * based on the event type.
+     */
+    public function handle(Request $request): JsonResponse
+    {
+        if (! $this->verifySignature($request)) {
+            Log::warning('SSO webhook: invalid signature', [
+                'ip' => $request->ip(),
+                'event' => $request->input('event'),
+            ]);
+
+            return response()->json(['error' => 'Invalid signature'], 403);
+        }
+
+        $event = $request->input('event');
+
+        if (! $event) {
+            return response()->json(['error' => 'Missing event'], 422);
+        }
+
+        try {
+            $result = match ($event) {
+                'user.created' => $this->handleUserCreated($request),
+                'user.updated' => $this->handleUserUpdated($request),
+                'user.deleted' => $this->handleUserDeleted($request),
+                'company.updated' => $this->handleCompanyUpdated($request),
+                'company.activated' => $this->handleCompanyActivated($request),
+                'user.company_role_changed' => $this->handleUserRoleChanged($request),
+                default => $this->handleUnknownEvent($event),
+            };
+
+            return response()->json($result);
+        } catch (\Throwable $e) {
+            Log::error('SSO webhook handler failed', [
+                'event' => $event,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json(['error' => 'Handler failed'], 500);
+        }
+    }
+
+    protected function verifySignature(Request $request): bool
+    {
+        $secret = config('sso.webhook_secret');
+
+        if (! $secret) {
+            Log::warning('SSO webhook: no webhook_secret configured, rejecting request');
+
+            return false;
+        }
+
+        $signature = $request->header('X-SSO-Signature');
+
+        if (! $signature) {
+            return false;
+        }
+
+        $expectedSignature = hash_hmac('sha256', $request->getContent(), $secret);
+
+        return hash_equals($expectedSignature, $signature);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function handleUserCreated(Request $request): array
+    {
+        $userData = $request->input('user', []);
+        $companies = $request->input('companies', []);
+
+        $user = $this->upsertUser($userData);
+
+        if ($user) {
+            foreach ($companies as $companyData) {
+                $company = $this->findCompanyBySsoId($companyData['id'] ?? null, $companyData['legacyTenantId'] ?? $companyData['legacy_tenant_id'] ?? null);
+                if ($company) {
+                    $this->ensureUserAttachedToCompany($user, $company);
+                    $this->syncRoles($user, $company, $companyData['roles'] ?? ['User']);
+                }
+            }
+        }
+
+        return ['status' => 'ok', 'action' => 'user.created'];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function handleUserUpdated(Request $request): array
+    {
+        $userData = $request->input('user', []);
+        $companies = $request->input('companies', []);
+
+        $user = $this->upsertUser($userData);
+
+        if ($user) {
+            foreach ($companies as $companyData) {
+                $company = $this->findCompanyBySsoId($companyData['id'] ?? null, $companyData['legacyTenantId'] ?? $companyData['legacy_tenant_id'] ?? null);
+                if ($company) {
+                    $this->ensureUserAttachedToCompany($user, $company);
+                    $this->syncRoles($user, $company, $companyData['roles'] ?? ['User']);
+                }
+            }
+        }
+
+        return ['status' => 'ok', 'action' => 'user.updated'];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function handleUserDeleted(Request $request): array
+    {
+        $userData = $request->input('user', []);
+        $ssoUserId = $userData['id'] ?? null;
+        $email = $userData['email'] ?? null;
+
+        $userModel = $this->getUserModelClass();
+        $user = null;
+
+        if ($ssoUserId) {
+            $user = $userModel::where('sso_id', (string) $ssoUserId)->first();
+        }
+
+        if (! $user && $email) {
+            $user = $userModel::where('email', $email)->first();
+        }
+
+        if ($user) {
+            $user->delete();
+        }
+
+        return ['status' => 'ok', 'action' => 'user.deleted'];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function handleCompanyUpdated(Request $request): array
+    {
+        $companyData = $request->input('company', []);
+        $ssoCompanyId = $companyData['id'] ?? null;
+        $legacyTenantId = $companyData['legacy_tenant_id'] ?? null;
+
+        $company = $this->findCompanyBySsoId($ssoCompanyId, $legacyTenantId);
+
+        if ($company) {
+            $updates = [];
+
+            if (isset($companyData['name']) && $company->name !== $companyData['name']) {
+                $updates['name'] = $companyData['name'];
+            }
+
+            if ($updates !== []) {
+                $company->forceFill($updates)->save();
+            }
+        }
+
+        return ['status' => 'ok', 'action' => 'company.updated'];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function handleCompanyActivated(Request $request): array
+    {
+        $companyData = $request->input('company', []);
+        $ssoCompanyId = $companyData['id'] ?? null;
+        $legacyTenantId = $companyData['legacy_tenant_id'] ?? null;
+
+        $company = $this->findCompanyBySsoId($ssoCompanyId, $legacyTenantId);
+
+        if ($company) {
+            $company->forceFill(['status' => 'active'])->save();
+        }
+
+        return ['status' => 'ok', 'action' => 'company.activated'];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function handleUserRoleChanged(Request $request): array
+    {
+        $userData = $request->input('user', []);
+        $companyData = $request->input('company', []);
+        $roles = $request->input('roles', ['User']);
+
+        $user = $this->findUserBySsoId($userData['id'] ?? null, $userData['email'] ?? null);
+        $company = $this->findCompanyBySsoId($companyData['id'] ?? null, $companyData['legacy_tenant_id'] ?? null);
+
+        if ($user && $company) {
+            $this->syncRoles($user, $company, $roles);
+        }
+
+        return ['status' => 'ok', 'action' => 'user.company_role_changed'];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function handleUnknownEvent(string $event): array
+    {
+        Log::info('SSO webhook: unhandled event type', ['event' => $event]);
+
+        return ['status' => 'ok', 'action' => 'ignored'];
+    }
+
+    protected function upsertUser(array $userData): mixed
+    {
+        $userModel = $this->getUserModelClass();
+        $ssoUserId = $userData['id'] ?? null;
+        $legacySsoId = $userData['legacy_sso_id'] ?? null;
+        $email = $userData['email'] ?? null;
+
+        $user = $this->findUserBySsoId($ssoUserId, $email);
+
+        if ($user) {
+            $updates = ['last_login_at' => now()];
+
+            if (isset($userData['first_name']) && isset($userData['last_name'])) {
+                $name = trim($userData['first_name'].' '.$userData['last_name']);
+                if ($user->name !== $name) {
+                    $updates['name'] = $name;
+                }
+            }
+
+            if ($email && $user->email !== $email) {
+                $updates['email'] = $email;
+            }
+
+            if ($ssoUserId && $user->sso_id !== (string) $ssoUserId) {
+                $updates['sso_id'] = (string) $ssoUserId;
+            }
+
+            $user->forceFill($updates)->save();
+
+            return $user;
+        }
+
+        $name = trim(($userData['first_name'] ?? '').' '.($userData['last_name'] ?? ''));
+
+        if ($name === '') {
+            $name = $email ?? 'SSO User';
+        }
+
+        return $userModel::create([
+            'name' => $name,
+            'email' => $email ?? Str::uuid().'@sso.local',
+            'password' => bcrypt(Str::random(40)),
+            'sso_id' => $ssoUserId ? (string) $ssoUserId : null,
+            'email_verified_at' => now(),
+        ]);
+    }
+
+    protected function findUserBySsoId(int|string|null $ssoUserId, ?string $email): mixed
+    {
+        $userModel = $this->getUserModelClass();
+        $user = null;
+
+        if ($ssoUserId) {
+            $user = $userModel::where('sso_id', (string) $ssoUserId)->first();
+        }
+
+        if (! $user && $email) {
+            $user = $userModel::where('email', $email)->first();
+        }
+
+        return $user;
+    }
+
+    protected function findCompanyBySsoId(int|string|null $ssoCompanyId, ?string $legacyTenantId): mixed
+    {
+        $companyModel = $this->getCompanyModelClass();
+        $company = null;
+
+        if ($ssoCompanyId) {
+            $company = $companyModel::where('sso_company_id', $ssoCompanyId)->first();
+        }
+
+        if (! $company && $legacyTenantId) {
+            $company = $companyModel::where('core_tenant_id', $legacyTenantId)->first();
+        }
+
+        return $company;
+    }
+
+    protected function ensureUserAttachedToCompany($user, $company): void
+    {
+        $exists = DB::table('company_user')
+            ->where('company_id', $company->id)
+            ->where('user_id', $user->id)
+            ->exists();
+
+        if (! $exists) {
+            $user->companies()->attach($company->id, [
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+    }
+
+    protected function syncRoles($user, $company, array $roles): void
+    {
+        $roleModel = $this->getRoleModelClass();
+        $allowedRoles = array_intersect($roles, ['Admin', 'User']);
+
+        if (empty($allowedRoles)) {
+            $allowedRoles = ['User'];
+        }
+
+        $roleIds = [];
+
+        foreach ($allowedRoles as $roleName) {
+            $role = $roleModel::firstOrCreate(
+                ['name' => $roleName, 'company_id' => $company->id],
+                ['guard_name' => 'web']
+            );
+            $roleIds[] = $role->id;
+
+            DB::table('company_user_roles')->upsert([
+                [
+                    'company_id' => $company->id,
+                    'user_id' => $user->id,
+                    'role_id' => $role->id,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ],
+            ], ['company_id', 'user_id', 'role_id'], ['updated_at']);
+        }
+
+        DB::table('company_user_roles')
+            ->where('company_id', $company->id)
+            ->where('user_id', $user->id)
+            ->whereNotIn('role_id', $roleIds)
+            ->delete();
+    }
+
+    protected function getUserModelClass(): string
+    {
+        return 'App\\Models\\User';
+    }
+
+    protected function getCompanyModelClass(): string
+    {
+        return 'App\\Models\\Company';
+    }
+
+    protected function getRoleModelClass(): string
+    {
+        return 'App\\Models\\Role';
+    }
+}

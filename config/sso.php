@@ -58,6 +58,28 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Webhook Secret
+    |--------------------------------------------------------------------------
+    |
+    | HMAC secret used to verify incoming webhook payloads from the SSO server.
+    | Must match the webhook_secret configured for this app in the SSO admin.
+    |
+    */
+    'webhook_secret' => env('SSO_WEBHOOK_SECRET'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Dashboard Data Provider
+    |--------------------------------------------------------------------------
+    |
+    | A class implementing DashboardDataProvider that returns widget data
+    | for the SSO dashboard. Set to null if this app has no dashboard widget.
+    |
+    */
+    'dashboard_provider' => null,
+
+    /*
+    |--------------------------------------------------------------------------
     | Routes
     |--------------------------------------------------------------------------
     |

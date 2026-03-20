@@ -2,6 +2,7 @@
 
 namespace Unified\SsoClient;
 
+use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -19,7 +20,7 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
      *   "selectedCompany": { "id", "name", "legacyTenantId", "roles": [...] }
      * }
      *
-     * @return array{0: \Illuminate\Contracts\Auth\Authenticatable, 1: mixed}
+     * @return array{0: Authenticatable, 1: mixed}
      */
     public function synchronize(array $payload): array
     {
@@ -49,6 +50,7 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
                     $localCompanies[$companyData['id']] = $company;
                     $this->attachUserToCompany($user, $company);
                     $this->syncRoles($user, $company, $companyData['roles'] ?? ['User']);
+                    $this->syncEnabledModules($company, $companyData);
                 }
             }
 
@@ -261,6 +263,29 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
             ->where('user_id', $user->id)
             ->whereNotIn('role_id', $roleIds)
             ->delete();
+    }
+
+    /**
+     * Sync enabled modules from the SSO payload to the local company record.
+     *
+     * Only updates if the company model has an `enabled_modules` attribute
+     * and the SSO payload includes `enabledModules` for this company.
+     */
+    protected function syncEnabledModules($company, array $companyData): void
+    {
+        if (! array_key_exists('enabledModules', $companyData)) {
+            return;
+        }
+
+        if (! $company->isFillable('enabled_modules') && ! $company->hasCast('enabled_modules')) {
+            return;
+        }
+
+        $modules = $companyData['enabledModules'];
+
+        if ($company->enabled_modules !== $modules) {
+            $company->forceFill(['enabled_modules' => $modules])->save();
+        }
     }
 
     /**

@@ -42,6 +42,8 @@ class SsoWebhookController extends Controller
                 'company.updated' => $this->handleCompanyUpdated($request),
                 'company.activated' => $this->handleCompanyActivated($request),
                 'user.company_role_changed' => $this->handleUserRoleChanged($request),
+                'trial.seed_data' => $this->handleTrialSeedData($request),
+                'trial.purge_data' => $this->handleTrialPurgeData($request),
                 default => $this->handleUnknownEvent($event),
             };
 
@@ -216,6 +218,78 @@ class SsoWebhookController extends Controller
     /**
      * @return array<string, mixed>
      */
+    protected function handleTrialSeedData(Request $request): array
+    {
+        $companyData = $request->input('company', []);
+        $company = $this->findCompanyBySsoId($companyData['id'] ?? null, null);
+
+        $userSsoIds = $request->input('users', []);
+        $adminSsoId = $request->input('admin_user_id', '');
+
+        if (! $company) {
+            $company = $this->createCompanyFromWebhook($companyData, $adminSsoId);
+        }
+
+        if (! $company) {
+            return ['status' => 'error', 'action' => 'trial.seed_data', 'reason' => 'company_not_found'];
+        }
+
+        $this->ensureUsersAttachedToCompany($company, $userSsoIds, $adminSsoId);
+
+        $seederClass = 'App\\Services\\TrialDataSeeder';
+
+        if (! class_exists($seederClass)) {
+            Log::info('SSO webhook: no TrialDataSeeder found, skipping trial.seed_data');
+
+            return ['status' => 'ok', 'action' => 'trial.seed_data', 'skipped' => true];
+        }
+
+        $jobClass = 'App\\Jobs\\RunTrialSeeder';
+
+        if (class_exists($jobClass)) {
+            $jobClass::dispatch($company, $userSsoIds, $adminSsoId);
+        } else {
+            app($seederClass)->seed($company, $userSsoIds, $adminSsoId);
+        }
+
+        return ['status' => 'ok', 'action' => 'trial.seed_data'];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function handleTrialPurgeData(Request $request): array
+    {
+        $companyData = $request->input('company', []);
+        $company = $this->findCompanyBySsoId($companyData['id'] ?? null, null);
+
+        if (! $company) {
+            return ['status' => 'ok', 'action' => 'trial.purge_data', 'reason' => 'company_not_found'];
+        }
+
+        $purgerClass = 'App\\Services\\TrialDataPurger';
+
+        if (! class_exists($purgerClass)) {
+            Log::info('SSO webhook: no TrialDataPurger found, skipping trial.purge_data');
+
+            return ['status' => 'ok', 'action' => 'trial.purge_data', 'skipped' => true];
+        }
+
+        $jobClass = 'App\\Jobs\\RunTrialPurger';
+        $adminSsoId = $request->input('admin_user_id', '');
+
+        if (class_exists($jobClass)) {
+            $jobClass::dispatch($company, $adminSsoId);
+        } else {
+            app($purgerClass)->purge($company, $adminSsoId);
+        }
+
+        return ['status' => 'ok', 'action' => 'trial.purge_data'];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
     protected function handleUnknownEvent(string $event): array
     {
         Log::info('SSO webhook: unhandled event type', ['event' => $event]);
@@ -261,13 +335,17 @@ class SsoWebhookController extends Controller
             $name = $email ?? 'SSO User';
         }
 
-        return $userModel::create([
+        $user = new $userModel;
+        $user->forceFill([
             'name' => $name,
             'email' => $email ?? Str::uuid().'@sso.local',
             'password' => bcrypt(Str::random(40)),
             'sso_id' => $ssoUserId ? (string) $ssoUserId : null,
             'email_verified_at' => now(),
         ]);
+        $user->save();
+
+        return $user;
     }
 
     protected function findUserBySsoId(int|string|null $ssoUserId, ?string $email): mixed
@@ -351,6 +429,52 @@ class SsoWebhookController extends Controller
             ->where('user_id', $user->id)
             ->whereNotIn('role_id', $roleIds)
             ->delete();
+    }
+
+    protected function createCompanyFromWebhook(array $companyData, string $adminSsoId = ''): mixed
+    {
+        $companyModel = $this->getCompanyModelClass();
+        $ssoCompanyId = $companyData['id'] ?? null;
+
+        if (! $ssoCompanyId) {
+            return null;
+        }
+
+        $userModel = $this->getUserModelClass();
+        $adminUser = $adminSsoId ? $userModel::where('sso_id', (string) $adminSsoId)->first() : null;
+
+        if (! $adminUser) {
+            $adminUser = $adminSsoId ? $userModel::where('email', 'like', '%')->orderBy('id', 'desc')->first() : null;
+        }
+
+        $company = new $companyModel;
+        $company->forceFill([
+            'name' => $companyData['name'] ?? 'Trial Company',
+            'sso_company_id' => (string) $ssoCompanyId,
+            'is_live' => false,
+            'owner_id' => $adminUser?->id ?? 1,
+        ]);
+        $company->save();
+
+        return $company;
+    }
+
+    protected function ensureUsersAttachedToCompany($company, array $userSsoIds, string $adminSsoId): void
+    {
+        $userModel = $this->getUserModelClass();
+
+        foreach ($userSsoIds as $ssoId) {
+            $user = $userModel::where('sso_id', (string) $ssoId)->first();
+
+            if (! $user) {
+                continue;
+            }
+
+            $this->ensureUserAttachedToCompany($user, $company);
+
+            $roleName = ((string) $ssoId === $adminSsoId) ? 'Admin' : 'User';
+            $this->syncRoles($user, $company, [$roleName]);
+        }
     }
 
     protected function getUserModelClass(): string

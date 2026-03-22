@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use Unified\SsoClient\Http\SsoCallbackController;
+use Unified\SsoClient\Http\SsoActionController;
 use Unified\SsoClient\Http\SsoDashboardController;
 use Unified\SsoClient\Http\SsoWebhookController;
 
@@ -25,3 +26,7 @@ Route::post('/api/sso/provision', [SsoWebhookController::class, 'handle'])
 // Dashboard data endpoint — signature-verified in controller
 Route::post('/api/sso/dashboard', SsoDashboardController::class)
     ->name('sso.dashboard');
+
+// Action endpoint — signature-verified in controller
+Route::post('/api/sso/actions/{action}', SsoActionController::class)
+    ->name('sso.action');

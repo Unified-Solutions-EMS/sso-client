@@ -80,6 +80,19 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Action Handlers
+    |--------------------------------------------------------------------------
+    |
+    | Map of action names to handler classes implementing SsoActionHandler.
+    | SSO sends HMAC-signed POST requests to /api/sso/actions/{action}.
+    |
+    */
+    'action_handlers' => [
+        // 'create-service-request' => \App\Services\SsoActions\CreateServiceRequest::class,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Routes
     |--------------------------------------------------------------------------
     |

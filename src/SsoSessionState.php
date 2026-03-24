@@ -22,6 +22,8 @@ class SsoSessionState
 
     public const KEY_INTENDED_URL = 'sso_intended_url';
 
+    public const KEY_TOKEN_LAST_VALIDATED_AT = 'sso_token_last_validated_at';
+
     public function storeTokens(string $accessToken, ?string $refreshToken, int $expiresIn): void
     {
         Session::put(self::KEY_ACCESS_TOKEN, $accessToken);
@@ -100,6 +102,22 @@ class SsoSessionState
         return Session::pull(self::KEY_INTENDED_URL, $default);
     }
 
+    public function markTokenValidated(): void
+    {
+        Session::put(self::KEY_TOKEN_LAST_VALIDATED_AT, now()->timestamp);
+    }
+
+    public function needsServerValidation(int $intervalSeconds = 120): bool
+    {
+        $lastValidated = Session::get(self::KEY_TOKEN_LAST_VALIDATED_AT);
+
+        if (! $lastValidated) {
+            return true;
+        }
+
+        return now()->timestamp >= ($lastValidated + $intervalSeconds);
+    }
+
     public function forget(): void
     {
         Session::forget([
@@ -111,6 +129,7 @@ class SsoSessionState
             self::KEY_OAUTH_STATE,
             self::KEY_CODE_VERIFIER,
             self::KEY_INTENDED_URL,
+            self::KEY_TOKEN_LAST_VALIDATED_AT,
         ]);
     }
 }

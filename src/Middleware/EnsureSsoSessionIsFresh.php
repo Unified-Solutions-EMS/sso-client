@@ -30,30 +30,60 @@ class EnsureSsoSessionIsFresh
 
         // If token is expired, try to refresh
         if ($this->sessionState->isTokenExpired()) {
-            $refreshToken = $this->sessionState->getRefreshToken();
-
-            if (! $refreshToken) {
-                Log::info('SSO session: token expired, no refresh token');
-
-                return $this->handleUnauthenticated($request);
-            }
-
-            try {
-                $tokens = $this->ssoClient->refreshToken($refreshToken);
-
-                $this->sessionState->storeTokens(
-                    $tokens['access_token'],
-                    $tokens['refresh_token'] ?? $refreshToken,
-                    $tokens['expires_in'] ?? 3600,
-                );
-            } catch (\Throwable $e) {
-                Log::warning('SSO session: token refresh failed', ['message' => $e->getMessage()]);
-
+            if (! $this->attemptTokenRefresh()) {
                 return $this->handleUnauthenticated($request);
             }
         }
 
+        // Periodically validate the token against the SSO server to detect
+        // revoked tokens (e.g. user logged out of SSO). This ensures that
+        // logout propagates to all apps within ~2 minutes.
+        if ($this->sessionState->needsServerValidation()) {
+            try {
+                $this->ssoClient->fetchUser($this->sessionState->getAccessToken());
+                $this->sessionState->markTokenValidated();
+            } catch (\Throwable $e) {
+                Log::info('SSO session: server-side token validation failed, attempting refresh', [
+                    'message' => $e->getMessage(),
+                ]);
+
+                // Token may have been revoked — try refreshing
+                if (! $this->attemptTokenRefresh()) {
+                    return $this->handleUnauthenticated($request);
+                }
+
+                $this->sessionState->markTokenValidated();
+            }
+        }
+
         return $next($request);
+    }
+
+    protected function attemptTokenRefresh(): bool
+    {
+        $refreshToken = $this->sessionState->getRefreshToken();
+
+        if (! $refreshToken) {
+            Log::info('SSO session: token expired, no refresh token');
+
+            return false;
+        }
+
+        try {
+            $tokens = $this->ssoClient->refreshToken($refreshToken);
+
+            $this->sessionState->storeTokens(
+                $tokens['access_token'],
+                $tokens['refresh_token'] ?? $refreshToken,
+                $tokens['expires_in'] ?? 3600,
+            );
+
+            return true;
+        } catch (\Throwable $e) {
+            Log::warning('SSO session: token refresh failed', ['message' => $e->getMessage()]);
+
+            return false;
+        }
     }
 
     protected function handleUnauthenticated(Request $request)

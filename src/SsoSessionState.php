@@ -120,12 +120,14 @@ class SsoSessionState
 
     public function forget(): void
     {
+        // Preserve selected_company_id — it's app state set during login,
+        // not an SSO token concern. Clearing it breaks company-scoped queries
+        // when token refresh fails transiently.
         Session::forget([
             self::KEY_ACCESS_TOKEN,
             self::KEY_REFRESH_TOKEN,
             self::KEY_TOKEN_EXPIRES_AT,
             self::KEY_SSO_USER_ID,
-            self::KEY_SELECTED_COMPANY_ID,
             self::KEY_OAUTH_STATE,
             self::KEY_CODE_VERIFIER,
             self::KEY_INTENDED_URL,

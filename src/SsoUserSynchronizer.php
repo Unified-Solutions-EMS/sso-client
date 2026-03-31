@@ -240,9 +240,10 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
         $roleIds = [];
 
         foreach ($allowedRoles as $roleName) {
-            $role = $roleModel::firstOrCreate(
-                ['name' => $roleName, 'company_id' => $company->id],
-                ['guard_name' => 'web']
+            // Use withoutGlobalScopes() to bypass any company/tenant scoping
+            // that would add a conflicting WHERE clause during SSO sync
+            $role = $roleModel::withoutGlobalScopes()->firstOrCreate(
+                ['name' => $roleName, 'guard_name' => 'web', 'company_id' => $company->id],
             );
             $roleIds[] = $role->id;
 

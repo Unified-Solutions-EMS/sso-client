@@ -107,6 +107,11 @@ class SsoSessionState
         Session::put(self::KEY_TOKEN_LAST_VALIDATED_AT, now()->timestamp);
     }
 
+    public function getLastValidatedAt(): ?int
+    {
+        return Session::get(self::KEY_TOKEN_LAST_VALIDATED_AT);
+    }
+
     public function needsServerValidation(int $intervalSeconds = 120): bool
     {
         $lastValidated = Session::get(self::KEY_TOKEN_LAST_VALIDATED_AT);

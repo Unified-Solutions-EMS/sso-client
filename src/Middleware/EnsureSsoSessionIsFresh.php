@@ -49,6 +49,18 @@ class EnsureSsoSessionIsFresh
 
                 // Token may have been revoked — try refreshing
                 if (! $this->attemptTokenRefresh()) {
+                    // On transient network failures, allow one grace period before
+                    // logging the user out. Only unauthenticate if validation has
+                    // not succeeded for an extended period (2x the normal interval).
+                    $lastValidated = $this->sessionState->getLastValidatedAt();
+                    $graceSeconds = config('sso.validation_grace_seconds', 300);
+
+                    if ($lastValidated && (now()->timestamp - $lastValidated) < $graceSeconds) {
+                        Log::info('SSO session: token refresh failed, within grace period — allowing request');
+
+                        return $next($request);
+                    }
+
                     return $this->handleUnauthenticated($request);
                 }
 

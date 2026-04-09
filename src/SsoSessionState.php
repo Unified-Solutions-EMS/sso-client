@@ -112,8 +112,14 @@ class SsoSessionState
         return Session::get(self::KEY_TOKEN_LAST_VALIDATED_AT);
     }
 
-    public function needsServerValidation(int $intervalSeconds = 120): bool
+    public function needsServerValidation(?int $intervalSeconds = null): bool
     {
+        // Default to 5 seconds: short enough to detect a revoked token almost
+        // immediately (e.g. after the user logged out of SSO and a different
+        // user logged in on the same browser), long enough to dedupe rapid
+        // Livewire bursts within a single user interaction.
+        $intervalSeconds = $intervalSeconds ?? (int) config('sso.validation_interval_seconds', 5);
+
         $lastValidated = Session::get(self::KEY_TOKEN_LAST_VALIDATED_AT);
 
         if (! $lastValidated) {

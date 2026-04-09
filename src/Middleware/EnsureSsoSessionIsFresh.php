@@ -35,12 +35,45 @@ class EnsureSsoSessionIsFresh
             }
         }
 
-        // Periodically validate the token against the SSO server to detect
-        // revoked tokens (e.g. user logged out of SSO). This ensures that
-        // logout propagates to all apps within ~2 minutes.
+        // Cheap defensive check: ensure the locally authenticated user still
+        // corresponds to the SSO user stored in this session. If a developer
+        // (or a stale cookie) ever caused these to drift, force re-auth rather
+        // than serving another user's data.
+        $expectedSsoUserId = $this->sessionState->getSsoUserId();
+        if (Auth::check() && $expectedSsoUserId !== null) {
+            $localSsoId = Auth::user()->sso_id ?? null;
+            if ($localSsoId !== null && (string) $localSsoId !== (string) $expectedSsoUserId) {
+                Log::warning('SSO session: local Auth user does not match session SSO user id, forcing re-auth', [
+                    'auth_user_sso_id' => $localSsoId,
+                    'session_sso_user_id' => $expectedSsoUserId,
+                ]);
+
+                return $this->handleUnauthenticated($request);
+            }
+        }
+
+        // Validate the token against the SSO server to detect revoked tokens
+        // (e.g. user logged out of SSO and a different user logged in on the
+        // same browser). The interval is intentionally short — see
+        // SsoSessionState::needsServerValidation() — so logout propagates to
+        // every app within seconds rather than minutes.
         if ($this->sessionState->needsServerValidation()) {
             try {
-                $this->ssoClient->fetchUser($this->sessionState->getAccessToken());
+                $payload = $this->ssoClient->fetchUser($this->sessionState->getAccessToken());
+
+                // Defensive: confirm the SSO server still considers this token
+                // to belong to the user we stored on login. If they differ,
+                // somebody else now owns this token — bail out immediately.
+                $returnedId = $payload['user']['id'] ?? $payload['id'] ?? null;
+                if ($expectedSsoUserId !== null && $returnedId !== null && (string) $returnedId !== (string) $expectedSsoUserId) {
+                    Log::warning('SSO session: token validated but returned a different user, forcing re-auth', [
+                        'expected' => $expectedSsoUserId,
+                        'returned' => $returnedId,
+                    ]);
+
+                    return $this->handleUnauthenticated($request);
+                }
+
                 $this->sessionState->markTokenValidated();
             } catch (\Throwable $e) {
                 Log::info('SSO session: server-side token validation failed, attempting refresh', [
@@ -51,7 +84,7 @@ class EnsureSsoSessionIsFresh
                 if (! $this->attemptTokenRefresh()) {
                     // On transient network failures, allow one grace period before
                     // logging the user out. Only unauthenticate if validation has
-                    // not succeeded for an extended period (2x the normal interval).
+                    // not succeeded for an extended period.
                     $lastValidated = $this->sessionState->getLastValidatedAt();
                     $graceSeconds = config('sso.validation_grace_seconds', 300);
 

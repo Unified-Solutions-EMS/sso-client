@@ -85,6 +85,22 @@ class SsoCallbackController extends Controller
                 return redirect()->route('login')->with('error', 'Failed to sync your account. Please contact support.');
             }
 
+            // If a different user was previously logged into this browser
+            // session (e.g. user A logged out of SSO and user B is now coming
+            // through callback on the same browser), wipe the old session
+            // entirely before logging the new user in. Otherwise stale
+            // session keys from the previous user can leak across the
+            // boundary.
+            $previousAuthId = Auth::id();
+            if ($previousAuthId !== null && (int) $previousAuthId !== (int) $user->id) {
+                Auth::logout();
+                $request->session()->invalidate();
+                $request->session()->regenerateToken();
+            } else {
+                // Always rotate the session id on login to prevent fixation.
+                $request->session()->regenerate();
+            }
+
             // Log in locally
             Auth::login($user, true);
 

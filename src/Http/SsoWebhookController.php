@@ -44,6 +44,7 @@ class SsoWebhookController extends Controller
                 'user.company_role_changed' => $this->handleUserRoleChanged($request),
                 'trial.seed_data' => $this->handleTrialSeedData($request),
                 'trial.purge_data' => $this->handleTrialPurgeData($request),
+                'cad.migrate_data' => $this->handleCadMigrateData($request),
                 default => $this->handleUnknownEvent($event),
             };
 
@@ -285,6 +286,38 @@ class SsoWebhookController extends Controller
         }
 
         return ['status' => 'ok', 'action' => 'trial.purge_data'];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function handleCadMigrateData(Request $request): array
+    {
+        $companyData = $request->input('company', []);
+        $company = $this->findCompanyBySsoId(
+            $companyData['id'] ?? null,
+            $companyData['legacy_tenant_id'] ?? null,
+        );
+
+        if (! $company) {
+            return ['status' => 'error', 'action' => 'cad.migrate_data', 'reason' => 'company_not_found'];
+        }
+
+        $legacyTenantId = $companyData['legacy_tenant_id'] ?? $company->core_tenant_id ?? null;
+
+        if (! $legacyTenantId) {
+            return ['status' => 'error', 'action' => 'cad.migrate_data', 'reason' => 'no_legacy_tenant_id'];
+        }
+
+        $jobClass = 'App\\Jobs\\RunLegacyCadMigration';
+
+        if (class_exists($jobClass)) {
+            $jobClass::dispatch($company, $legacyTenantId);
+        } else {
+            Log::info('SSO webhook: RunLegacyCadMigration job not found, skipping cad.migrate_data');
+        }
+
+        return ['status' => 'ok', 'action' => 'cad.migrate_data'];
     }
 
     /**

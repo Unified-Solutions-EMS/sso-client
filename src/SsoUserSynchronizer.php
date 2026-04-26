@@ -62,19 +62,6 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
                 $selectedLocalCompany = reset($localCompanies);
             }
 
-            // Temporary diagnostic logging — remove after the multi-company
-            // impersonation bug is confirmed fixed.
-            Log::info('[SSO sync] selectedCompany resolution', [
-                'user_id' => $user->id,
-                'sso_user_id' => $ssoUserId,
-                'payload_selectedCompany' => $selectedCompany,
-                'payload_companies_count' => count($companies),
-                'payload_companies_ids' => array_map(fn ($c) => $c['id'] ?? null, $companies),
-                'localCompanies_map' => array_map(fn ($c) => ['local_id' => $c->id, 'sso_id' => $c->sso_company_id ?? null], $localCompanies),
-                'selectedLocalCompany_id' => $selectedLocalCompany?->id,
-                'selectedLocalCompany_name' => $selectedLocalCompany?->name,
-            ]);
-
             return [$user->fresh(), $selectedLocalCompany];
         });
     }

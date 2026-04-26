@@ -8,6 +8,7 @@ use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Unified\SsoClient\Models\SsoSessionAction;
 
 class SsoWebhookController extends Controller
 {
@@ -42,6 +43,9 @@ class SsoWebhookController extends Controller
                 'company.updated' => $this->handleCompanyUpdated($request),
                 'company.activated' => $this->handleCompanyActivated($request),
                 'user.company_role_changed' => $this->handleUserRoleChanged($request),
+                'user.impersonation.started' => $this->handleImpersonationStarted($request),
+                'user.impersonation.ended' => $this->handleImpersonationEnded($request),
+                'user.logged_out' => $this->handleUserLoggedOut($request),
                 'trial.seed_data' => $this->handleTrialSeedData($request),
                 'trial.purge_data' => $this->handleTrialPurgeData($request),
                 'cad.migrate_data' => $this->handleCadMigrateData($request),
@@ -214,6 +218,102 @@ class SsoWebhookController extends Controller
         }
 
         return ['status' => 'ok', 'action' => 'user.company_role_changed'];
+    }
+
+    /**
+     * Impersonation started in SSO. We don't try to impersonate the user
+     * here — the OAuth flow handles identity. We just queue a set_company
+     * action so when this user makes their next request to this app, the
+     * middleware drops them into the right tenant.
+     *
+     * @return array<string, mixed>
+     */
+    protected function handleImpersonationStarted(Request $request): array
+    {
+        $impersonatedData = $request->input('impersonated', []);
+        $companyData = $request->input('company', []);
+
+        $user = $this->findUserBySsoId($impersonatedData['id'] ?? null, $impersonatedData['email'] ?? null);
+        $company = $this->findCompanyBySsoId($companyData['id'] ?? null, $companyData['legacy_tenant_id'] ?? null);
+
+        if (! $user || ! $company) {
+            return ['status' => 'ok', 'action' => 'user.impersonation.started', 'skipped' => true];
+        }
+
+        SsoSessionAction::query()
+            ->where('user_id', $user->id)
+            ->where('action', SsoSessionAction::ACTION_SET_COMPANY)
+            ->delete();
+
+        SsoSessionAction::create([
+            'user_id' => $user->id,
+            'action' => SsoSessionAction::ACTION_SET_COMPANY,
+            'payload' => ['company_id' => $company->id],
+            'expires_at' => now()->addHours(8),
+        ]);
+
+        return ['status' => 'ok', 'action' => 'user.impersonation.started'];
+    }
+
+    /**
+     * Impersonation ended in SSO. Force-logout the impersonated user
+     * across this app — the next request will bounce through SSO and
+     * land them back as themselves (or as the original admin if their
+     * browser was the impersonator's).
+     *
+     * @return array<string, mixed>
+     */
+    protected function handleImpersonationEnded(Request $request): array
+    {
+        $impersonatedData = $request->input('impersonated', []);
+        $user = $this->findUserBySsoId($impersonatedData['id'] ?? null, $impersonatedData['email'] ?? null);
+
+        if (! $user) {
+            return ['status' => 'ok', 'action' => 'user.impersonation.ended', 'skipped' => true];
+        }
+
+        SsoSessionAction::query()
+            ->where('user_id', $user->id)
+            ->delete();
+
+        SsoSessionAction::create([
+            'user_id' => $user->id,
+            'action' => SsoSessionAction::ACTION_FORCE_LOGOUT,
+            'payload' => ['reason' => 'impersonation_ended'],
+            'expires_at' => now()->addHours(8),
+        ]);
+
+        return ['status' => 'ok', 'action' => 'user.impersonation.ended'];
+    }
+
+    /**
+     * User logged out at the SSO hub (or via any downstream app's
+     * logout button, which redirects through SSO). Force-logout this
+     * user's local session.
+     *
+     * @return array<string, mixed>
+     */
+    protected function handleUserLoggedOut(Request $request): array
+    {
+        $userData = $request->input('user', []);
+        $user = $this->findUserBySsoId($userData['id'] ?? null, $userData['email'] ?? null);
+
+        if (! $user) {
+            return ['status' => 'ok', 'action' => 'user.logged_out', 'skipped' => true];
+        }
+
+        SsoSessionAction::query()
+            ->where('user_id', $user->id)
+            ->delete();
+
+        SsoSessionAction::create([
+            'user_id' => $user->id,
+            'action' => SsoSessionAction::ACTION_FORCE_LOGOUT,
+            'payload' => ['reason' => 'sso_logout'],
+            'expires_at' => now()->addHours(8),
+        ]);
+
+        return ['status' => 'ok', 'action' => 'user.logged_out'];
     }
 
     /**

@@ -19,7 +19,10 @@
         "laravel": {
             "providers": [
                 "Unified\\SsoClient\\SsoServiceProvider"
-            ]
+            ],
+            "aliases": {
+                "Metrics": "Unified\\SsoClient\\Metrics\\Facades\\Metrics"
+            }
         }
     },
     "minimum-stability": "stable"

@@ -49,8 +49,10 @@ class SendMetricToUnified implements ShouldQueue
         }
 
         try {
+            // Authorization: Bearer matches the platform's other internal
+            // endpoints (validated by SSO's ValidateInternalApiKey).
             Http::timeout(5)
-                ->withHeaders(['X-Metrics-Token' => $token])
+                ->withToken($token)
                 ->withOptions(['verify' => (bool) config('metrics.verify_ssl', true)])
                 ->post($endpoint, $this->payload)
                 ->throw();

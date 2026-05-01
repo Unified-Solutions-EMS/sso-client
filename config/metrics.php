@@ -10,15 +10,18 @@ return [
     |--------------------------------------------------------------------------
     |
     | The fully-qualified URL of SSO's /api/internal/metrics/ingest route
-    | and the shared secret from SSO's METRICS_INGEST_TOKEN env. Both are
-    | required for the queued send to succeed; if either is missing the
-    | job logs a warning and silently no-ops.
+    | and the platform's shared CORE_APP_API_KEY. Both are required for
+    | the queued send to succeed; if either is missing the job logs a
+    | warning and silently no-ops.
+    |
+    | Per platform convention, all cross-app server-to-server calls use
+    | CORE_APP_API_KEY rather than introducing a per-feature secret.
     |
     */
 
     'endpoint' => env('METRICS_ENDPOINT'),
 
-    'token' => env('METRICS_INGEST_TOKEN'),
+    'token' => env('CORE_APP_API_KEY'),
 
     /*
     |--------------------------------------------------------------------------

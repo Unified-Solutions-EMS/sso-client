@@ -33,6 +33,7 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
         $email = $userData['email'] ?? null;
         $displayName = $this->resolveDisplayName($userData);
         $username = $userData['username'] ?? null;
+        $phoneNumber = $userData['phoneNumber'] ?? null;
 
         if (! $ssoUserId && ! $email) {
             Log::warning('SSO sync: No user ID or email in payload');
@@ -40,8 +41,8 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
             return [null, null];
         }
 
-        return DB::transaction(function () use ($ssoUserId, $legacySsoId, $email, $displayName, $username, $companies, $selectedCompany) {
-            $user = $this->findOrCreateUser($ssoUserId, $legacySsoId, $email, $displayName, $username);
+        return DB::transaction(function () use ($ssoUserId, $legacySsoId, $email, $displayName, $username, $phoneNumber, $companies, $selectedCompany) {
+            $user = $this->findOrCreateUser($ssoUserId, $legacySsoId, $email, $displayName, $username, $phoneNumber);
 
             $localCompanies = [];
             foreach ($companies as $companyData) {
@@ -94,7 +95,8 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
         int|string|null $legacySsoId,
         ?string $email,
         string $displayName,
-        ?string $username
+        ?string $username,
+        ?string $phoneNumber = null
     ) {
         $userModel = $this->getUserModelClass();
         $user = null;
@@ -134,6 +136,10 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
                 $updates['sso_username'] = $username;
             }
 
+            if ($user->isFillable('phone_number') && ($user->phone_number ?? null) !== $phoneNumber) {
+                $updates['phone_number'] = $phoneNumber;
+            }
+
             $updates['last_login_at'] = now();
 
             $user->forceFill($updates)->save();
@@ -142,13 +148,20 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
         }
 
         // Create new user
-        $user = $userModel::create([
+        $createAttributes = [
             'name' => $displayName,
             'email' => $email ?? ($username ? "{$username}@sso.local" : Str::uuid().'@sso.local'),
             'password' => bcrypt(Str::random(40)),
             'sso_id' => $ssoUserId ? (string) $ssoUserId : null,
             'sso_username' => $username,
-        ]);
+        ];
+
+        $tempInstance = new $userModel;
+        if ($phoneNumber !== null && $tempInstance->isFillable('phone_number')) {
+            $createAttributes['phone_number'] = $phoneNumber;
+        }
+
+        $user = $userModel::create($createAttributes);
 
         $user->forceFill([
             'email_verified_at' => now(),

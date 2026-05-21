@@ -814,6 +814,8 @@ class SsoWebhookController extends Controller
         }
 
         $roleModel = $this->getRoleModelClass();
+        $rolesTable = (new $roleModel)->getTable();
+
         $existing = $roleModel::query()
             ->whereIn('company_id', $companyIds)
             ->whereIn('name', $allowedRoleNames)
@@ -824,16 +826,34 @@ class SsoWebhookController extends Controller
             $byCompany[(int) $role->company_id][(string) $role->name] = (int) $role->id;
         }
 
+        $now = now();
+        $toCreate = [];
         foreach ($companyIds as $companyId) {
             foreach ($allowedRoleNames as $roleName) {
                 if (isset($byCompany[$companyId][$roleName])) {
                     continue;
                 }
-                $role = $roleModel::firstOrCreate(
-                    ['name' => $roleName, 'company_id' => $companyId],
-                    ['guard_name' => 'web'],
-                );
-                $byCompany[$companyId][$roleName] = (int) $role->id;
+                $toCreate[] = [
+                    'name' => $roleName,
+                    'company_id' => $companyId,
+                    'guard_name' => 'web',
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ];
+            }
+        }
+
+        if ($toCreate !== []) {
+            DB::table($rolesTable)->insert($toCreate);
+
+            $newCompanyIds = array_values(array_unique(array_column($toCreate, 'company_id')));
+            $newNames = array_values(array_unique(array_column($toCreate, 'name')));
+            $newlyCreated = $roleModel::query()
+                ->whereIn('company_id', $newCompanyIds)
+                ->whereIn('name', $newNames)
+                ->get(['id', 'name', 'company_id']);
+            foreach ($newlyCreated as $role) {
+                $byCompany[(int) $role->company_id][(string) $role->name] = (int) $role->id;
             }
         }
 

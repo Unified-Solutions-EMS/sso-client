@@ -94,14 +94,8 @@ class SsoWebhookController extends Controller
 
         $user = $this->upsertUser($userData);
 
-        if ($user) {
-            foreach ($companies as $companyData) {
-                $company = $this->findCompanyBySsoId($companyData['id'] ?? null, $companyData['legacyTenantId'] ?? $companyData['legacy_tenant_id'] ?? null);
-                if ($company) {
-                    $this->ensureUserAttachedToCompany($user, $company);
-                    $this->syncRoles($user, $company, $companyData['roles'] ?? ['User']);
-                }
-            }
+        if ($user && $companies !== []) {
+            $this->syncUserCompanyMemberships($user, $companies);
         }
 
         return ['status' => 'ok', 'action' => 'user.created'];
@@ -117,14 +111,8 @@ class SsoWebhookController extends Controller
 
         $user = $this->upsertUser($userData);
 
-        if ($user) {
-            foreach ($companies as $companyData) {
-                $company = $this->findCompanyBySsoId($companyData['id'] ?? null, $companyData['legacyTenantId'] ?? $companyData['legacy_tenant_id'] ?? null);
-                if ($company) {
-                    $this->ensureUserAttachedToCompany($user, $company);
-                    $this->syncRoles($user, $company, $companyData['roles'] ?? ['User']);
-                }
-            }
+        if ($user && $companies !== []) {
+            $this->syncUserCompanyMemberships($user, $companies);
         }
 
         return ['status' => 'ok', 'action' => 'user.updated'];
@@ -594,20 +582,326 @@ class SsoWebhookController extends Controller
 
     protected function ensureUsersAttachedToCompany($company, array $userSsoIds, string $adminSsoId): void
     {
+        if ($userSsoIds === []) {
+            return;
+        }
+
         $userModel = $this->getUserModelClass();
+        $users = $userModel::query()
+            ->whereIn('sso_id', array_map('strval', $userSsoIds))
+            ->get()
+            ->keyBy(fn ($u) => (string) $u->sso_id);
 
-        foreach ($userSsoIds as $ssoId) {
-            $user = $userModel::where('sso_id', (string) $ssoId)->first();
+        if ($users->isEmpty()) {
+            return;
+        }
 
-            if (! $user) {
+        $userIds = $users->pluck('id')->all();
+
+        $existingAttachments = DB::table('company_user')
+            ->where('company_id', $company->id)
+            ->whereIn('user_id', $userIds)
+            ->pluck('user_id')
+            ->all();
+
+        $missingUserIds = array_values(array_diff($userIds, $existingAttachments));
+        if ($missingUserIds !== []) {
+            $now = now();
+            DB::table('company_user')->insert(array_map(fn ($uid) => [
+                'user_id' => $uid,
+                'company_id' => $company->id,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ], $missingUserIds));
+        }
+
+        $userIdToRole = [];
+        foreach ($users as $ssoId => $user) {
+            $userIdToRole[$user->id] = ($ssoId === $adminSsoId) ? 'Admin' : 'User';
+        }
+
+        $this->syncRolesAcrossUsersForCompany($company->id, $userIdToRole);
+    }
+
+    /**
+     * Bulk-resolve every company in the webhook payload, bulk-attach any
+     * missing company_user pivot rows, then bulk-sync per-company roles.
+     *
+     * @param  array<int, array<string, mixed>>  $companies
+     */
+    protected function syncUserCompanyMemberships($user, array $companies): void
+    {
+        $ssoIds = array_values(array_filter(array_map(
+            fn ($c) => isset($c['id']) ? (string) $c['id'] : null,
+            $companies,
+        )));
+        $legacyIds = array_values(array_filter(array_map(
+            fn ($c) => $c['legacyTenantId'] ?? $c['legacy_tenant_id'] ?? null,
+            $companies,
+        )));
+
+        if ($ssoIds === [] && $legacyIds === []) {
+            return;
+        }
+
+        $companyModel = $this->getCompanyModelClass();
+        $resolved = $companyModel::query()
+            ->where(function ($q) use ($ssoIds, $legacyIds): void {
+                if ($ssoIds !== []) {
+                    $q->whereIn('sso_company_id', $ssoIds);
+                }
+                if ($legacyIds !== []) {
+                    $q->orWhereIn('core_tenant_id', array_map('strval', $legacyIds));
+                }
+            })
+            ->get();
+
+        $bySsoId = $resolved->keyBy(fn ($c) => (string) ($c->sso_company_id ?? ''));
+        $byLegacyId = $resolved->keyBy(fn ($c) => (string) ($c->core_tenant_id ?? ''));
+
+        $rolesByCompanyId = [];
+        foreach ($companies as $companyData) {
+            $ssoId = isset($companyData['id']) ? (string) $companyData['id'] : '';
+            $legacyId = $companyData['legacyTenantId'] ?? $companyData['legacy_tenant_id'] ?? null;
+
+            $company = $ssoId !== '' ? $bySsoId->get($ssoId) : null;
+            if (! $company && $legacyId !== null) {
+                $company = $byLegacyId->get((string) $legacyId);
+            }
+            if (! $company) {
                 continue;
             }
 
-            $this->ensureUserAttachedToCompany($user, $company);
-
-            $roleName = ((string) $ssoId === $adminSsoId) ? 'Admin' : 'User';
-            $this->syncRoles($user, $company, [$roleName]);
+            $rolesByCompanyId[$company->id] = $companyData['roles'] ?? ['User'];
         }
+
+        if ($rolesByCompanyId === []) {
+            return;
+        }
+
+        $companyIds = array_keys($rolesByCompanyId);
+
+        $existingAttachments = DB::table('company_user')
+            ->where('user_id', $user->id)
+            ->whereIn('company_id', $companyIds)
+            ->pluck('company_id')
+            ->all();
+
+        $missingCompanyIds = array_values(array_diff($companyIds, $existingAttachments));
+        if ($missingCompanyIds !== []) {
+            $now = now();
+            DB::table('company_user')->insert(array_map(fn ($cid) => [
+                'user_id' => $user->id,
+                'company_id' => $cid,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ], $missingCompanyIds));
+        }
+
+        $this->syncRolesAcrossCompaniesForUser($user->id, $rolesByCompanyId);
+    }
+
+    /**
+     * Sync one user's roles across many companies in a bounded query count.
+     * Used by the user.created/updated webhook paths.
+     *
+     * @param  array<int, array<int, string>>  $rolesByCompanyId
+     */
+    protected function syncRolesAcrossCompaniesForUser(int $userId, array $rolesByCompanyId): void
+    {
+        $allowedRoleNames = ['Admin', 'User'];
+
+        $normalized = [];
+        foreach ($rolesByCompanyId as $companyId => $roles) {
+            $allowed = array_values(array_intersect($roles, $allowedRoleNames));
+            $normalized[$companyId] = $allowed !== [] ? $allowed : ['User'];
+        }
+
+        $rolesByCompany = $this->resolveRolesForCompanies(array_keys($normalized), $allowedRoleNames);
+
+        $desired = [];
+        foreach ($normalized as $companyId => $roleNames) {
+            foreach ($roleNames as $roleName) {
+                $roleId = $rolesByCompany[$companyId][$roleName] ?? null;
+                if ($roleId !== null) {
+                    $desired["{$companyId}-{$roleId}"] = [
+                        'company_id' => $companyId,
+                        'role_id' => $roleId,
+                    ];
+                }
+            }
+        }
+
+        $this->reconcileCompanyUserRoles($userId, array_keys($normalized), $desired);
+    }
+
+    /**
+     * Sync many users' roles within one company in a bounded query count.
+     * Used by the trial.seed_data path.
+     *
+     * @param  array<int, string>  $userIdToRole
+     */
+    protected function syncRolesAcrossUsersForCompany(int $companyId, array $userIdToRole): void
+    {
+        if ($userIdToRole === []) {
+            return;
+        }
+
+        $allowedRoleNames = ['Admin', 'User'];
+        $rolesByCompany = $this->resolveRolesForCompanies([$companyId], $allowedRoleNames);
+        $roleNameToId = $rolesByCompany[$companyId] ?? [];
+
+        $now = now();
+        $userIds = array_keys($userIdToRole);
+        $existingRows = DB::table('company_user_roles')
+            ->where('company_id', $companyId)
+            ->whereIn('user_id', $userIds)
+            ->get(['user_id', 'role_id']);
+
+        $existingByUser = [];
+        foreach ($existingRows as $row) {
+            $existingByUser[(int) $row->user_id][] = (int) $row->role_id;
+        }
+
+        $rowsToInsert = [];
+        $deletionsByUser = [];
+        foreach ($userIdToRole as $userId => $roleName) {
+            $roleId = $roleNameToId[$roleName] ?? null;
+            if ($roleId === null) {
+                continue;
+            }
+            $existingRoleIds = $existingByUser[$userId] ?? [];
+            if (! in_array($roleId, $existingRoleIds, true)) {
+                $rowsToInsert[] = [
+                    'company_id' => $companyId,
+                    'user_id' => $userId,
+                    'role_id' => $roleId,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ];
+            }
+            $extras = array_diff($existingRoleIds, [$roleId]);
+            if ($extras !== []) {
+                $deletionsByUser[$userId] = array_values($extras);
+            }
+        }
+
+        if ($rowsToInsert !== []) {
+            DB::table('company_user_roles')->insert($rowsToInsert);
+        }
+
+        foreach ($deletionsByUser as $userId => $roleIds) {
+            DB::table('company_user_roles')
+                ->where('company_id', $companyId)
+                ->where('user_id', $userId)
+                ->whereIn('role_id', $roleIds)
+                ->delete();
+        }
+    }
+
+    /**
+     * Resolve (or create) the allowed roles for every company id in one pass.
+     * Returns [company_id => [role_name => role_id]].
+     *
+     * @param  array<int, int>  $companyIds
+     * @param  array<int, string>  $allowedRoleNames
+     * @return array<int, array<string, int>>
+     */
+    protected function resolveRolesForCompanies(array $companyIds, array $allowedRoleNames): array
+    {
+        if ($companyIds === []) {
+            return [];
+        }
+
+        $roleModel = $this->getRoleModelClass();
+        $existing = $roleModel::query()
+            ->whereIn('company_id', $companyIds)
+            ->whereIn('name', $allowedRoleNames)
+            ->get(['id', 'name', 'company_id']);
+
+        $byCompany = [];
+        foreach ($existing as $role) {
+            $byCompany[(int) $role->company_id][(string) $role->name] = (int) $role->id;
+        }
+
+        foreach ($companyIds as $companyId) {
+            foreach ($allowedRoleNames as $roleName) {
+                if (isset($byCompany[$companyId][$roleName])) {
+                    continue;
+                }
+                $role = $roleModel::firstOrCreate(
+                    ['name' => $roleName, 'company_id' => $companyId],
+                    ['guard_name' => 'web'],
+                );
+                $byCompany[$companyId][$roleName] = (int) $role->id;
+            }
+        }
+
+        return $byCompany;
+    }
+
+    /**
+     * Reconcile the company_user_roles pivot for one user across many companies:
+     * insert any desired rows that don't exist, delete any rows that exist
+     * within the scoped companies but aren't desired.
+     *
+     * @param  array<int, int>  $companyIds
+     * @param  array<string, array{company_id: int, role_id: int}>  $desired  keyed "companyId-roleId"
+     */
+    protected function reconcileCompanyUserRoles(int $userId, array $companyIds, array $desired): void
+    {
+        if ($companyIds === []) {
+            return;
+        }
+
+        $existing = DB::table('company_user_roles')
+            ->where('user_id', $userId)
+            ->whereIn('company_id', $companyIds)
+            ->get(['company_id', 'role_id']);
+
+        $existingKeys = [];
+        foreach ($existing as $row) {
+            $existingKeys["{$row->company_id}-{$row->role_id}"] = true;
+        }
+
+        $now = now();
+        $rowsToInsert = [];
+        foreach ($desired as $key => $row) {
+            if (isset($existingKeys[$key])) {
+                continue;
+            }
+            $rowsToInsert[] = [
+                'company_id' => $row['company_id'],
+                'user_id' => $userId,
+                'role_id' => $row['role_id'],
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+
+        if ($rowsToInsert !== []) {
+            DB::table('company_user_roles')->insert($rowsToInsert);
+        }
+
+        $keepRoleIdsByCompany = [];
+        foreach ($desired as $row) {
+            $keepRoleIdsByCompany[$row['company_id']][] = $row['role_id'];
+        }
+
+        DB::table('company_user_roles')
+            ->where('user_id', $userId)
+            ->where(function ($q) use ($companyIds, $keepRoleIdsByCompany): void {
+                foreach ($companyIds as $companyId) {
+                    $q->orWhere(function ($inner) use ($companyId, $keepRoleIdsByCompany): void {
+                        $inner->where('company_id', $companyId);
+                        $keepIds = $keepRoleIdsByCompany[$companyId] ?? [];
+                        if ($keepIds !== []) {
+                            $inner->whereNotIn('role_id', $keepIds);
+                        }
+                    });
+                }
+            })
+            ->delete();
     }
 
     protected function getUserModelClass(): string

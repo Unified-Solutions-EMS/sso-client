@@ -44,14 +44,15 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
         return DB::transaction(function () use ($ssoUserId, $legacySsoId, $email, $displayName, $username, $phoneNumber, $companies, $selectedCompany) {
             $user = $this->findOrCreateUser($ssoUserId, $legacySsoId, $email, $displayName, $username, $phoneNumber);
 
-            $localCompanies = [];
+            $localCompanies = $this->resolveCompanies($companies, $user);
+
+            $this->attachUserToCompanies($user, $localCompanies);
+            $this->syncRolesForCompanies($user, $companies, $localCompanies);
+
             foreach ($companies as $companyData) {
-                $company = $this->findOrCreateCompany($companyData, $user);
-                if ($company) {
-                    $localCompanies[$companyData['id']] = $company;
-                    $this->attachUserToCompany($user, $company);
-                    $this->syncRoles($user, $company, $companyData['roles'] ?? ['User']);
-                    $this->syncEnabledModules($company, $companyData);
+                $ssoCompanyId = $companyData['id'] ?? null;
+                if ($ssoCompanyId !== null && isset($localCompanies[$ssoCompanyId])) {
+                    $this->syncEnabledModules($localCompanies[$ssoCompanyId], $companyData);
                 }
             }
 
@@ -171,111 +172,211 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
         return $user;
     }
 
-    protected function findOrCreateCompany(array $companyData, $user)
+    /**
+     * Resolve every company in the payload to a local record, bulk-loading
+     * existing rows up front so the work stays a handful of queries regardless
+     * of how many companies the user belongs to.
+     *
+     * @param  array<int, array<string, mixed>>  $companies
+     * @return array<int|string, object> keyed by the SSO company id
+     */
+    protected function resolveCompanies(array $companies, $user): array
     {
         $companyModel = $this->getCompanyModelClass();
-        $ssoCompanyId = $companyData['id'] ?? null;
-        $legacyTenantId = $companyData['legacyTenantId'] ?? null;
-        $companyName = $companyData['name'] ?? 'Unknown Company';
 
-        $company = null;
-
-        // 1. Match by sso_company_id
-        if ($ssoCompanyId) {
-            $company = $companyModel::where('sso_company_id', $ssoCompanyId)->first();
+        $ssoIds = [];
+        $tenantIds = [];
+        $names = [];
+        foreach ($companies as $companyData) {
+            if (isset($companyData['id'])) {
+                $ssoIds[] = $companyData['id'];
+            }
+            if (! empty($companyData['legacyTenantId'])) {
+                $tenantIds[] = $companyData['legacyTenantId'];
+            }
+            $names[] = $companyData['name'] ?? 'Unknown Company';
         }
 
-        // 2. Match by core_tenant_id = legacy_tenant_id
-        if (! $company && $legacyTenantId) {
-            $company = $companyModel::where('core_tenant_id', $legacyTenantId)->first();
-        }
+        $bySso = $ssoIds ? $companyModel::whereIn('sso_company_id', $ssoIds)->get()->keyBy('sso_company_id') : collect();
+        $byTenant = $tenantIds ? $companyModel::whereIn('core_tenant_id', $tenantIds)->get()->keyBy('core_tenant_id') : collect();
+        $byName = $names ? $companyModel::whereIn('name', $names)->get()->keyBy('name') : collect();
 
-        // 3. Fallback: match by name
-        if (! $company) {
-            $company = $companyModel::where('name', $companyName)->first();
-        }
+        $resolved = [];
 
-        if ($company) {
-            $updates = [];
+        foreach ($companies as $companyData) {
+            $ssoCompanyId = $companyData['id'] ?? null;
+            $legacyTenantId = $companyData['legacyTenantId'] ?? null;
+            $companyName = $companyData['name'] ?? 'Unknown Company';
 
-            // Set sso_company_id if not already set
-            if ($ssoCompanyId && ($company->sso_company_id ?? null) != $ssoCompanyId) {
-                $updates['sso_company_id'] = $ssoCompanyId;
+            $company = null;
+            if ($ssoCompanyId && $bySso->has($ssoCompanyId)) {
+                $company = $bySso->get($ssoCompanyId);
+            }
+            if (! $company && $legacyTenantId && $byTenant->has($legacyTenantId)) {
+                $company = $byTenant->get($legacyTenantId);
+            }
+            if (! $company && $byName->has($companyName)) {
+                $company = $byName->get($companyName);
             }
 
-            // Set core_tenant_id from legacy if not already set
-            if ($legacyTenantId && ! $company->core_tenant_id) {
-                $updates['core_tenant_id'] = $legacyTenantId;
+            if ($company) {
+                $updates = [];
+                if ($ssoCompanyId && ($company->sso_company_id ?? null) != $ssoCompanyId) {
+                    $updates['sso_company_id'] = $ssoCompanyId;
+                }
+                if ($legacyTenantId && ! $company->core_tenant_id) {
+                    $updates['core_tenant_id'] = $legacyTenantId;
+                }
+                if ($updates !== []) {
+                    $company->forceFill($updates)->save();
+                }
+            } else {
+                $company = $companyModel::create([
+                    'name' => $companyName,
+                    'owner_id' => $user->id,
+                    'sso_company_id' => $ssoCompanyId,
+                    'core_tenant_id' => $legacyTenantId,
+                ]);
+
+                // Keep the lookup maps current so a later payload entry that
+                // matches the same row reuses it instead of inserting twice.
+                if ($ssoCompanyId) {
+                    $bySso->put($ssoCompanyId, $company);
+                }
+                if ($legacyTenantId) {
+                    $byTenant->put($legacyTenantId, $company);
+                }
+                $byName->put($companyName, $company);
             }
 
-            if ($updates !== []) {
-                $company->forceFill($updates)->save();
+            if ($ssoCompanyId !== null) {
+                $resolved[$ssoCompanyId] = $company;
             }
-
-            return $company;
         }
 
-        // Create new company
-        $company = $companyModel::create([
-            'name' => $companyName,
-            'owner_id' => $user->id,
-            'sso_company_id' => $ssoCompanyId,
-            'core_tenant_id' => $legacyTenantId,
-        ]);
-
-        return $company;
+        return $resolved;
     }
 
-    protected function attachUserToCompany($user, $company): void
+    /**
+     * Attach the user to every resolved company in a single existence check
+     * plus a single bulk insert.
+     *
+     * @param  array<int|string, object>  $localCompanies
+     */
+    protected function attachUserToCompanies($user, array $localCompanies): void
     {
-        $exists = DB::table('company_user')
-            ->where('company_id', $company->id)
+        if ($localCompanies === []) {
+            return;
+        }
+
+        $companyIds = array_values(array_map(static fn ($company) => $company->id, $localCompanies));
+
+        $alreadyAttached = DB::table('company_user')
             ->where('user_id', $user->id)
-            ->exists();
+            ->whereIn('company_id', $companyIds)
+            ->pluck('company_id')
+            ->all();
+        $alreadyAttached = array_flip($alreadyAttached);
 
-        if (! $exists) {
-            $user->companies()->attach($company->id, [
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
-        }
-    }
-
-    protected function syncRoles($user, $company, array $roles): void
-    {
-        $roleModel = $this->getRoleModelClass();
-        $allowedRoles = array_intersect($roles, ['Admin', 'User']);
-
-        if (empty($allowedRoles)) {
-            $allowedRoles = ['User'];
-        }
-
-        $roleIds = [];
-
-        foreach ($allowedRoles as $roleName) {
-            // Use withoutGlobalScopes() to bypass any company/tenant scoping
-            // that would add a conflicting WHERE clause during SSO sync
-            $role = $roleModel::withoutGlobalScopes()->firstOrCreate(
-                ['name' => $roleName, 'guard_name' => 'web', 'company_id' => $company->id],
-            );
-            $roleIds[] = $role->id;
-
-            DB::table('company_user_roles')->upsert([
-                [
-                    'company_id' => $company->id,
+        $now = now();
+        $rows = [];
+        foreach ($companyIds as $companyId) {
+            if (! isset($alreadyAttached[$companyId])) {
+                $rows[] = [
+                    'company_id' => $companyId,
                     'user_id' => $user->id,
-                    'role_id' => $role->id,
-                    'created_at' => now(),
-                    'updated_at' => now(),
-                ],
-            ], ['company_id', 'user_id', 'role_id'], ['updated_at']);
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ];
+            }
         }
 
-        // Remove roles not in the SSO payload for this company
+        if ($rows !== []) {
+            DB::table('company_user')->insert($rows);
+        }
+    }
+
+    /**
+     * Sync the user's roles across every company at once: one query to load
+     * existing roles, one upsert for the memberships, one delete for the
+     * memberships that are no longer granted.
+     *
+     * @param  array<int, array<string, mixed>>  $companies
+     * @param  array<int|string, object>  $localCompanies
+     */
+    protected function syncRolesForCompanies($user, array $companies, array $localCompanies): void
+    {
+        $desired = [];
+        foreach ($companies as $companyData) {
+            $ssoCompanyId = $companyData['id'] ?? null;
+            if ($ssoCompanyId === null || ! isset($localCompanies[$ssoCompanyId])) {
+                continue;
+            }
+
+            $allowed = array_values(array_intersect($companyData['roles'] ?? ['User'], ['Admin', 'User']));
+            if ($allowed === []) {
+                $allowed = ['User'];
+            }
+
+            $desired[$localCompanies[$ssoCompanyId]->id] = $allowed;
+        }
+
+        if ($desired === []) {
+            return;
+        }
+
+        $roleModel = $this->getRoleModelClass();
+        $companyIds = array_keys($desired);
+
+        // Use withoutGlobalScopes() to bypass any company/tenant scoping that
+        // would add a conflicting WHERE clause during SSO sync.
+        $roleMap = [];
+        foreach (
+            $roleModel::withoutGlobalScopes()
+                ->whereIn('company_id', $companyIds)
+                ->whereIn('name', ['Admin', 'User'])
+                ->get() as $role
+        ) {
+            $roleMap[$role->company_id][$role->name] = $role->id;
+        }
+
+        $now = now();
+        $upsertRows = [];
+        $keptPairs = [];
+        $keptBindings = [];
+
+        foreach ($desired as $companyId => $roleNames) {
+            foreach ($roleNames as $roleName) {
+                if (! isset($roleMap[$companyId][$roleName])) {
+                    $role = $roleModel::withoutGlobalScopes()->create([
+                        'name' => $roleName,
+                        'guard_name' => 'web',
+                        'company_id' => $companyId,
+                    ]);
+                    $roleMap[$companyId][$roleName] = $role->id;
+                }
+
+                $roleId = $roleMap[$companyId][$roleName];
+                $upsertRows[] = [
+                    'company_id' => $companyId,
+                    'user_id' => $user->id,
+                    'role_id' => $roleId,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ];
+                $keptPairs[] = '(?, ?)';
+                $keptBindings[] = $companyId;
+                $keptBindings[] = $roleId;
+            }
+        }
+
+        DB::table('company_user_roles')->upsert($upsertRows, ['company_id', 'user_id', 'role_id'], ['updated_at']);
+
+        // Drop memberships for these companies that are no longer granted.
         DB::table('company_user_roles')
-            ->where('company_id', $company->id)
             ->where('user_id', $user->id)
-            ->whereNotIn('role_id', $roleIds)
+            ->whereIn('company_id', $companyIds)
+            ->whereRaw('(company_id, role_id) NOT IN ('.implode(', ', $keptPairs).')', $keptBindings)
             ->delete();
     }
 

@@ -5,6 +5,7 @@ namespace Unified\SsoClient;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
 
@@ -17,8 +18,13 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
      * {
      *   "user": { "id", "email", "displayName", "firstName", "lastName", "username", "legacySsoId" },
      *   "companies": [ { "id", "name", "legacyTenantId", "roles": [...] } ],
-     *   "selectedCompany": { "id", "name", "legacyTenantId", "roles": [...] }
+     *   "selectedCompany": { "id", "name", "legacyTenantId", "roles": [...] },
+     *   "staffRoles": [ "global-admin", ... ]
      * }
+     *
+     * `companies[].roles` carries the role names this user holds for the
+     * requesting application (SSO resolves them per app). `staffRoles` carries
+     * the user's global platform staff roles.
      *
      * @return array{0: Authenticatable, 1: mixed}
      */
@@ -34,6 +40,7 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
         $displayName = $this->resolveDisplayName($userData);
         $username = $userData['username'] ?? null;
         $phoneNumber = $userData['phoneNumber'] ?? null;
+        $staffRoles = $payload['staffRoles'] ?? [];
 
         if (! $ssoUserId && ! $email) {
             Log::warning('SSO sync: No user ID or email in payload');
@@ -41,8 +48,10 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
             return [null, null];
         }
 
-        return DB::transaction(function () use ($ssoUserId, $legacySsoId, $email, $displayName, $username, $phoneNumber, $companies, $selectedCompany) {
+        return DB::transaction(function () use ($ssoUserId, $legacySsoId, $email, $displayName, $username, $phoneNumber, $companies, $selectedCompany, $staffRoles) {
             $user = $this->findOrCreateUser($ssoUserId, $legacySsoId, $email, $displayName, $username, $phoneNumber);
+
+            $this->syncStaffRoles($user, $staffRoles);
 
             $localCompanies = $this->resolveCompanies($companies, $user);
 
@@ -313,12 +322,12 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
                 continue;
             }
 
-            $allowed = array_values(array_intersect($companyData['roles'] ?? ['User'], ['Admin', 'User']));
-            if ($allowed === []) {
-                $allowed = ['User'];
+            $names = array_values(array_unique(array_filter($companyData['roles'] ?? ['User'])));
+            if ($names === []) {
+                $names = ['User'];
             }
 
-            $desired[$localCompanies[$ssoCompanyId]->id] = $allowed;
+            $desired[$localCompanies[$ssoCompanyId]->id] = $names;
         }
 
         if ($desired === []) {
@@ -328,13 +337,17 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
         $roleModel = $this->getRoleModelClass();
         $companyIds = array_keys($desired);
 
+        // The role->permission meaning is app-owned; trust whatever role names
+        // SSO sends rather than whitelisting Admin/User.
+        $roleNameUniverse = array_values(array_unique(array_merge(...array_values($desired))));
+
         // Use withoutGlobalScopes() to bypass any company/tenant scoping that
         // would add a conflicting WHERE clause during SSO sync.
         $roleMap = [];
         foreach (
             $roleModel::withoutGlobalScopes()
                 ->whereIn('company_id', $companyIds)
-                ->whereIn('name', ['Admin', 'User'])
+                ->whereIn('name', $roleNameUniverse)
                 ->get() as $role
         ) {
             $roleMap[$role->company_id][$role->name] = $role->id;
@@ -378,6 +391,26 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
             ->whereIn('company_id', $companyIds)
             ->whereRaw('(company_id, role_id) NOT IN ('.implode(', ', $keptPairs).')', $keptBindings)
             ->delete();
+    }
+
+    /**
+     * Sync the user's global platform staff roles into the local users table.
+     *
+     * Staff roles are not company-scoped. They are stored as a JSON array on
+     * the users table (column added by the package migration). No-op if the
+     * column is absent so apps that have not migrated yet are unaffected.
+     */
+    protected function syncStaffRoles($user, array $staffRoles): void
+    {
+        if (! Schema::hasColumn($user->getTable(), 'staff_roles')) {
+            return;
+        }
+
+        $slugs = array_values(array_unique(array_filter($staffRoles)));
+
+        $value = $user->hasCast('staff_roles') ? $slugs : json_encode($slugs);
+
+        $user->forceFill(['staff_roles' => $value])->save();
     }
 
     /**

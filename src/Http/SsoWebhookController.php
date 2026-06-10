@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Unified\SsoClient\Models\SsoSessionAction;
 
@@ -43,6 +44,8 @@ class SsoWebhookController extends Controller
                 'company.updated' => $this->handleCompanyUpdated($request),
                 'company.activated' => $this->handleCompanyActivated($request),
                 'user.company_role_changed' => $this->handleUserRoleChanged($request),
+                'user.app_role_changed' => $this->handleUserAppRoleChanged($request),
+                'user.staff_role_changed' => $this->handleUserStaffRoleChanged($request),
                 'user.impersonation.started' => $this->handleImpersonationStarted($request),
                 'user.impersonation.ended' => $this->handleImpersonationEnded($request),
                 'user.logged_out' => $this->handleUserLoggedOut($request),
@@ -206,6 +209,56 @@ class SsoWebhookController extends Controller
         }
 
         return ['status' => 'ok', 'action' => 'user.company_role_changed'];
+    }
+
+    /**
+     * A user's role for a specific application within a company changed. SSO
+     * dispatches this only to the affected app, but we still guard on the
+     * app slug so a misrouted payload can't rewrite another app's roles.
+     *
+     * @return array<string, mixed>
+     */
+    protected function handleUserAppRoleChanged(Request $request): array
+    {
+        $appSlug = $request->input('app_slug');
+
+        if ($appSlug !== null && $appSlug !== config('sso.app_slug')) {
+            return ['status' => 'ignored', 'action' => 'user.app_role_changed', 'reason' => 'app_slug mismatch'];
+        }
+
+        $userData = $request->input('user', []);
+        $companyData = $request->input('company', []);
+        $roles = $request->input('roles', ['User']);
+
+        $user = $this->findUserBySsoId($userData['id'] ?? null, $userData['email'] ?? null);
+        $company = $this->findCompanyBySsoId($companyData['id'] ?? null, $companyData['legacy_tenant_id'] ?? null);
+
+        if ($user && $company) {
+            $this->syncRoles($user, $company, $roles);
+        }
+
+        return ['status' => 'ok', 'action' => 'user.app_role_changed'];
+    }
+
+    /**
+     * A user's global platform staff roles changed.
+     *
+     * @return array<string, mixed>
+     */
+    protected function handleUserStaffRoleChanged(Request $request): array
+    {
+        $userData = $request->input('user', []);
+        $staffRoles = $request->input('staff_roles', []);
+
+        $user = $this->findUserBySsoId($userData['id'] ?? null, $userData['email'] ?? null);
+
+        if ($user && Schema::hasColumn($user->getTable(), 'staff_roles')) {
+            $slugs = array_values(array_unique(array_filter($staffRoles)));
+            $value = $user->hasCast('staff_roles') ? $slugs : json_encode($slugs);
+            $user->forceFill(['staff_roles' => $value])->save();
+        }
+
+        return ['status' => 'ok', 'action' => 'user.staff_role_changed'];
     }
 
     /**
@@ -519,15 +572,16 @@ class SsoWebhookController extends Controller
     protected function syncRoles($user, $company, array $roles): void
     {
         $roleModel = $this->getRoleModelClass();
-        $allowedRoles = array_intersect($roles, ['Admin', 'User']);
 
-        if (empty($allowedRoles)) {
-            $allowedRoles = ['User'];
+        $roleNames = array_values(array_unique(array_filter($roles)));
+
+        if ($roleNames === []) {
+            $roleNames = ['User'];
         }
 
         $roleIds = [];
 
-        foreach ($allowedRoles as $roleName) {
+        foreach ($roleNames as $roleName) {
             $role = $roleModel::firstOrCreate(
                 ['name' => $roleName, 'company_id' => $company->id],
                 ['guard_name' => 'web']
@@ -709,15 +763,18 @@ class SsoWebhookController extends Controller
      */
     protected function syncRolesAcrossCompaniesForUser(int $userId, array $rolesByCompanyId): void
     {
-        $allowedRoleNames = ['Admin', 'User'];
-
         $normalized = [];
+        $roleNameUniverse = [];
         foreach ($rolesByCompanyId as $companyId => $roles) {
-            $allowed = array_values(array_intersect($roles, $allowedRoleNames));
-            $normalized[$companyId] = $allowed !== [] ? $allowed : ['User'];
+            $names = array_values(array_unique(array_filter($roles)));
+            $normalized[$companyId] = $names !== [] ? $names : ['User'];
+            $roleNameUniverse = array_merge($roleNameUniverse, $normalized[$companyId]);
         }
 
-        $rolesByCompany = $this->resolveRolesForCompanies(array_keys($normalized), $allowedRoleNames);
+        $rolesByCompany = $this->resolveRolesForCompanies(
+            array_keys($normalized),
+            array_values(array_unique($roleNameUniverse)),
+        );
 
         $desired = [];
         foreach ($normalized as $companyId => $roleNames) {
@@ -747,8 +804,13 @@ class SsoWebhookController extends Controller
             return;
         }
 
-        $allowedRoleNames = ['Admin', 'User'];
-        $rolesByCompany = $this->resolveRolesForCompanies([$companyId], $allowedRoleNames);
+        $roleNameUniverse = array_values(array_unique(array_filter($userIdToRole)));
+
+        if ($roleNameUniverse === []) {
+            return;
+        }
+
+        $rolesByCompany = $this->resolveRolesForCompanies([$companyId], $roleNameUniverse);
         $roleNameToId = $rolesByCompany[$companyId] ?? [];
 
         $now = now();
@@ -800,16 +862,16 @@ class SsoWebhookController extends Controller
     }
 
     /**
-     * Resolve (or create) the allowed roles for every company id in one pass.
+     * Resolve (or create) the given roles for every company id in one pass.
      * Returns [company_id => [role_name => role_id]].
      *
      * @param  array<int, int>  $companyIds
-     * @param  array<int, string>  $allowedRoleNames
+     * @param  array<int, string>  $roleNames
      * @return array<int, array<string, int>>
      */
-    protected function resolveRolesForCompanies(array $companyIds, array $allowedRoleNames): array
+    protected function resolveRolesForCompanies(array $companyIds, array $roleNames): array
     {
-        if ($companyIds === []) {
+        if ($companyIds === [] || $roleNames === []) {
             return [];
         }
 
@@ -818,7 +880,7 @@ class SsoWebhookController extends Controller
 
         $existing = $roleModel::query()
             ->whereIn('company_id', $companyIds)
-            ->whereIn('name', $allowedRoleNames)
+            ->whereIn('name', $roleNames)
             ->get(['id', 'name', 'company_id']);
 
         $byCompany = [];
@@ -829,7 +891,7 @@ class SsoWebhookController extends Controller
         $now = now();
         $toCreate = [];
         foreach ($companyIds as $companyId) {
-            foreach ($allowedRoleNames as $roleName) {
+            foreach ($roleNames as $roleName) {
                 if (isset($byCompany[$companyId][$roleName])) {
                     continue;
                 }

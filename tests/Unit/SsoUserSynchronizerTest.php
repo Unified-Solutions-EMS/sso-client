@@ -131,9 +131,21 @@ class SsoUserSynchronizerTest extends TestCase
         $this->assertSame([$userRole->id], $remaining->all());
     }
 
-    public function test_unknown_roles_fall_back_to_user(): void
+    public function test_arbitrary_role_names_flow_through(): void
     {
+        // The Admin/User whitelist was removed: the role->permission meaning is
+        // app-owned, so any role name SSO sends is synced verbatim.
         $this->sync($this->payload([], [['id' => 70, 'roles' => ['Wizard', 'Pirate']]]));
+
+        $company = Company::where('sso_company_id', 70)->first();
+        $roleNames = Role::where('company_id', $company->id)->pluck('name')->sort()->values()->all();
+
+        $this->assertSame(['Pirate', 'Wizard'], $roleNames);
+    }
+
+    public function test_empty_roles_fall_back_to_user(): void
+    {
+        $this->sync($this->payload([], [['id' => 70, 'roles' => []]]));
 
         $company = Company::where('sso_company_id', 70)->first();
         $roleNames = Role::where('company_id', $company->id)->pluck('name')->all();

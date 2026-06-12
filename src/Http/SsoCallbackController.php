@@ -66,13 +66,6 @@ class SsoCallbackController extends Controller
             // Exchange code for tokens
             $tokens = $this->ssoClient->exchangeCode($code, $this->sessionState->getCodeVerifier());
 
-            // Store tokens in session
-            $this->sessionState->storeTokens(
-                $tokens['access_token'],
-                $tokens['refresh_token'] ?? null,
-                $tokens['expires_in'] ?? 3600,
-            );
-
             // Fetch user profile from SSO
             $payload = $this->ssoClient->fetchUser($tokens['access_token']);
 
@@ -85,9 +78,17 @@ class SsoCallbackController extends Controller
                 return redirect()->route('login')->with('error', 'Failed to sync your account. Please contact support.');
             }
 
+            // Capture the post-login redirect target BEFORE any session reset
+            // below. The intended URL was stored on the prior /redirect request
+            // (e.g. an impersonation deep link to /university/my-training), and
+            // session()->invalidate() on the user-switch path would otherwise
+            // wipe it, silently dropping the user on the default /dashboard.
+            $intendedUrl = $this->sessionState->pullIntendedUrl('/dashboard');
+
             // If a different user was previously logged into this browser
             // session (e.g. user A logged out of SSO and user B is now coming
-            // through callback on the same browser), wipe the old session
+            // through callback on the same browser, or an admin opening a
+            // downstream app while impersonating), wipe the old session
             // entirely before logging the new user in. Otherwise stale
             // session keys from the previous user can leak across the
             // boundary.
@@ -104,6 +105,15 @@ class SsoCallbackController extends Controller
             // Log in locally
             Auth::login($user, true);
 
+            // Store tokens AFTER the session reset — storing before would put
+            // them in the about-to-be-invalidated session, leaving the freshly
+            // logged-in user with no SSO tokens on the user-switch path.
+            $this->sessionState->storeTokens(
+                $tokens['access_token'],
+                $tokens['refresh_token'] ?? null,
+                $tokens['expires_in'] ?? 3600,
+            );
+
             // Store SSO user ID and selected company in session
             $this->sessionState->storeSsoUserId($payload['user']['id'] ?? $user->id);
 
@@ -115,8 +125,6 @@ class SsoCallbackController extends Controller
             if ($company && method_exists($user, 'loadRolesForCompany')) {
                 $user->loadRolesForCompany($company->id);
             }
-
-            $intendedUrl = $this->sessionState->pullIntendedUrl('/dashboard');
 
             return redirect()->to($intendedUrl);
 

@@ -145,6 +145,16 @@ Treat this test as load-bearing: never delete or weaken it; if it fails, fix the
 
 ---
 
+## 7a. ePCR form parity (web ↔ mobile)
+
+This rule is about the **ePCR form specifically** — not other CloudPCR forms (settings, admin, etc.). The ePCR form lives in two places: the web app (`/Sites/cloudpcr`) and the Unified Mobile app (`/Sites/Unified-Mobile`). They are deliberately kept consistent but **not** auto-synced — some changes are genuinely platform-specific.
+
+- Whenever you change an **ePCR form** field, layout, validation rule, or option set in one of these apps, **ask the user whether the same change should be applied to the other form** before considering the task done.
+- Do **not** apply the change to the other app automatically. The user decides per change.
+- This applies in both directions (web → mobile and mobile → web).
+
+---
+
 ## 7b. Crew-Scheduling-specific notes
 
 - **Stack:** Laravel 11 + Filament 3 + Livewire 3 + Alpine + FullCalendar 6 (`@fullcalendar/resource-timeline` is the primary scheduling view). Deployed on **Vapor** (`laravel/vapor-core`, `vapor.yml`).

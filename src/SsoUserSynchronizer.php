@@ -5,6 +5,7 @@ namespace Unified\SsoClient;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
 
@@ -27,6 +28,7 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
         $userData = $payload['user'] ?? [];
         $companies = $payload['companies'] ?? [];
         $selectedCompany = $payload['selectedCompany'] ?? null;
+        $staffRoles = array_values($payload['staffRoles'] ?? []);
 
         $ssoUserId = $userData['id'] ?? null;
         $legacySsoId = $userData['legacySsoId'] ?? null;
@@ -41,8 +43,8 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
             return [null, null];
         }
 
-        return DB::transaction(function () use ($ssoUserId, $legacySsoId, $email, $displayName, $username, $phoneNumber, $companies, $selectedCompany) {
-            $user = $this->findOrCreateUser($ssoUserId, $legacySsoId, $email, $displayName, $username, $phoneNumber);
+        return DB::transaction(function () use ($ssoUserId, $legacySsoId, $email, $displayName, $username, $phoneNumber, $companies, $selectedCompany, $staffRoles) {
+            $user = $this->findOrCreateUser($ssoUserId, $legacySsoId, $email, $displayName, $username, $phoneNumber, $staffRoles);
 
             $localCompanies = $this->resolveCompanies($companies, $user);
 
@@ -97,7 +99,8 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
         ?string $email,
         string $displayName,
         ?string $username,
-        ?string $phoneNumber = null
+        ?string $phoneNumber = null,
+        array $staffRoles = []
     ) {
         $userModel = $this->getUserModelClass();
         $user = null;
@@ -143,6 +146,12 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
 
             $updates['last_login_at'] = now();
 
+            // SSO owns staff (global/Unified) roles; mirror onto the local user
+            // so isStaff()/canAccessPanel() work. Rides this existing save.
+            if (method_exists($user, 'staffRoleSlugs')) {
+                $updates['staff_roles'] = $staffRoles;
+            }
+
             $user->forceFill($updates)->save();
 
             return $user;
@@ -164,10 +173,10 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
 
         $user = $userModel::create($createAttributes);
 
-        $user->forceFill([
+        $user->forceFill(array_merge([
             'email_verified_at' => now(),
             'last_login_at' => now(),
-        ])->save();
+        ], method_exists($user, 'staffRoleSlugs') ? ['staff_roles' => $staffRoles] : []))->save();
 
         return $user;
     }
@@ -183,6 +192,7 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
     protected function resolveCompanies(array $companies, $user): array
     {
         $companyModel = $this->getCompanyModelClass();
+        $syncsTimezone = Schema::hasColumn((new $companyModel)->getTable(), 'timezone');
 
         $ssoIds = [];
         $tenantIds = [];
@@ -219,6 +229,10 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
                 $company = $byName->get($companyName);
             }
 
+            // SSO is the source of truth for company timezone. Apps that have
+            // adopted the timezone column receive it here; others ignore it.
+            $timezone = $companyData['timezone'] ?? null;
+
             if ($company) {
                 $updates = [];
                 if ($ssoCompanyId && ($company->sso_company_id ?? null) != $ssoCompanyId) {
@@ -227,16 +241,19 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
                 if ($legacyTenantId && ! $company->core_tenant_id) {
                     $updates['core_tenant_id'] = $legacyTenantId;
                 }
+                if ($syncsTimezone && $timezone && ($company->timezone ?? null) !== $timezone) {
+                    $updates['timezone'] = $timezone;
+                }
                 if ($updates !== []) {
                     $company->forceFill($updates)->save();
                 }
             } else {
-                $company = $companyModel::create([
+                $company = $companyModel::create(array_merge([
                     'name' => $companyName,
                     'owner_id' => $user->id,
                     'sso_company_id' => $ssoCompanyId,
                     'core_tenant_id' => $legacyTenantId,
-                ]);
+                ], $syncsTimezone && $timezone ? ['timezone' => $timezone] : []));
 
                 // Keep the lookup maps current so a later payload entry that
                 // matches the same row reuses it instead of inserting twice.

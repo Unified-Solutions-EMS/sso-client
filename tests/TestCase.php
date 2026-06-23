@@ -47,6 +47,7 @@ abstract class TestCase extends Orchestra
             $table->string('sso_company_id')->nullable();
             $table->string('core_tenant_id')->nullable();
             $table->json('enabled_modules')->nullable();
+            $table->string('timezone')->nullable();
             $table->timestamps();
         });
 

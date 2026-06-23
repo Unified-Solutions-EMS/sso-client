@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Unified\SsoClient\Models\SsoSessionAction;
 
@@ -161,6 +162,15 @@ class SsoWebhookController extends Controller
 
             if (isset($companyData['name']) && $company->name !== $companyData['name']) {
                 $updates['name'] = $companyData['name'];
+            }
+
+            // SSO owns the company timezone; mirror it locally for apps that
+            // have adopted the column. Others simply ignore the field.
+            if (isset($companyData['timezone'])
+                && Schema::hasColumn($company->getTable(), 'timezone')
+                && ($company->timezone ?? null) !== $companyData['timezone']
+            ) {
+                $updates['timezone'] = $companyData['timezone'];
             }
 
             if ($updates !== []) {

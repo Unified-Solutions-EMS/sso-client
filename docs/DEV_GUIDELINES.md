@@ -46,6 +46,22 @@ Every app exposes one shared endpoint that lets SSO ask "what's the state of com
 - **Tenancy:** see §4a — looking up the local company by `sso_company_id` is the canonical "authoritative source" case. `withoutGlobalScopes()` is allowed as long as the very next clause filters by `company_id`.
 - **Vapor:** the endpoint is a sync MySQL read with no `pdo_sqlsrv` requirement, so it works fine on every app regardless of host.
 
+### 2b. Roles & permissions (RBAC)
+
+Platform-wide RBAC has two axes. **SSO is authoritative for identity, role assignment, and the role-name catalog; each app owns what a role *means*.**
+
+- **Universal role-name catalog** lives in SSO (`roles` rows with `company_id IS NULL`: Admin, User, Billing, …). Managed by Global Admins in `/admin`. Apps do not invent role names; agencies do not either (yet).
+- **Per-app assignment:** SSO stores one role per `(user, company, application)` in `user_application_roles`. Agency admins assign these in SSO's `/system` user manager (per-app selectors + "set all" shortcut). So a user can be Admin in HR but User in CloudPCR.
+- **Role → permission mapping is app-owned.** Each app maps role names → Spatie permissions in its own code (`database/seeders/RolesAndPermissionsSeeder.php` from an app-local `app/Authorization/RoleMap.php`), right next to the `$user->can('…')` checks it protects. SSO never stores permissions.
+- **Staff roles** (Global Admin, Liaison, Support, Billing Ops, Read-only) are global, stored in SSO (`staff_roles` / `user_staff_roles`), assigned to any user in `/admin`. They **replace email-domain gating**: `canAccessPanel()` and any "is this Unified staff?" check use `isStaff()` / `hasStaffRole()`, never an `@unified-solutions.io` string match. **Staff role ≠ cross-tenant data access** — it grants admin-panel reach only; it must NOT bypass `HasCompanyScope` in user-facing HTTP paths (see §4a).
+
+**Per-app consumer rules (`unified/sso-client`):**
+- Set `SSO_APP_SLUG` (or `config('sso.app_slug')`) to this app's registry slug.
+- `use Unified\SsoClient\Concerns\SyncsCompanyRoles` on the `User` model (requires Spatie `HasRoles`). It provides `loadRolesForCompany()`, `hasRoleInCompany()`, `companyRoleNames()`, and staff helpers `isStaff()/hasStaffRole()/isGlobalAdmin()` reading the package-managed `users.staff_roles` column. Delete any hand-rolled copies.
+- Call `$user->loadRolesForCompany($companyId)` after login / company switch / impersonation so Spatie answers for the active tenant.
+- **Check permissions, not role names** in new code: `$user->can('schedule.manage')`, not `hasRoleInCompany('Admin', …)`. Role names are an assignment detail; permissions are the contract.
+- `/api/user` sends `companies[].roles` (this app's role names), `companies[].appRole`, and top-level `staffRoles`. The package syncs roles into `company_user_roles` and staff roles into `users.staff_roles`. The `['Admin','User']` whitelist is gone — any role name SSO sends flows through.
+
 ---
 
 ## 3. Webhooks
@@ -126,6 +142,16 @@ Treat this test as load-bearing: never delete or weaken it; if it fails, fix the
 - All forms use the custom `x-nemsis.*` modal/field components, not Filament's native forms.
 - City fields store GNIS `feature_id` (integer kept as string). County fields store 5-digit ANSI/FIPS.
 - Alpine + Google Maps: keep map instances in closure variables, NOT in Alpine reactive `x-data`. Maps break when proxied.
+
+---
+
+## 7a. ePCR form parity (web ↔ mobile)
+
+This rule is about the **ePCR form specifically** — not other CloudPCR forms (settings, admin, etc.). The ePCR form lives in two places: the web app (`/Sites/cloudpcr`) and the Unified Mobile app (`/Sites/Unified-Mobile`). They are deliberately kept consistent but **not** auto-synced — some changes are genuinely platform-specific.
+
+- Whenever you change an **ePCR form** field, layout, validation rule, or option set in one of these apps, **ask the user whether the same change should be applied to the other form** before considering the task done.
+- Do **not** apply the change to the other app automatically. The user decides per change.
+- This applies in both directions (web → mobile and mobile → web).
 
 ---
 

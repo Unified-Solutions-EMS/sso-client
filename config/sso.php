@@ -1,5 +1,7 @@
 <?php
 
+use Illuminate\Support\Str;
+
 return [
 
     /*
@@ -23,6 +25,18 @@ return [
     'client_id' => env('SSO_CLIENT_ID'),
     'client_secret' => env('SSO_CLIENT_SECRET'),
     'redirect_uri' => env('SSO_REDIRECT_URI'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Application Slug
+    |--------------------------------------------------------------------------
+    |
+    | This app's slug in the SSO application registry (e.g. "cloudpcr"). Used
+    | to pick this app's slice of role data out of the SSO payload and to
+    | guard app-scoped webhooks. Defaults to a slug of the app name.
+    |
+    */
+    'app_slug' => env('SSO_APP_SLUG', Str::slug(env('APP_NAME', 'app'))),
 
     /*
     |--------------------------------------------------------------------------

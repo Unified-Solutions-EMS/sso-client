@@ -166,6 +166,15 @@ class SsoWebhookController extends Controller
                 $updates['name'] = $companyData['name'];
             }
 
+            // SSO owns the company timezone; mirror it locally for apps that
+            // have adopted the column. Others simply ignore the field.
+            if (isset($companyData['timezone'])
+                && Schema::hasColumn($company->getTable(), 'timezone')
+                && ($company->timezone ?? null) !== $companyData['timezone']
+            ) {
+                $updates['timezone'] = $companyData['timezone'];
+            }
+
             if ($updates !== []) {
                 $company->forceFill($updates)->save();
             }

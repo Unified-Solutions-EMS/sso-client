@@ -98,6 +98,28 @@ class SsoUserSynchronizerTest extends TestCase
         $this->assertSame(1, Company::count());
     }
 
+    public function test_it_mirrors_company_timezone_from_sso_when_the_column_exists(): void
+    {
+        $this->sync($this->payload([], [
+            ['id' => 70, 'name' => 'Tz Co', 'timezone' => 'America/Denver', 'roles' => ['User']],
+        ]));
+
+        $this->assertSame('America/Denver', Company::where('sso_company_id', 70)->value('timezone'));
+    }
+
+    public function test_it_updates_the_timezone_of_an_existing_company(): void
+    {
+        $existing = Company::create(['name' => 'Tz Co', 'sso_company_id' => 70, 'timezone' => 'UTC']);
+
+        $this->sync($this->payload([], [
+            ['id' => 70, 'name' => 'Tz Co', 'timezone' => 'Australia/Sydney', 'roles' => ['User']],
+        ]));
+
+        $existing->refresh();
+        $this->assertSame('Australia/Sydney', $existing->timezone);
+        $this->assertSame(1, Company::count());
+    }
+
     public function test_it_matches_an_existing_user_by_sso_id(): void
     {
         $user = User::create(['name' => 'Old Name', 'email' => 'old@example.com', 'sso_id' => '5001']);

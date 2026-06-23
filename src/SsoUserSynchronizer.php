@@ -12,6 +12,15 @@ use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
 class SsoUserSynchronizer implements SsoUserSynchronizerContract
 {
     /**
+     * Cache of whether a company table carries a `timezone` column, keyed by
+     * table name. The schema is stable within a process, so this avoids a
+     * schema lookup on every login.
+     *
+     * @var array<string, bool>
+     */
+    private static array $timezoneColumnSupport = [];
+
+    /**
      * Synchronize the SSO user payload into local database records.
      *
      * Expects the normalized payload from the SSO /api/user endpoint:
@@ -192,6 +201,10 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
     protected function resolveCompanies(array $companies, $user): array
     {
         $companyModel = $this->getCompanyModelClass();
+        $companyTable = (new $companyModel)->getTable();
+        // Memoized: the schema doesn't change between logins, so don't pay a
+        // schema lookup on every sync.
+        $syncsTimezone = self::$timezoneColumnSupport[$companyTable] ??= Schema::hasColumn($companyTable, 'timezone');
 
         $ssoIds = [];
         $tenantIds = [];
@@ -228,6 +241,10 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
                 $company = $byName->get($companyName);
             }
 
+            // SSO is the source of truth for company timezone. Apps that have
+            // adopted the timezone column receive it here; others ignore it.
+            $timezone = $companyData['timezone'] ?? null;
+
             if ($company) {
                 $updates = [];
                 if ($ssoCompanyId && ($company->sso_company_id ?? null) != $ssoCompanyId) {
@@ -236,16 +253,19 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
                 if ($legacyTenantId && ! $company->core_tenant_id) {
                     $updates['core_tenant_id'] = $legacyTenantId;
                 }
+                if ($syncsTimezone && $timezone && ($company->timezone ?? null) !== $timezone) {
+                    $updates['timezone'] = $timezone;
+                }
                 if ($updates !== []) {
                     $company->forceFill($updates)->save();
                 }
             } else {
-                $company = $companyModel::create([
+                $company = $companyModel::create(array_merge([
                     'name' => $companyName,
                     'owner_id' => $user->id,
                     'sso_company_id' => $ssoCompanyId,
                     'core_tenant_id' => $legacyTenantId,
-                ]);
+                ], $syncsTimezone && $timezone ? ['timezone' => $timezone] : []));
 
                 // Keep the lookup maps current so a later payload entry that
                 // matches the same row reuses it instead of inserting twice.

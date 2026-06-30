@@ -66,6 +66,7 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
 
             $this->attachUserToCompanies($user, $localCompanies);
             $this->syncRolesForCompanies($user, $companies, $localCompanies);
+            $this->syncDeviceBypasses($user, $companies, $localCompanies);
 
             foreach ($companies as $companyData) {
                 $ssoCompanyId = $companyData['id'] ?? null;
@@ -411,6 +412,73 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
             ->whereIn('company_id', $companyIds)
             ->whereRaw('(company_id, role_id) NOT IN ('.implode(', ', $keptPairs).')', $keptBindings)
             ->delete();
+    }
+
+    /**
+     * Mirror each company's device-lock bypass for this user into the local
+     * sso_device_bypasses table, so the device-lock middleware can answer
+     * "is this user exempt" without calling SSO. No-op if the app has not run
+     * the package migration. `deviceBypass` is ['*'] (company-wide) or a list
+     * of app slugs; an empty/absent value clears any existing bypass.
+     *
+     * @param  array<int, array<string, mixed>>  $companies
+     * @param  array<int|string, object>  $localCompanies
+     */
+    protected function syncDeviceBypasses($user, array $companies, array $localCompanies): void
+    {
+        // Only touch the table when the payload actually reports bypass state.
+        // Payloads from an SSO that predates the feature omit the field entirely
+        // and must be left alone (an empty list, by contrast, clears a bypass).
+        $reportsBypass = false;
+        foreach ($companies as $companyData) {
+            if (array_key_exists('deviceBypass', $companyData)) {
+                $reportsBypass = true;
+                break;
+            }
+        }
+
+        if (! $reportsBypass || ! Schema::hasTable('sso_device_bypasses')) {
+            return;
+        }
+
+        $now = now();
+        $upserts = [];
+        $clearCompanyIds = [];
+
+        foreach ($companies as $companyData) {
+            $ssoCompanyId = $companyData['id'] ?? null;
+            if ($ssoCompanyId === null || ! isset($localCompanies[$ssoCompanyId]) || ! array_key_exists('deviceBypass', $companyData)) {
+                continue;
+            }
+
+            $localCompanyId = $localCompanies[$ssoCompanyId]->id;
+            $slugs = $companyData['deviceBypass'] ?? [];
+
+            if (! is_array($slugs) || $slugs === []) {
+                $clearCompanyIds[] = $localCompanyId;
+
+                continue;
+            }
+
+            $upserts[] = [
+                'user_id' => $user->id,
+                'company_id' => $localCompanyId,
+                'app_slugs' => json_encode(array_values($slugs)),
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+
+        if ($upserts !== []) {
+            DB::table('sso_device_bypasses')->upsert($upserts, ['user_id', 'company_id'], ['app_slugs', 'updated_at']);
+        }
+
+        if ($clearCompanyIds !== []) {
+            DB::table('sso_device_bypasses')
+                ->where('user_id', $user->id)
+                ->whereIn('company_id', $clearCompanyIds)
+                ->delete();
+        }
     }
 
     /**

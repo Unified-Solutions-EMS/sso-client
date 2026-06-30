@@ -18,6 +18,8 @@ class SsoServiceProvider extends ServiceProvider
 
         $this->app->singleton(SsoClient::class);
         $this->app->singleton(SsoSessionState::class);
+        $this->app->singleton(Device\DeviceSessionState::class);
+        $this->app->singleton(Device\DeviceGuard::class);
 
         $this->app->bindIf(SsoUserSynchronizerContract::class, SsoUserSynchronizer::class);
 
@@ -49,10 +51,13 @@ class SsoServiceProvider extends ServiceProvider
 
         $this->loadRoutesFrom(__DIR__.'/../routes/sso.php');
 
+        $this->loadViewsFrom(__DIR__.'/../resources/views', 'sso');
+
         $router = $this->app->make('router');
         $router->aliasMiddleware('sso.session', Middleware\EnsureSsoSessionIsFresh::class);
         $router->aliasMiddleware('sso.api', Middleware\SsoApiAuthenticate::class);
         $router->aliasMiddleware('sso.session-actions', Middleware\EnforceSsoSessionActions::class);
+        $router->aliasMiddleware('sso.device-lock', Middleware\EnforceDeviceAuthorization::class);
         $router->aliasMiddleware('metrics.session', Metrics\Middleware\TrackSessionMetric::class);
 
         // Auto-register the session-actions middleware in the `web` group

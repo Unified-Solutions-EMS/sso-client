@@ -4,6 +4,7 @@ namespace Unified\SsoClient\Concerns;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Spatie\Permission\Models\Role;
 use Spatie\Permission\PermissionRegistrar;
 use Spatie\Permission\Traits\HasRoles;
@@ -99,6 +100,39 @@ trait SyncsCompanyRoles
     public function isGlobalAdmin(): bool
     {
         return $this->hasStaffRole('global-admin');
+    }
+
+    /**
+     * Whether this user may open a device-locked app from any device for the
+     * given company, without an authorized device. True when SSO has granted
+     * them a company-wide bypass ('*') or a bypass covering this app. Defaults
+     * to the current app's slug. No-op (false) until the package migration that
+     * creates sso_device_bypasses has run.
+     */
+    public function hasDeviceBypass(int $companyId, ?string $appSlug = null): bool
+    {
+        if (! Schema::hasTable('sso_device_bypasses')) {
+            return false;
+        }
+
+        $appSlug = $appSlug ?? (string) config('sso.app_slug');
+
+        $stored = DB::table('sso_device_bypasses')
+            ->where('user_id', $this->getKey())
+            ->where('company_id', $companyId)
+            ->value('app_slugs');
+
+        if ($stored === null) {
+            return false;
+        }
+
+        $slugs = is_string($stored) ? json_decode($stored, true) : $stored;
+
+        if (! is_array($slugs)) {
+            return false;
+        }
+
+        return in_array('*', $slugs, true) || in_array($appSlug, $slugs, true);
     }
 
     protected function companyRoleModelClass(): string

@@ -141,6 +141,95 @@ class SsoClient
     }
 
     /**
+     * Fetch a company's device-lock policy from SSO.
+     *
+     * Returns null when the policy can't be retrieved (network/auth error) so
+     * callers can apply their own fail-open / fail-closed decision.
+     *
+     * @return array{mode: string, locked_app_slugs: array<int, string>, grace_until: ?string}|null
+     */
+    public function fetchDevicePolicy(int|string $ssoCompanyId): ?array
+    {
+        return $this->internalRequest('get', "/api/internal/companies/{$ssoCompanyId}/device-policy");
+    }
+
+    /**
+     * Ask SSO for a single-use challenge for the device to sign.
+     *
+     * @return array{challenge: string, expires_at: string}|null
+     */
+    public function requestDeviceChallenge(?string $keyId = null): ?array
+    {
+        return $this->internalRequest('post', '/api/internal/device/challenge', ['key_id' => $keyId]);
+    }
+
+    /**
+     * Verify a signed challenge against SSO's device registry.
+     *
+     * @return array{verified: bool, device?: array<string, mixed>}|null
+     */
+    public function verifyDevice(string $keyId, string $challenge, string $signature): ?array
+    {
+        return $this->internalRequest('post', '/api/internal/device/verify', [
+            'key_id' => $keyId,
+            'challenge' => $challenge,
+            'signature' => $signature,
+        ]);
+    }
+
+    /**
+     * Register a device's public key with SSO (code or admin mode).
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array{device: array<string, mixed>}|null
+     */
+    public function registerDevice(array $payload): ?array
+    {
+        return $this->internalRequest('post', '/api/internal/device/register', $payload);
+    }
+
+    /**
+     * Call an SSO internal endpoint with the shared CORE_APP_API_KEY. Returns
+     * the decoded body on success, or null on any failure (logged).
+     *
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>|null
+     */
+    protected function internalRequest(string $method, string $path, array $data = []): ?array
+    {
+        $baseUrl = rtrim(config('sso.base_url'), '/');
+        $apiKey = config('sso.core_api_key') ?? config('app.core_api_key');
+
+        if (empty($apiKey)) {
+            Log::warning('SSO device call skipped: CORE_APP_API_KEY not configured');
+
+            return null;
+        }
+
+        try {
+            $request = Http::timeout(config('sso.timeout', 10))
+                ->withHeaders(['X-API-KEY' => $apiKey])
+                ->acceptJson();
+
+            $response = $method === 'get'
+                ? $request->get($baseUrl.$path, $data)
+                : $request->post($baseUrl.$path, $data);
+        } catch (\Throwable $e) {
+            Log::warning('SSO device call HTTP error', ['path' => $path, 'message' => $e->getMessage()]);
+
+            return null;
+        }
+
+        if ($response->failed()) {
+            Log::warning('SSO device call failed', ['path' => $path, 'status' => $response->status()]);
+
+            return null;
+        }
+
+        return $response->json();
+    }
+
+    /**
      * Build the SSO logout redirect URL.
      */
     public function buildLogoutUrl(?string $redirectUri = null): string

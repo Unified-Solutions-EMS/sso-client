@@ -83,6 +83,44 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Core API Key
+    |--------------------------------------------------------------------------
+    |
+    | Shared symmetric key for server-to-server calls to SSO's internal API
+    | (device policy / challenge / verify / register). Same value across every
+    | app.
+    |
+    */
+    'core_api_key' => env('CORE_APP_API_KEY'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Device Authorization (device lockdown)
+    |--------------------------------------------------------------------------
+    |
+    | When an agency enables device lock for this app, the `sso.device-lock`
+    | middleware requires the browser to prove (via the Unified device
+    | extension) that its device is authorized before the app will render.
+    |
+    | - enabled: master switch for enforcing the feature in this app.
+    | - policy_cache_ttl: seconds to cache a company's policy locally so the
+    |   middleware doesn't call SSO on every request.
+    | - session_ttl: seconds a successful handshake stays bound to the session
+    |   before the extension must re-prove. Also how quickly a revoked device
+    |   is forced back through verification.
+    | - fail_open: when SSO's policy endpoint can't be reached, allow the
+    |   request rather than locking everyone out during an SSO outage.
+    |
+    */
+    'device' => [
+        'enabled' => env('SSO_DEVICE_LOCK_ENABLED', true),
+        'policy_cache_ttl' => (int) env('SSO_DEVICE_POLICY_TTL', 300),
+        'session_ttl' => (int) env('SSO_DEVICE_SESSION_TTL', 1800),
+        'fail_open' => (bool) env('SSO_DEVICE_FAIL_OPEN', true),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Dashboard Data Provider
     |--------------------------------------------------------------------------
     |

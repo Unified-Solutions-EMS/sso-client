@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use Unified\SsoClient\Http\AgencyStatus\AgencyStatusController;
+use Unified\SsoClient\Http\Device\DeviceHandshakeController;
 use Unified\SsoClient\Http\SsoActionController;
 use Unified\SsoClient\Http\SsoCallbackController;
 use Unified\SsoClient\Http\SsoDashboardController;
@@ -19,6 +20,15 @@ Route::middleware('web')->group(function () {
 
     Route::post($routes['logout'] ?? '/auth/sso/logout', [SsoCallbackController::class, 'logout'])
         ->name('sso.logout');
+
+    // Device-handshake endpoints the locked interstitial calls. Same-origin,
+    // authenticated (checked in the controller), and never gated by the
+    // device-lock middleware themselves.
+    Route::prefix('sso/device')->name('sso.device.')->group(function () {
+        Route::post('challenge', [DeviceHandshakeController::class, 'challenge'])->name('challenge');
+        Route::post('verify', [DeviceHandshakeController::class, 'verify'])->name('verify');
+        Route::post('register', [DeviceHandshakeController::class, 'register'])->name('register');
+    });
 });
 
 // Webhook endpoint — no CSRF, no auth; signature-verified in controller

@@ -75,5 +75,14 @@ abstract class TestCase extends Orchestra
             $table->timestamps();
             $table->unique(['company_id', 'user_id', 'role_id']);
         });
+
+        Schema::create('sso_device_bypasses', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('user_id');
+            $table->unsignedBigInteger('company_id');
+            $table->json('app_slugs');
+            $table->timestamps();
+            $table->unique(['user_id', 'company_id']);
+        });
     }
 }

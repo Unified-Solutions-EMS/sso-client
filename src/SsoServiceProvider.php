@@ -2,8 +2,10 @@
 
 namespace Unified\SsoClient;
 
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Support\ServiceProvider;
+use Unified\SsoClient\Console\SyncUsersCommand;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
 use Unified\SsoClient\Metrics\Contracts\MetricContextResolver;
 use Unified\SsoClient\Metrics\Metrics;
@@ -63,5 +65,32 @@ class SsoServiceProvider extends ServiceProvider
         if (method_exists($kernel, 'appendMiddlewareToGroup')) {
             $kernel->appendMiddlewareToGroup('web', Middleware\EnforceSsoSessionActions::class);
         }
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([SyncUsersCommand::class]);
+        }
+
+        $this->registerRosterSyncSchedule();
+    }
+
+    /**
+     * Register the periodic roster reconcile so every consuming app keeps its
+     * user list complete without per-app wiring. Idempotent upserts make the
+     * cadence safe; apps can tune or disable it via config('sso.roster_sync').
+     */
+    protected function registerRosterSyncSchedule(): void
+    {
+        if (! config('sso.roster_sync.enabled', true)) {
+            return;
+        }
+
+        $this->app->booted(function (): void {
+            $schedule = $this->app->make(Schedule::class);
+
+            $schedule->command('sso:sync-users')
+                ->cron((string) config('sso.roster_sync.cron', '0 * * * *'))
+                ->withoutOverlapping()
+                ->runInBackground();
+        });
     }
 }

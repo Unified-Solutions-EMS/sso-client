@@ -141,6 +141,40 @@ class SsoClient
     }
 
     /**
+     * Fetch the full user roster for one SSO company, with each member's roles
+     * resolved for this app. Server-to-server (CORE_APP_API_KEY), so it returns
+     * every member regardless of whether they've ever logged in.
+     *
+     * @return array<int, array<string, mixed>> a list of /api/user-shaped payloads
+     */
+    public function fetchCompanyRoster(int|string $ssoCompanyId, string $appSlug): array
+    {
+        $baseUrl = rtrim((string) config('sso.base_url'), '/');
+        $key = (string) config('sso.core_api_key');
+
+        if ($key === '') {
+            throw SsoClientException::userFetchFailed('CORE_APP_API_KEY not configured');
+        }
+
+        try {
+            $response = Http::timeout(config('sso.timeout', 10))
+                ->withHeaders(['X-API-KEY' => $key])
+                ->acceptJson()
+                ->get($baseUrl."/api/internal/companies/{$ssoCompanyId}/users", ['app' => $appSlug]);
+        } catch (\Throwable $e) {
+            Log::error('SSO roster fetch HTTP error', ['company' => $ssoCompanyId, 'message' => $e->getMessage()]);
+            throw SsoClientException::userFetchFailed($e->getMessage());
+        }
+
+        if ($response->failed()) {
+            Log::warning('SSO roster fetch failed', ['company' => $ssoCompanyId, 'status' => $response->status()]);
+            throw SsoClientException::userFetchFailed("HTTP {$response->status()}");
+        }
+
+        return $response->json('users') ?? [];
+    }
+
+    /**
      * Build the SSO logout redirect URL.
      */
     public function buildLogoutUrl(?string $redirectUri = null): string

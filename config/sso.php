@@ -40,6 +40,34 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Core API Key (server-to-server)
+    |--------------------------------------------------------------------------
+    |
+    | Shared symmetric key used to call SSO's internal endpoints (e.g. the
+    | company roster). Same value in every app — CORE_APP_API_KEY.
+    |
+    */
+    'core_api_key' => env('CORE_APP_API_KEY'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Roster Reconciliation
+    |--------------------------------------------------------------------------
+    |
+    | The scheduled `sso:sync-users` command pulls each locally-known company's
+    | full roster from SSO and upserts every member, so an app's user list is
+    | complete even for people who have never logged in. This is the periodic
+    | safety net behind login/webhook provisioning. Set the cron to control
+    | cadence; disable if an app manages its own roster.
+    |
+    */
+    'roster_sync' => [
+        'enabled' => env('SSO_ROSTER_SYNC_ENABLED', true),
+        'cron' => env('SSO_ROSTER_SYNC_CRON', '0 * * * *'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Token Lifetimes
     |--------------------------------------------------------------------------
     |

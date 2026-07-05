@@ -67,4 +67,20 @@ class DeviceGuard
     {
         Cache::forget("sso_device_policy:{$ssoCompanyId}");
     }
+
+    /**
+     * Record that SSO revoked a device (via the device.revoked webhook) so any
+     * session still bound to it is locked out on its next request instead of
+     * riding out the binding TTL. The blacklist entry only needs to outlive the
+     * longest possible binding, which is device.session_ttl.
+     */
+    public function markDeviceRevoked(int|string $deviceId): void
+    {
+        Cache::put("sso_device_revoked:{$deviceId}", true, (int) config('sso.device.session_ttl', 1800));
+    }
+
+    public function deviceIsRevoked(int|string $deviceId): bool
+    {
+        return (bool) Cache::get("sso_device_revoked:{$deviceId}", false);
+    }
 }

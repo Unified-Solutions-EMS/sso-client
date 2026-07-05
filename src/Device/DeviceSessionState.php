@@ -25,19 +25,32 @@ class DeviceSessionState
 
     public function isVerifiedFor(int|string $ssoCompanyId): bool
     {
+        return $this->boundDeviceIdFor($ssoCompanyId) !== null;
+    }
+
+    /**
+     * The device id this session is bound to for the given company, or null
+     * when there is no live binding (absent, expired, or for another company).
+     */
+    public function boundDeviceIdFor(int|string $ssoCompanyId): int|string|null
+    {
         $binding = Session::get(self::KEY_BINDING);
 
         if (! is_array($binding)) {
-            return false;
+            return null;
         }
 
         if (($binding['sso_company_id'] ?? null) !== (string) $ssoCompanyId) {
-            return false;
+            return null;
         }
 
         $expiresAt = $binding['expires_at'] ?? 0;
 
-        return is_int($expiresAt) && now()->timestamp < $expiresAt;
+        if (! is_int($expiresAt) || now()->timestamp >= $expiresAt) {
+            return null;
+        }
+
+        return $binding['device_id'] ?? null;
     }
 
     public function clear(): void

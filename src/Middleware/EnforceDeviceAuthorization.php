@@ -81,8 +81,16 @@ class EnforceDeviceAuthorization
             return $next($request);
         }
 
-        if ($this->session->isVerifiedFor($ssoCompanyId)) {
-            return $next($request);
+        $boundDeviceId = $this->session->boundDeviceIdFor($ssoCompanyId);
+
+        if ($boundDeviceId !== null) {
+            if (! $this->guard->deviceIsRevoked($boundDeviceId)) {
+                return $next($request);
+            }
+
+            // The device.revoked webhook blacklisted this device; drop the
+            // binding so the interstitial re-runs a fresh handshake.
+            $this->session->clear();
         }
 
         return $this->lock($request, $ssoCompanyId);

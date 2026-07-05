@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Unified\SsoClient\Concerns\SyncsCompanyRoles;
+use Unified\SsoClient\Device\DeviceGuard;
 use Unified\SsoClient\Device\DeviceSessionState;
 use Unified\SsoClient\Tests\Stubs\Models\Company;
 use Unified\SsoClient\Tests\TestCase;
@@ -136,6 +137,21 @@ class DeviceLockMiddlewareTest extends TestCase
         $this->actingAs($user)
             ->withSession(['selected_company_id' => $company->id, DeviceSessionState::KEY_BINDING => $binding])
             ->get('/protected')->assertStatus(423);
+    }
+
+    public function test_a_revoked_device_locks_a_previously_bound_session(): void
+    {
+        [$user, $company] = $this->makeUserAndCompany();
+        $this->fakePolicy(['mode' => 'all', 'locked_app_slugs' => [], 'grace_until' => null]);
+
+        app(DeviceGuard::class)->markDeviceRevoked(11);
+
+        $binding = ['sso_company_id' => '70', 'device_id' => 11, 'expires_at' => now()->addHour()->timestamp];
+
+        $this->actingAs($user)
+            ->withSession(['selected_company_id' => $company->id, DeviceSessionState::KEY_BINDING => $binding])
+            ->get('/protected')->assertStatus(423)
+            ->assertSessionMissing(DeviceSessionState::KEY_BINDING);
     }
 }
 

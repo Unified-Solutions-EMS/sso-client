@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use Unified\SsoClient\Device\DeviceGuard;
 use Unified\SsoClient\Models\SsoSessionAction;
 
 class SsoWebhookController extends Controller
@@ -49,6 +50,7 @@ class SsoWebhookController extends Controller
                 'user.impersonation.started' => $this->handleImpersonationStarted($request),
                 'user.impersonation.ended' => $this->handleImpersonationEnded($request),
                 'user.logged_out' => $this->handleUserLoggedOut($request),
+                'device.revoked' => $this->handleDeviceRevoked($request),
                 'trial.seed_data' => $this->handleTrialSeedData($request),
                 'trial.purge_data' => $this->handleTrialPurgeData($request),
                 'cad.migrate_data' => $this->handleCadMigrateData($request),
@@ -364,6 +366,27 @@ class SsoWebhookController extends Controller
         ]);
 
         return ['status' => 'ok', 'action' => 'user.logged_out'];
+    }
+
+    /**
+     * An agency admin revoked a device in SSO. Sessions are per-browser, so we
+     * can't clear another browser's device binding directly — instead the
+     * device id goes on a shared cache blacklist that the device-lock
+     * middleware consults, locking any bound session on its next request.
+     *
+     * @return array<string, mixed>
+     */
+    protected function handleDeviceRevoked(Request $request): array
+    {
+        $deviceId = $request->input('device.id');
+
+        if ($deviceId === null) {
+            return ['status' => 'ok', 'action' => 'device.revoked', 'skipped' => true];
+        }
+
+        app(DeviceGuard::class)->markDeviceRevoked($deviceId);
+
+        return ['status' => 'ok', 'action' => 'device.revoked'];
     }
 
     /**

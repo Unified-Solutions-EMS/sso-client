@@ -168,7 +168,7 @@ This rule is about the **ePCR form specifically** — not other CloudPCR forms (
     - `POST /api/sso/punch` — HMAC-signed from SSO, **not** `core.api`. Uses `SSO_WEBHOOK_SECRET`-style signature; no auth/CSRF middleware.
 - **Magic login:** `/company-login/token` (`CompanyMagicLoginController`) is how the SSO dashboard drops a user into a specific company. Don't route-guard it with `auth` — it *creates* the auth.
 - **Trial tenants:** `TrialDataSeeder` / `TrialDataPurger` + `RunTrialSeeder` / `RunTrialPurger` jobs manage demo data. If you add new tenant-scoped tables, update the purger so trial resets stay clean.
-- **Metrics:** `Services/Metrics/MetricClient` + `Jobs/SendMetricToUnified` + `TrackSessionMetric` middleware push usage metrics to the Unified hub. Don't inline new metric HTTP calls — extend `MetricClient`.
+- **Metrics:** usage metrics go through the `unified/sso-client` package — `Unified\SsoClient\Metrics\Facades\Metrics` for domain emits (pass `local_company_id` / `local_user_id` in context; the package translates to SSO ids via `companies.sso_company_id` / `users.sso_id`) and `Unified\SsoClient\Metrics\Middleware\TrackSessionMetric` appended to the `web` group for session heartbeats. Config is env-driven (`METRICS_ENDPOINT`, `METRICS_APP_KEY` = the SSO registry slug, auth via `CORE_APP_API_KEY`). The old app-local `Services/Metrics/MetricClient` stack is deleted — don't reintroduce it. This applies platform-wide, not just Crew: every app reports metrics, and SSO's nightly `RollupMetricEvents` job feeds the Reporting `/admin` usage grids.
 
 ---
 

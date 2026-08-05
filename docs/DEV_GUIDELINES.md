@@ -167,7 +167,7 @@ This rule is about the **ePCR form specifically** — not other CloudPCR forms (
     - `GET /api/integrations/crew-scheduling/week` — generic weekly schedule feed.
     - `POST /api/integrations/crew-scheduling/punch`, `GET /punch-state` — punch clock API.
     - `POST /api/sso/punch` — HMAC-signed from SSO, **not** `core.api`. Uses `SSO_WEBHOOK_SECRET`-style signature; no auth/CSRF middleware.
-- **Magic login:** `/company-login/token` (`CompanyMagicLoginController`) is how the SSO dashboard drops a user into a specific company. Don't route-guard it with `auth` — it *creates* the auth.
+- **Magic login is gone (2026-08-05).** `/company-login/token` predated SSO and was removed after a production check found no real usage (one self-test token from 2025-03; no producer anywhere — SSO never minted these). Entering a company happens through the normal SSO OAuth redirect with an `intended` URL.
 - **Trial tenants:** `TrialDataSeeder` / `TrialDataPurger` + `RunTrialSeeder` / `RunTrialPurger` jobs manage demo data. If you add new tenant-scoped tables, update the purger so trial resets stay clean.
 - **Metrics:** `Services/Metrics/MetricClient` + `Jobs/SendMetricToUnified` + `TrackSessionMetric` middleware push usage metrics to the Unified hub. Don't inline new metric HTTP calls — extend `MetricClient`.
 

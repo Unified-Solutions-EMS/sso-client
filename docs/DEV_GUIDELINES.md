@@ -328,3 +328,39 @@ Applies to UI copy, wiki articles, training/sales scripts, marketing pages, supp
 
 - **OR-of-`whereExists` is a MySQL planner trap.** Multiple `whereExists` branches OR'd together on a non-trivial base query can degenerate catastrophically (observed: <500ms per branch alone → 61s combined). Instead: pluck the bounded candidate ID set first, query each branch with `whereIn`, merge and `unique()->count()`. Triage rule for a slow metric: time each branch alone vs combined; if combined ≫ sum of parts, it's this trap.
 - Eager-load to avoid N+1 (§10 stands); for aggregate dashboards prefer bounded ID-set queries over clever single-statement joins.
+
+---
+
+## 23. Work intake & flow (Linear + Sentry)
+
+Task tracking lives in **Linear**, team `Unified-solutions` (issue prefix `UNI-`). Error intake comes from **Sentry**, org `unified-solutions`, one project per app.
+
+- **States:** Triage → Backlog → Todo → In Progress → In Review → Done (plus Canceled / Duplicate). Working flow: pick from Todo → move to In Progress → implement → open PR → comment the PR link on the issue → move to In Review. Done only after merge (and deploy verification where relevant).
+- **Labels:** one label per app (which repo the issue belongs to) + `Bug` / `Feature` / `Improvement`. Sentry-imported issues also carry the `Sentry` label. When updating labels programmatically, read the existing set first — label writes REPLACE the whole set.
+- **Branch names:** use the Linear issue's `gitBranchName` so PRs auto-link to the issue.
+- **Sentry short-ID dedupe key:** imported issues have the Sentry short ID in parentheses at the END of the Linear title, e.g. `Undefined variable $x in ClaimController (CLOUDPCR-4Y2)`. That suffix is the dedupe key for the daily triage sweep — never strip it when retitling.
+- **Sentry is read-only for agents.** Never resolve, assign, or modify Sentry issues; state lives in Linear.
+- **Regression rule:** a Done/Canceled Linear issue is reopened only on evidence — Sentry events with timestamps NEWER than the fix's completion/deploy date. Older events are pre-fix noise.
+- **Never delete Linear issues** (move to Canceled); never rewrite another author's issue description — add comments.
+- **Demo-tenant noise:** internal demo/test tenants (§19) must not inflate an error's priority — check whose data the events belong to before escalating.
+- **PR contents:** detailed body (what changed, why, risk, test evidence), Linear issue link, and any item on the human-approval list (prod data, deploys, dependency changes, test deletions, ePCR parity mirroring) FLAGGED in the description rather than acted on.
+- After user-visible work: offer a changelog entry (§17). If the change alters behavior documented in the wiki, update the wiki article data + reseed (§18) or flag it in the PR.
+
+---
+
+## 24. Definition of done
+
+A change is done when every line below holds. This is the review bar for agent- and human-authored PRs alike.
+
+- [ ] Repo `CLAUDE.md` + this file read; deviations justified in the PR
+- [ ] Targeted feature tests green (not just the happy path you wrote); new behavior has test coverage; Filament resources touched → smoke test updated (§16)
+- [ ] `vendor/bin/pint --dirty` clean; `composer analyse` adds zero errors over the baseline
+- [ ] Tenancy: no `withoutGlobalScopes()` outside the §4a rules; `CrossTenantIsolationTest` untouched and green
+- [ ] Datetime code: column storage semantics verified (§19), round-trip checked
+- [ ] UI copy follows §18 (no em dashes in rendered UI, no dev jargon, no NEMSIS element IDs, no tenant-isolation narration)
+- [ ] Eloquent over `DB::`, eager-loaded, Form Requests for validation, no `env()` outside config (§10)
+- [ ] No secrets in code or docs; no commented-out code; no unrequested markdown files (§13)
+- [ ] Detailed multi-line commit message (§15); pushed; PR opened with the Linear issue linked
+- [ ] Anything on the human-approval list flagged, not acted on (deploys, prod data, dependency/deploy-requirement changes, deleting or weakening tests, force pushes, ePCR web↔mobile mirroring)
+- [ ] Convention changed or found wrong? This file / repo `CLAUDE.md` updated in the same PR (§14)
+- [ ] Changelog offered for user-visible changes (§17); wiki impact checked (§18)

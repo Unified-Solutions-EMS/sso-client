@@ -3,11 +3,14 @@
 namespace Unified\SsoClient;
 
 use Illuminate\Contracts\Http\Kernel as HttpKernel;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
 use Unified\SsoClient\Metrics\Contracts\MetricContextResolver;
 use Unified\SsoClient\Metrics\Metrics;
 use Unified\SsoClient\Metrics\Resolvers\EloquentMetricContextResolver;
+use Unified\SsoClient\Security\Listeners\RecordAuthenticationSecurityEvents;
+use Unified\SsoClient\Security\SecurityEvents;
 
 class SsoServiceProvider extends ServiceProvider
 {
@@ -15,6 +18,7 @@ class SsoServiceProvider extends ServiceProvider
     {
         $this->mergeConfigFrom(__DIR__.'/../config/sso.php', 'sso');
         $this->mergeConfigFrom(__DIR__.'/../config/metrics.php', 'metrics');
+        $this->mergeConfigFrom(__DIR__.'/../config/security.php', 'security');
 
         $this->app->singleton(SsoClient::class);
         $this->app->singleton(SsoSessionState::class);
@@ -33,6 +37,7 @@ class SsoServiceProvider extends ServiceProvider
         });
 
         $this->app->singleton(Metrics::class);
+        $this->app->singleton(SecurityEvents::class);
     }
 
     public function boot(): void
@@ -44,6 +49,16 @@ class SsoServiceProvider extends ServiceProvider
         $this->publishes([
             __DIR__.'/../config/metrics.php' => config_path('metrics.php'),
         ], 'metrics-config');
+
+        $this->publishes([
+            __DIR__.'/../config/security.php' => config_path('security.php'),
+        ], 'security-config');
+
+        // Auto-record failed logins / lockouts / password resets as
+        // security events in every consuming app.
+        if (config('security.listen_auth_events', true)) {
+            Event::subscribe(RecordAuthenticationSecurityEvents::class);
+        }
 
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
 

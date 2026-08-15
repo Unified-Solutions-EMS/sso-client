@@ -7,9 +7,12 @@ use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\Log;
 use Unified\SsoClient\Contracts\SsoActionHandler;
+use Unified\SsoClient\Http\Concerns\VerifiesSsoWebhookSignature;
 
 class SsoActionController extends Controller
 {
+    use VerifiesSsoWebhookSignature;
+
     /**
      * Handle an HMAC-signed action request from SSO.
      */
@@ -49,24 +52,5 @@ class SsoActionController extends Controller
 
             return response()->json(['error' => $e->getMessage()], 500);
         }
-    }
-
-    protected function verifySignature(Request $request): bool
-    {
-        $secret = config('sso.webhook_secret');
-
-        if (! $secret) {
-            return false;
-        }
-
-        $signature = $request->header('X-SSO-Signature');
-
-        if (! $signature) {
-            return false;
-        }
-
-        $expectedSignature = hash_hmac('sha256', $request->getContent(), $secret);
-
-        return hash_equals($expectedSignature, $signature);
     }
 }

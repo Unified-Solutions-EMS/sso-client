@@ -4,6 +4,7 @@ namespace Unified\SsoClient\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
+use Unified\SsoClient\Security\SecurityEvents;
 
 /**
  * Validates CORE_APP_API_KEY for cross-app internal endpoints registered
@@ -24,6 +25,8 @@ class ValidateCoreApiKey
         $provided = $this->extractKey($request);
 
         if (! $provided || ! hash_equals((string) $expected, (string) $provided)) {
+            $this->recordFailure($provided);
+
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
@@ -43,5 +46,20 @@ class ValidateCoreApiKey
         }
 
         return $request->header('X-API-KEY');
+    }
+
+    protected function recordFailure(?string $provided): void
+    {
+        $security = app(SecurityEvents::class);
+
+        if ($provided && $security->isHoneytoken($provided)) {
+            $security->critical('honeytoken.api_key_used');
+
+            return;
+        }
+
+        $security->warning('internal_api.auth_failed', [
+            'key_provided' => (bool) $provided,
+        ]);
     }
 }

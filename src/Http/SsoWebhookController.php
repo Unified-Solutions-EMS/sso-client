@@ -9,10 +9,13 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use Unified\SsoClient\Http\Concerns\VerifiesSsoWebhookSignature;
 use Unified\SsoClient\Models\SsoSessionAction;
 
 class SsoWebhookController extends Controller
 {
+    use VerifiesSsoWebhookSignature;
+
     /**
      * Handle incoming webhook from the SSO server.
      *
@@ -64,27 +67,6 @@ class SsoWebhookController extends Controller
 
             return response()->json(['error' => 'Handler failed'], 500);
         }
-    }
-
-    protected function verifySignature(Request $request): bool
-    {
-        $secret = config('sso.webhook_secret');
-
-        if (! $secret) {
-            Log::warning('SSO webhook: no webhook_secret configured, rejecting request');
-
-            return false;
-        }
-
-        $signature = $request->header('X-SSO-Signature');
-
-        if (! $signature) {
-            return false;
-        }
-
-        $expectedSignature = hash_hmac('sha256', $request->getContent(), $secret);
-
-        return hash_equals($expectedSignature, $signature);
     }
 
     /**

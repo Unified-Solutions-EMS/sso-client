@@ -37,6 +37,15 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   (`metrics.session`) for `session.start` heartbeats, appended to an app's `web` group. Context keys
   `local_company_id` / `local_user_id` are translated to SSO ids by `EloquentMetricContextResolver`
   via `companies.sso_company_id` / `users.sso_id`. `METRICS_APP_KEY` must be the SSO registry slug.
+- **Security events** — `SecurityEvents` facade (aliased globally) records attack-signal events to SSO's
+  `/api/internal/security-events/ingest` (CORE_APP_API_KEY auth, endpoint derived from `SSO_BASE_URL`,
+  app key falls back to `METRICS_APP_KEY` → `SSO_APP_SLUG`, so already-wired apps need zero config).
+  Auto-recorded with no per-app wiring: failed logins / lockouts / password resets (Laravel auth events),
+  `internal_api.auth_failed` (`ValidateCoreApiKey`), and `webhook.signature_failed` (the package's HMAC
+  endpoints, now verified via the shared `VerifiesSsoWebhookSignature` trait). Honeytokens:
+  `SECURITY_HONEYTOKEN_KEYS` (decoy API keys) and `SECURITY_CANARY_EMAILS` (decoy accounts) — any use
+  records a critical event. Severities info/warning/critical; critical alerts immediately on the SSO side.
+  Best-effort like Metrics: unconfigured apps log-and-noop, sends never raise into the request.
 - **Dashboard + action endpoints** — `POST /api/sso/dashboard` (`config('sso.dashboard_provider')`
   implementing `DashboardDataProvider`) and `POST /api/sso/actions/{action}`
   (`config('sso.action_handlers')` map to `SsoActionHandler`), both HMAC-verified.

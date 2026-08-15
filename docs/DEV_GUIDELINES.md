@@ -65,6 +65,17 @@ Platform-wide RBAC has two axes. **SSO is authoritative for identity, role assig
 - **Check permissions, not role names** in new code: `$user->can('schedule.manage')`, not `hasRoleInCompany('Admin', …)`. Role names are an assignment detail; permissions are the contract.
 - `/api/user` sends `companies[].roles` (this app's role names), `companies[].appRole`, and top-level `staffRoles`. The package syncs roles into `company_user_roles` and staff roles into `users.staff_roles`. The `['Admin','User']` whitelist is gone — any role name SSO sends flows through.
 
+### 2c. Security events (attack monitoring)
+
+Every app reports security events to SSO's `security_events` table via the sso-client `SecurityEvents` facade — the attack-monitoring counterpart of the metrics pipeline. SSO evaluates alert rules over the stream and notifies staff.
+
+- **Zero config for wired apps:** endpoint derives from `SSO_BASE_URL` (`/api/internal/security-events/ingest`, `CORE_APP_API_KEY` auth); app key falls back to `METRICS_APP_KEY` → `SSO_APP_SLUG`.
+- **Auto-recorded by the package** (no per-app work): `auth.failed_login` / `auth.lockout` / `auth.password_reset` (Laravel auth events), `internal_api.auth_failed` (`ValidateCoreApiKey` rejections), `webhook.signature_failed` (HMAC endpoints).
+- **App-emitted events:** call `SecurityEvents::info|warning|critical('event.name', [...])` for domain signals — the load-bearing ones are cross-tenant enumeration (`tenant.cross_scope_404` when a model-bound route 404s on another tenant's id) and PHI-volume signals (`phi.export`, `phi.bulk_view`) at export/download choke points. Context must not contain PHI — record counts and ids, never patient data.
+- **Severities:** `info` (audit trail), `warning` (alert on velocity rules), `critical` (alerts immediately — reserve for guaranteed-true-positives like honeytokens).
+- **Honeytokens:** `SECURITY_HONEYTOKEN_KEYS` = comma-separated decoy API keys (plant where an attacker would harvest them; never valid credentials); `SECURITY_CANARY_EMAILS` = decoy account emails. Any use records a critical event. Don't reuse a honeytoken value across apps once tripped — rotate it.
+- Recording is best-effort and fail-silent, same contract as Metrics: it must never break the calling request.
+
 ---
 
 ## 3. Webhooks

@@ -45,7 +45,9 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   endpoints, now verified via the shared `VerifiesSsoWebhookSignature` trait). Honeytokens:
   `SECURITY_HONEYTOKEN_KEYS` (decoy API keys) and `SECURITY_CANARY_EMAILS` (decoy accounts) — any use
   records a critical event. Severities info/warning/critical; critical alerts immediately on the SSO side.
-  Best-effort like Metrics: unconfigured apps log-and-noop, sends never raise into the request.
+  Best-effort like Metrics: unconfigured apps log-and-noop, the send job swallows all failures (on a
+  sync queue it runs inside the calling request, so it must never raise), and recording defaults to
+  OFF under unit tests — pipeline tests opt back in with `config(['security.enabled' => true])`.
 - **Dashboard + action endpoints** — `POST /api/sso/dashboard` (`config('sso.dashboard_provider')`
   implementing `DashboardDataProvider`) and `POST /api/sso/actions/{action}`
   (`config('sso.action_handlers')` map to `SsoActionHandler`), both HMAC-verified.

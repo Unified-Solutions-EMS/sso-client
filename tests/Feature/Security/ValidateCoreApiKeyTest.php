@@ -13,6 +13,8 @@ class ValidateCoreApiKeyTest extends TestCase
     {
         parent::defineEnvironment($app);
 
+        $app['config']->set('security.enabled', true);
+
         $app['config']->set('app.core_api_key', 'real-key');
         $app['config']->set('sso.base_url', 'https://sso.test');
         $app['config']->set('sso.app_slug', 'testapp');

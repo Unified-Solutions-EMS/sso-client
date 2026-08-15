@@ -12,6 +12,8 @@ class WebhookSignatureSecurityTest extends TestCase
     {
         parent::defineEnvironment($app);
 
+        $app['config']->set('security.enabled', true);
+
         $app['config']->set('sso.base_url', 'https://sso.test');
         $app['config']->set('sso.app_slug', 'testapp');
         $app['config']->set('sso.webhook_secret', 'whsec');

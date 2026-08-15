@@ -16,19 +16,17 @@ use Illuminate\Support\Facades\Log;
  * POSTs one security event to SSO's /api/internal/security-events/ingest
  * endpoint.
  *
- * Unlike metrics, security events are worth a couple of retries — losing
- * the event that would have tripped an alert is worse than a short queue
- * backlog. Final failures are logged and swallowed so a dead SSO never
- * cascades into the sending app.
+ * Failures are logged and swallowed, same contract as SendMetricToUnified:
+ * on a sync queue this job runs INSIDE the calling request (login paths,
+ * auth middleware), so an unreachable SSO must never raise. That rules out
+ * exception-driven retries — a lost event is acceptable; a 500 on an
+ * unrelated request is not.
  */
 class SendSecurityEventToUnified implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public int $tries = 3;
-
-    /** @var list<int> */
-    public array $backoff = [30, 120];
+    public int $tries = 1;
 
     /**
      * @param  array<string, mixed>  $payload
@@ -60,18 +58,17 @@ class SendSecurityEventToUnified implements ShouldQueue
             return;
         }
 
-        Http::timeout(5)
-            ->withToken($token)
-            ->withOptions(['verify' => (bool) config('security.verify_ssl', true)])
-            ->post($endpoint, $this->payload)
-            ->throw();
-    }
-
-    public function failed(\Throwable $e): void
-    {
-        Log::warning('Security event send failed', [
-            'message' => $e->getMessage(),
-            'event' => $this->payload['event'] ?? null,
-        ]);
+        try {
+            Http::timeout(5)
+                ->withToken($token)
+                ->withOptions(['verify' => (bool) config('security.verify_ssl', true)])
+                ->post($endpoint, $this->payload)
+                ->throw();
+        } catch (\Throwable $e) {
+            Log::warning('Security event send failed', [
+                'message' => $e->getMessage(),
+                'event' => $this->payload['event'] ?? null,
+            ]);
+        }
     }
 }

@@ -6,6 +6,19 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Kill switch / test-suite default
+    |--------------------------------------------------------------------------
+    |
+    | Null (the default) means: enabled everywhere except while running unit
+    | tests, where real HTTP emits from the sync queue would slow suites and
+    | pollute SSO. Set true/false to force either way.
+    |
+    */
+
+    'enabled' => env('SECURITY_EVENTS_ENABLED'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Ingest endpoint + token
     |--------------------------------------------------------------------------
     |

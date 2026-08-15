@@ -70,6 +70,10 @@ class SecurityEvents
      */
     public function record(string $event, array $context = [], string $severity = self::SEVERITY_WARNING): void
     {
+        if (! $this->enabled()) {
+            return;
+        }
+
         $appKey = $this->appKey();
         $endpoint = $this->endpoint();
         $token = (string) config('security.token', '');
@@ -169,6 +173,24 @@ class SecurityEvents
             array_map('strtolower', $this->csvConfig('security.canary_emails')),
             true,
         );
+    }
+
+    /**
+     * Recording defaults to OFF while running unit tests: on the sync queue
+     * every emit would fire a real HTTP call at SSO from inside app test
+     * suites (slow, and it pollutes a live security_events table). Tests
+     * that exercise the pipeline itself opt back in with
+     * config(['security.enabled' => true]).
+     */
+    protected function enabled(): bool
+    {
+        $enabled = config('security.enabled');
+
+        if ($enabled !== null) {
+            return (bool) $enabled;
+        }
+
+        return ! app()->runningUnitTests();
     }
 
     protected function appKey(): string

@@ -74,7 +74,7 @@ Every app reports security events to SSO's `security_events` table via the sso-c
 - **App-emitted events:** call `SecurityEvents::info|warning|critical('event.name', [...])` for domain signals — the load-bearing ones are cross-tenant enumeration (`tenant.cross_scope_404` when a model-bound route 404s on another tenant's id) and PHI-volume signals (`phi.export`, `phi.bulk_view`) at export/download choke points. Context must not contain PHI — record counts and ids, never patient data.
 - **Severities:** `info` (audit trail), `warning` (alert on velocity rules), `critical` (alerts immediately — reserve for guaranteed-true-positives like honeytokens).
 - **Honeytokens:** `SECURITY_HONEYTOKEN_KEYS` = comma-separated decoy API keys (plant where an attacker would harvest them; never valid credentials); `SECURITY_CANARY_EMAILS` = decoy account emails. Any use records a critical event. Don't reuse a honeytoken value across apps once tripped — rotate it.
-- Recording is best-effort and fail-silent, same contract as Metrics: it must never break the calling request.
+- Recording is best-effort and fail-silent, same contract as Metrics: it must never break the calling request — the send job swallows every failure because on a sync queue it runs inside the request. Recording defaults to OFF while running unit tests (real HTTP from app suites is noise); tests of the pipeline itself set `config(['security.enabled' => true])`.
 
 ---
 

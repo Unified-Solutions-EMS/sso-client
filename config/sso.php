@@ -107,6 +107,55 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Trial Sample-Account Purge
+    |--------------------------------------------------------------------------
+    |
+    | Policy for `sso:purge-fake-users`, which clears the throwaway crew logins
+    | a trial signup creates once SSO confirms the company has converted.
+    |
+    | The command discovers references to those accounts from the schema. It
+    | unlinks whatever it finds (never deletes the record) unless the table is
+    | listed in `pivot_tables`, where the row IS the membership and is removed.
+    | A NOT NULL reference in no list is reported as a blocker and aborts the
+    | run — add the table here if the row is pure membership, otherwise make
+    | the column nullable. Apps append their own: Billing `agency_user`,
+    | Crew-Scheduling `time_off_policy_user`, Drug-Tracking
+    | `location_checkout_members`.
+    |
+    */
+    'fake_user_purge' => [
+        'users_table' => 'users',
+        'companies_table' => 'companies',
+
+        'pivot_tables' => [
+            'company_user',
+            'company_user_roles',
+            'model_has_roles',
+            'model_has_permissions',
+            'notifications',
+            'sessions',
+            'oauth_access_tokens',
+        ],
+
+        // Columns that reference users by convention rather than a declared
+        // foreign key, which is how most of these apps are built.
+        'reference_columns' => [
+            'user_id',
+            'created_by',
+            'updated_by',
+        ],
+
+        // table => [id column, type column] for polymorphic references, so a
+        // row belonging to another morph type is never touched.
+        'polymorphic' => [
+            'notifications' => ['notifiable_id', 'notifiable_type'],
+            'model_has_roles' => ['model_id', 'model_type'],
+            'model_has_permissions' => ['model_id', 'model_type'],
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Routes
     |--------------------------------------------------------------------------
     |

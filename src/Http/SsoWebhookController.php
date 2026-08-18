@@ -9,11 +9,13 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use Unified\SsoClient\Concerns\PrunesStaleCompanyMemberships;
 use Unified\SsoClient\Http\Concerns\VerifiesSsoWebhookSignature;
 use Unified\SsoClient\Models\SsoSessionAction;
 
 class SsoWebhookController extends Controller
 {
+    use PrunesStaleCompanyMemberships;
     use VerifiesSsoWebhookSignature;
 
     /**
@@ -75,11 +77,11 @@ class SsoWebhookController extends Controller
     protected function handleUserCreated(Request $request): array
     {
         $userData = $request->input('user', []);
-        $companies = $request->input('companies', []);
+        $companies = $request->input('companies');
 
         $user = $this->upsertUser($userData);
 
-        if ($user && $companies !== []) {
+        if ($user && is_array($companies)) {
             $this->syncUserCompanyMemberships($user, $companies);
         }
 
@@ -92,11 +94,11 @@ class SsoWebhookController extends Controller
     protected function handleUserUpdated(Request $request): array
     {
         $userData = $request->input('user', []);
-        $companies = $request->input('companies', []);
+        $companies = $request->input('companies');
 
         $user = $this->upsertUser($userData);
 
-        if ($user && $companies !== []) {
+        if ($user && is_array($companies)) {
             $this->syncUserCompanyMemberships($user, $companies);
         }
 
@@ -670,7 +672,12 @@ class SsoWebhookController extends Controller
 
     /**
      * Bulk-resolve every company in the webhook payload, bulk-attach any
-     * missing company_user pivot rows, then bulk-sync per-company roles.
+     * missing company_user pivot rows, bulk-sync per-company roles, then
+     * prune memberships in SSO-linked companies the payload no longer
+     * grants. The payload carries the user's FULL company list, so an
+     * empty list means "member of nothing" and prunes everything
+     * SSO-linked; entries that carry no usable id are treated as a
+     * malformed payload and leave memberships untouched.
      *
      * @param  array<int, array<string, mixed>>  $companies
      */
@@ -685,65 +692,68 @@ class SsoWebhookController extends Controller
             $companies,
         )));
 
-        if ($ssoIds === [] && $legacyIds === []) {
+        if ($companies !== [] && $ssoIds === [] && $legacyIds === []) {
             return;
         }
-
-        $companyModel = $this->getCompanyModelClass();
-        $resolved = $companyModel::query()
-            ->where(function ($q) use ($ssoIds, $legacyIds): void {
-                if ($ssoIds !== []) {
-                    $q->whereIn('sso_company_id', $ssoIds);
-                }
-                if ($legacyIds !== []) {
-                    $q->orWhereIn('core_tenant_id', array_map('strval', $legacyIds));
-                }
-            })
-            ->get();
-
-        $bySsoId = $resolved->keyBy(fn ($c) => (string) ($c->sso_company_id ?? ''));
-        $byLegacyId = $resolved->keyBy(fn ($c) => (string) ($c->core_tenant_id ?? ''));
 
         $rolesByCompanyId = [];
-        foreach ($companies as $companyData) {
-            $ssoId = isset($companyData['id']) ? (string) $companyData['id'] : '';
-            $legacyId = $companyData['legacyTenantId'] ?? $companyData['legacy_tenant_id'] ?? null;
 
-            $company = $ssoId !== '' ? $bySsoId->get($ssoId) : null;
-            if (! $company && $legacyId !== null) {
-                $company = $byLegacyId->get((string) $legacyId);
+        if ($ssoIds !== [] || $legacyIds !== []) {
+            $companyModel = $this->getCompanyModelClass();
+            $resolved = $companyModel::query()
+                ->where(function ($q) use ($ssoIds, $legacyIds): void {
+                    if ($ssoIds !== []) {
+                        $q->whereIn('sso_company_id', $ssoIds);
+                    }
+                    if ($legacyIds !== []) {
+                        $q->orWhereIn('core_tenant_id', array_map('strval', $legacyIds));
+                    }
+                })
+                ->get();
+
+            $bySsoId = $resolved->keyBy(fn ($c) => (string) ($c->sso_company_id ?? ''));
+            $byLegacyId = $resolved->keyBy(fn ($c) => (string) ($c->core_tenant_id ?? ''));
+
+            foreach ($companies as $companyData) {
+                $ssoId = isset($companyData['id']) ? (string) $companyData['id'] : '';
+                $legacyId = $companyData['legacyTenantId'] ?? $companyData['legacy_tenant_id'] ?? null;
+
+                $company = $ssoId !== '' ? $bySsoId->get($ssoId) : null;
+                if (! $company && $legacyId !== null) {
+                    $company = $byLegacyId->get((string) $legacyId);
+                }
+                if (! $company) {
+                    continue;
+                }
+
+                $rolesByCompanyId[$company->id] = $companyData['roles'] ?? ['User'];
             }
-            if (! $company) {
-                continue;
-            }
-
-            $rolesByCompanyId[$company->id] = $companyData['roles'] ?? ['User'];
-        }
-
-        if ($rolesByCompanyId === []) {
-            return;
         }
 
         $companyIds = array_keys($rolesByCompanyId);
 
-        $existingAttachments = DB::table('company_user')
-            ->where('user_id', $user->id)
-            ->whereIn('company_id', $companyIds)
-            ->pluck('company_id')
-            ->all();
+        if ($companyIds !== []) {
+            $existingAttachments = DB::table('company_user')
+                ->where('user_id', $user->id)
+                ->whereIn('company_id', $companyIds)
+                ->pluck('company_id')
+                ->all();
 
-        $missingCompanyIds = array_values(array_diff($companyIds, $existingAttachments));
-        if ($missingCompanyIds !== []) {
-            $now = now();
-            DB::table('company_user')->insert(array_map(fn ($cid) => [
-                'user_id' => $user->id,
-                'company_id' => $cid,
-                'created_at' => $now,
-                'updated_at' => $now,
-            ], $missingCompanyIds));
+            $missingCompanyIds = array_values(array_diff($companyIds, $existingAttachments));
+            if ($missingCompanyIds !== []) {
+                $now = now();
+                DB::table('company_user')->insert(array_map(fn ($cid) => [
+                    'user_id' => $user->id,
+                    'company_id' => $cid,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ], $missingCompanyIds));
+            }
+
+            $this->syncRolesAcrossCompaniesForUser($user->id, $rolesByCompanyId);
         }
 
-        $this->syncRolesAcrossCompaniesForUser($user->id, $rolesByCompanyId);
+        $this->pruneStaleCompanyMemberships($user, $companyIds);
     }
 
     /**

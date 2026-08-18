@@ -7,10 +7,13 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use Unified\SsoClient\Concerns\PrunesStaleCompanyMemberships;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
 
 class SsoUserSynchronizer implements SsoUserSynchronizerContract
 {
+    use PrunesStaleCompanyMemberships;
+
     /**
      * Cache of whether a company table carries a `timezone` column, keyed by
      * table name. The schema is stable within a process, so this avoids a
@@ -66,6 +69,10 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
 
             $this->attachUserToCompanies($user, $localCompanies);
             $this->syncRolesForCompanies($user, $companies, $localCompanies);
+            $this->pruneStaleCompanyMemberships(
+                $user,
+                array_values(array_map(static fn ($company) => $company->id, $localCompanies)),
+            );
 
             foreach ($companies as $companyData) {
                 $ssoCompanyId = $companyData['id'] ?? null;

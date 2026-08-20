@@ -323,6 +323,7 @@ Applies to UI copy, wiki articles, training/sales scripts, marketing pages, supp
 - **DevExtreme DataGrid for every data table** in React apps — never hand-rolled `<table>` markup. Fleet's `resources/js/Components/DataTable.tsx` wrapper is the pattern to mirror. Version caution: the license historically covers 23.1.x, but 23.1 crashes under React 19 — React 19 apps run 23.2 (W0019 console warning). Confirm license coverage with James before pinning a new app.
 - **Form fields:** CloudPCR/CAD Blade surfaces use `x-pcr-text` / `x-pcr-select` (§7); React apps (Reporting, etc.) use the `PcrText` / `PcrSelect` / `PcrMultiSelect` components from `@/Components/PcrFields` — never bare native inputs. Extend the shared component rather than dropping back to native. Note `PcrSelect` in Reporting is a modal combobox, not a dropdown.
 - **Alpine + Google Maps:** map instances live in closure variables, never Alpine reactive `x-data` (proxying breaks maps). With a Google `mapId`, inline `styles` are ignored.
+- **Never native browser dialogs.** No `alert()`, `confirm()`, `prompt()` — and no Livewire `wire:confirm`, which renders the browser's own confirm box. Every alert and confirmation is a styled in-app modal (overlay + panel, Cancel + action buttons) matching the app's modal idiom: the Alpine overlay modals in Blade/Livewire apps, the shared modal components in React apps. For a Livewire confirm, an Alpine flag (`x-data="{ confirmOpen: false }"`) gates the modal and its confirm button fires the real `wire:click` action.
 
 ---
 

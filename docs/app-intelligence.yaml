@@ -1,0 +1,212 @@
+# sso-client — agent-oriented application intelligence.
+#
+# For support/triage agents, not customers. See /Sites/.claude/skills/app-intelligence.
+# Validate with: php /Sites/scripts/validate-app-intelligence.php /Sites/sso-client
+
+app: sso-client
+name: SSO Client (shared package)
+purpose: >
+  Not an app a customer opens. It is the shared component installed inside every
+  Unified product that handles signing in, keeping the session alive, syncing who
+  the user is and what they can do, and reporting usage back. When it
+  misbehaves the customer experiences it as a fault in whichever app they happened
+  to be using.
+hosting: package
+depends_on: [sso]
+primary_users: [nobody directly — every app depends on it]
+note: >
+  CRITICAL FOR TRIAGE. The symptoms below arrive named after the wrong app: "CAD
+  keeps logging me out", "Billing shows the wrong agency", "Fire says I have no
+  access". If a customer reports one of these in ONE app, it is usually that
+  app's setup. If they report it in SEVERAL apps, or it started for everyone at
+  once, the cause is almost certainly here rather than in any product. Ask which
+  apps are affected before filing anything.
+
+capabilities:
+  - id: sso-login
+    name: "Signing in to an app"
+    aliases: [login loop, keeps redirecting, bounced back to login, can't get into the app, endless redirect]
+    what_it_does: >
+      Hands a user from the central login into an individual app and establishes
+      their session there.
+    state: live
+    entry_points: [src/Http/SsoCallbackController.php, src/SsoClient.php]
+    diagnostic_questions:
+      - "Which app, and does it happen in more than one?"
+      - "Do they reach the login screen, sign in, and then get sent back to it?"
+      - "One user or everyone at the agency?"
+    known_causes:
+      - >
+        A loop between the app and the login screen is the signature symptom of a
+        session that cannot be stored. It is an app configuration problem, not a
+        user problem — do not tell the customer to clear their cookies and close
+        the ticket.
+      - >
+        Apps hosted on Vapor must be configured to store sessions in the database
+        with their own cookie name. Without that the session payload is too large
+        and every sign-in loops.
+    related: ["sso:signing-in", "sso-client:session-freshness"]
+
+  - id: user-sync
+    name: "User and company sync"
+    aliases: [wrong agency, can't see my agency, agency missing, my name is wrong in this app, new user can't get in]
+    what_it_does: >
+      Copies who the user is, which agencies they belong to and what they are
+      called into each app when they sign in, so the app does not have to ask
+      centrally on every request.
+    state: live
+    entry_points: [src/SsoUserSynchronizer.php, src/Console/SyncUsersCommand.php]
+    diagnostic_questions:
+      - "Is the agency missing in one app or in all of them?"
+      - "Has the user signed into that specific app since the change was made?"
+      - "Was the user or agency changed centrally recently?"
+    known_causes:
+      - >
+        Changes made centrally reach an app when the user next signs into THAT
+        app. A user who has not logged into an app since a change will still see
+        the old state. This is expected and is usually the whole answer.
+      - >
+        A brand new user may not exist inside an app at all until their first
+        sign-in there.
+    related: ["sso:user-management", "sso:company-switching"]
+
+  - id: role-sync
+    name: "Roles and permissions"
+    aliases: [no access, permission denied, can't do something I should, role not applying, admin but not admin]
+    what_it_does: >
+      Applies the role a user has been given for a particular app and agency, so
+      the app knows what they are allowed to do.
+    state: live
+    entry_points: [src/Concerns/SyncsCompanyRoles.php]
+    diagnostic_questions:
+      - "What role are they supposed to have in THAT app? Roles are per app."
+      - "Did this start after switching agency, or after someone impersonated them?"
+      - "Have they signed out and back in since the role was given?"
+    known_causes:
+      - >
+        Roles are per app AND per agency. Being an admin in HR does not make
+        someone an admin in CloudPCR. Check the role for the specific app before
+        treating it as a bug.
+      - >
+        Permissions can be stale straight after switching agency or ending an
+        impersonation session. Signing out and back in is a legitimate first
+        check here rather than a brush-off.
+    related: ["sso:user-management", "sso:staff-roles"]
+
+  - id: session-freshness
+    name: "Staying signed in"
+    aliases: [logged out again, session expired, keeps signing me out, have to log in every time]
+    what_it_does: >
+      Periodically re-checks that a user's session is still valid and that
+      nothing about their access has changed since they signed in.
+    state: live
+    entry_points: [src/Middleware/EnsureSsoSessionIsFresh.php, src/SsoSessionState.php]
+    diagnostic_questions:
+      - "How often — once a day, or constantly?"
+      - "Which app, and does it happen in others?"
+      - "Are they on a shared device, or switching between agencies?"
+    known_causes:
+      - "Being signed out roughly once a day is the session expiring normally."
+      - >
+        Being signed out constantly, or in a loop, is a configuration problem in
+        that app rather than normal expiry.
+    related: ["sso-client:sso-login"]
+
+  - id: pending-actions
+    name: "Forced prompts after sign-in"
+    aliases: [asked to accept something, stuck on a prompt, can't get past a screen after login]
+    what_it_does: >
+      Makes a user complete something required centrally — accepting terms,
+      setting a password — before they can use the app.
+    state: live
+    entry_points: [src/Middleware/EnforceSsoSessionActions.php, src/Http/SsoActionController.php]
+    diagnostic_questions:
+      - "What does the prompt actually say?"
+      - "Does completing it let them through, or does it reappear?"
+    known_causes:
+      - "A prompt that reappears after completion is a real defect. A prompt that appears once is working as intended."
+
+  - id: company-timezone-sync
+    name: "Company timezone"
+    aliases: [wrong time, times are off, timezone wrong, hours out by one, wrong date on a record]
+    what_it_does: >
+      Copies the agency's timezone from the centre into each app, so times display
+      consistently everywhere.
+    state: live
+    entry_points: [src/SsoUserSynchronizer.php]
+    diagnostic_questions:
+      - "Is the time wrong in one app or in several?"
+      - "How far out — a whole number of hours, or something odd?"
+      - "Has the agency's timezone been set centrally?"
+    known_causes:
+      - >
+        Timezone is set ONCE centrally and pushed to every app. Apps must not have
+        their own timezone setting, so a request to add one is wrong by
+        construction.
+      - >
+        Times out by exactly one hour around a daylight-saving change are a
+        different class of problem from times out by several hours.
+    related: ["sso:company-preferences"]
+
+  - id: agency-status
+    name: "Cross-app agency status"
+    aliases: [is this agency set up, does this customer have this app, agency status]
+    what_it_does: >
+      A shared endpoint every app exposes so the centre can ask "what is the state
+      of this agency inside your app?" Used to build a single view of a customer
+      across all products.
+    state: live
+    entry_points: [src/Http/AgencyStatus/AgencyStatusController.php, src/Contracts/AgencyStatusProvider.php]
+    diagnostic_questions:
+      - "Is this a staff question about a customer's setup rather than a customer-reported fault?"
+    known_causes:
+      - >
+        An app reporting an agency as not present is a NORMAL answer, not an
+        error. It means that customer has no presence in that app.
+
+  - id: usage-metrics
+    name: "Usage reporting"
+    aliases: [usage numbers, activity reporting, our numbers look wrong, no activity showing]
+    what_it_does: >
+      Reports how much each agency is using each app, which feeds the internal
+      usage reporting staff look at.
+    state: live
+    entry_points: [src/Metrics/Metrics.php, src/Metrics/Middleware]
+    diagnostic_questions:
+      - "Is this a staff question about reporting, or a customer noticing something?"
+      - "Which app's numbers, and over what period?"
+    known_causes:
+      - >
+        Metrics are best-effort and deliberately never block a user's request, so
+        gaps are possible without anything being broken for the customer.
+    related: ["reporting:staff-admin-portal"]
+
+  - id: security-events
+    name: "Security event reporting"
+    aliases: [failed logins, lockout, suspicious activity, security alert]
+    what_it_does: >
+      Reports failed logins, lockouts and similar security signals from every app
+      back to the centre so staff can be alerted.
+    state: live
+    entry_points: [src/Metrics/Jobs]
+    diagnostic_questions:
+      - "Is a customer locked out, or is this staff investigating an alert?"
+    known_causes:
+      - "Recording is best-effort and never blocks a user, so it cannot itself lock anyone out."
+
+  - id: internal-api-auth
+    name: "App-to-app authentication"
+    aliases: [apps not talking, integration broken, data not flowing between apps]
+    what_it_does: >
+      Authenticates the calls apps make to each other, using a shared key.
+    state: live
+    entry_points: [src/Middleware/ValidateCoreApiKey.php, src/Middleware/SsoApiAuthenticate.php]
+    diagnostic_questions:
+      - "Which two apps, and in which direction?"
+      - "Did it ever work, or is this a new connection?"
+      - "One agency or all of them? All of them points here."
+    known_causes:
+      - >
+        A whole integration failing for every agency at once points at the shared
+        key or the connection between apps, not at anything the customer did.
+    related: ["flow:chart-to-claim"]

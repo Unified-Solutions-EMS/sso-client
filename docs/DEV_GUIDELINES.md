@@ -162,11 +162,11 @@ Treat this test as load-bearing: never delete or weaken it; if it fails, fix the
 
 ## 7a. ePCR form parity (web ↔ mobile)
 
-This rule is about the **ePCR form specifically** — not other CloudPCR forms (settings, admin, etc.). The ePCR form lives in two places: the web app (`/Sites/cloudpcr`) and the Unified Mobile app (`/Sites/Unified-Mobile`). They are deliberately kept consistent but **not** auto-synced — some changes are genuinely platform-specific.
+This rule is about the **ePCR form specifically** — not other CloudPCR forms (settings, admin, etc.). The ePCR form lives in two places: the web app (`/Sites/cloudpcr`) and the Unified Mobile app (`/Sites/Unified-Mobile`). Parity between them is permanent policy (rule updated 2026-08-25; the old ask-first rule is gone).
 
-- Whenever you change an **ePCR form** field, layout, validation rule, or option set in one of these apps, **ask the user whether the same change should be applied to the other form** before considering the task done.
-- Do **not** apply the change to the other app automatically. The user decides per change.
-- This applies in both directions (web → mobile and mobile → web).
+- Whenever you change an **ePCR form** field, layout, validation rule, or option set in one of these apps, **apply the same change to the other app in the same task — no need to ask.** A task is not done until both apps have the change (both PRs open). This applies in both directions (web → mobile and mobile → web).
+- Platform mechanics may differ (Blade/Alpine vs React, offline save queue), but the user-facing behavior must match.
+- **Release cadence differs.** Web ships on merge as usual. Mobile app **builds/store releases are batched to one per week, cut Friday at end of week** — every store update restarts the app-review process, so shipping daily would keep resetting approval. Merge mobile PRs as they become ready; the Friday build picks up everything merged that week. Any backend/web change a mobile change depends on must be deployed before that Friday build ships.
 
 ---
 
@@ -355,7 +355,7 @@ Task tracking lives in **Linear**, team `Unified-solutions` (issue prefix `UNI-`
 - **Regression rule:** a Done/Canceled Linear issue is reopened only on evidence — Sentry events with timestamps NEWER than the fix's completion/deploy date. Older events are pre-fix noise.
 - **Never delete Linear issues** (move to Canceled); never rewrite another author's issue description — add comments.
 - **Demo-tenant noise:** internal demo/test tenants (§19) must not inflate an error's priority — check whose data the events belong to before escalating.
-- **PR contents:** detailed body (what changed, why, risk, test evidence), Linear issue link, and any item on the human-approval list (prod data, deploys, dependency changes, test deletions, ePCR parity mirroring) FLAGGED in the description rather than acted on.
+- **PR contents:** detailed body (what changed, why, risk, test evidence), Linear issue link, and any item on the human-approval list (prod data, deploys, dependency changes, test deletions, mobile store releases — weekly Friday batch, §7a) FLAGGED in the description rather than acted on.
 - After user-visible work: offer a changelog entry (§17). If the change alters behavior documented in the wiki, update the wiki article data + reseed (§18) or flag it in the PR.
 
 ---
@@ -373,6 +373,6 @@ A change is done when every line below holds. This is the review bar for agent- 
 - [ ] Eloquent over `DB::`, eager-loaded, Form Requests for validation, no `env()` outside config (§10)
 - [ ] No secrets in code or docs; no commented-out code; no unrequested markdown files (§13)
 - [ ] Detailed multi-line commit message (§15); pushed; PR opened with the Linear issue linked
-- [ ] Anything on the human-approval list flagged, not acted on (deploys, prod data, dependency/deploy-requirement changes, deleting or weakening tests, force pushes, ePCR web↔mobile mirroring)
+- [ ] Anything on the human-approval list flagged, not acted on (deploys, prod data, dependency/deploy-requirement changes, deleting or weakening tests, force pushes, mobile store releases); ePCR changes mirrored web↔mobile in the same task (§7a)
 - [ ] Convention changed or found wrong? This file / repo `CLAUDE.md` updated in the same PR (§14)
 - [ ] Changelog offered for user-visible changes (§17); wiki impact checked (§18)

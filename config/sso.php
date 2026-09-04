@@ -107,6 +107,22 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Callback Loop Breaker
+    |--------------------------------------------------------------------------
+    |
+    | A failing SSO callback normally redirects to the login route, which
+    | re-enters the SSO flow, which succeeds instantly against the user's live
+    | SSO session and lands back on the failing callback. Any deterministic
+    | failure therefore loops forever (UNI-416). After this many consecutive
+    | failures inside the window, the callback renders the sso::sign-in-failed
+    | view with a 500 instead of redirecting.
+    |
+    */
+    'callback_failure_threshold' => env('SSO_CALLBACK_FAILURE_THRESHOLD', 3),
+    'callback_failure_window_seconds' => env('SSO_CALLBACK_FAILURE_WINDOW', 120),
+
+    /*
+    |--------------------------------------------------------------------------
     | Routes
     |--------------------------------------------------------------------------
     |

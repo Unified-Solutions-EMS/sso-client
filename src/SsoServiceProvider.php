@@ -62,6 +62,12 @@ class SsoServiceProvider extends ServiceProvider
 
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
 
+        $this->loadViewsFrom(__DIR__.'/../resources/views', 'sso');
+
+        $this->publishes([
+            __DIR__.'/../resources/views' => resource_path('views/vendor/sso'),
+        ], 'sso-views');
+
         $this->loadRoutesFrom(__DIR__.'/../routes/sso.php');
 
         $router = $this->app->make('router');

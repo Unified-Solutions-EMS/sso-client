@@ -24,6 +24,10 @@ class SsoSessionState
 
     public const KEY_TOKEN_LAST_VALIDATED_AT = 'sso_token_last_validated_at';
 
+    public const KEY_CALLBACK_FAILURES = 'sso_callback_failures';
+
+    public const KEY_CALLBACK_FAILED_AT = 'sso_callback_failed_at';
+
     public function storeTokens(string $accessToken, ?string $refreshToken, int $expiresIn): void
     {
         Session::put(self::KEY_ACCESS_TOKEN, $accessToken);
@@ -127,6 +131,31 @@ class SsoSessionState
         }
 
         return now()->timestamp >= ($lastValidated + $intervalSeconds);
+    }
+
+    /**
+     * Count one failed trip through the SSO callback and return the running
+     * total. Failures older than the window start a fresh count, so an
+     * occasional hiccup never accumulates into a tripped breaker.
+     */
+    public function recordCallbackFailure(?int $windowSeconds = null): int
+    {
+        $windowSeconds ??= (int) config('sso.callback_failure_window_seconds', 120);
+
+        $lastFailedAt = (int) Session::get(self::KEY_CALLBACK_FAILED_AT, 0);
+        $withinWindow = $lastFailedAt > 0 && (now()->timestamp - $lastFailedAt) <= $windowSeconds;
+
+        $failures = ($withinWindow ? (int) Session::get(self::KEY_CALLBACK_FAILURES, 0) : 0) + 1;
+
+        Session::put(self::KEY_CALLBACK_FAILURES, $failures);
+        Session::put(self::KEY_CALLBACK_FAILED_AT, now()->timestamp);
+
+        return $failures;
+    }
+
+    public function clearCallbackFailures(): void
+    {
+        Session::forget([self::KEY_CALLBACK_FAILURES, self::KEY_CALLBACK_FAILED_AT]);
     }
 
     public function forget(): void

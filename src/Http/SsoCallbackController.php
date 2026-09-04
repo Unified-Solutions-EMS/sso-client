@@ -48,7 +48,11 @@ class SsoCallbackController extends Controller
                 'received' => $request->query('state') ? substr($request->query('state'), 0, 8).'...' : 'null',
             ]);
 
-            return redirect()->route('login')->with('error', 'SSO authentication failed. Please try again.');
+            // A state mismatch loops exactly like a sync failure does when the
+            // session cannot hold the state it just wrote: login redirects out,
+            // SSO answers immediately from its own live session, and the state
+            // is gone again on the way back.
+            return $this->failCallback('Sign in failed. Please try again.');
         }
 
         $code = $request->query('code');
@@ -59,7 +63,7 @@ class SsoCallbackController extends Controller
                 'error_description' => $request->query('error_description'),
             ]);
 
-            return redirect()->route('login')->with('error', 'SSO authentication was cancelled or failed.');
+            return $this->failCallback('Sign in was cancelled or failed.');
         }
 
         try {
@@ -75,7 +79,7 @@ class SsoCallbackController extends Controller
             if (! $user) {
                 Log::error('SSO callback: synchronizer returned no user');
 
-                return redirect()->route('login')->with('error', 'Failed to sync your account. Please contact support.');
+                return $this->failCallback('We could not finish setting up your account. Please contact support.');
             }
 
             // Capture the post-login redirect target BEFORE any session reset
@@ -104,6 +108,10 @@ class SsoCallbackController extends Controller
 
             // Log in locally
             Auth::login($user, true);
+
+            // The trip completed: forget any earlier failures so a later
+            // unrelated hiccup starts from zero.
+            $this->sessionState->clearCallbackFailures();
 
             // Store tokens AFTER the session reset — storing before would put
             // them in the about-to-be-invalidated session, leaving the freshly
@@ -134,8 +142,50 @@ class SsoCallbackController extends Controller
                 'trace' => $e->getTraceAsString(),
             ]);
 
-            return redirect()->route('login')->with('error', 'SSO authentication failed. Please try again.');
+            return $this->failCallback('Sign in failed. Please try again.', $e);
         }
+    }
+
+    /**
+     * End a failed callback without setting up an invisible redirect loop.
+     *
+     * Bouncing to the login route re-enters the SSO flow, and SSO answers
+     * instantly from its own still-valid session, so any failure that repeats
+     * deterministically (UNI-416: a company link collision thrown inside the
+     * sync transaction) becomes ERR_TOO_MANY_REDIRECTS with nothing in Sentry
+     * and only the app log to show for it.
+     *
+     * So: report the exception, count consecutive failures, and once the
+     * counter trips render a real error page instead of redirecting. The
+     * counter clears on the next success and ages out of its own window.
+     *
+     * Edge case worth naming: if the session store itself is what is broken,
+     * the counter cannot persist either and the breaker never trips. That is
+     * accepted. The counter is a loop breaker, not a session repair — the
+     * state-mismatch branch above is the signal for that failure mode.
+     */
+    protected function failCallback(string $userMessage, ?\Throwable $e = null)
+    {
+        if ($e !== null) {
+            // Hand the exception to the app's handler so Sentry sees it. The
+            // old code only wrote to the log, which is why the loop went
+            // unnoticed for as long as it did.
+            report($e);
+        }
+
+        $failures = $this->sessionState->recordCallbackFailure();
+        $threshold = (int) config('sso.callback_failure_threshold', 3);
+
+        if ($failures < $threshold) {
+            return redirect()->route('login')->with('error', $userMessage);
+        }
+
+        Log::error('SSO callback: consecutive failures tripped the loop breaker', [
+            'failures' => $failures,
+            'threshold' => $threshold,
+        ]);
+
+        return response()->view('sso::sign-in-failed', ['message' => $userMessage], 500);
     }
 
     /**

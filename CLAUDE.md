@@ -17,10 +17,24 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
 - **OAuth2 login flow** — `SsoClient` (authorize URL + PKCE, code exchange, refresh, `/api/user`
   fetch, logout URL) driving `SsoCallbackController` on `/auth/sso/{redirect,callback,logout}`.
   `EnsureSsoSessionIsFresh` (`sso.session`) and `SsoApiAuthenticate` (`sso.api`) middleware.
+  **Callback failures never redirect forever.** Redirecting a failed callback to the login route
+  re-enters the SSO flow, SSO answers instantly from its own live session, and any deterministic
+  failure loops until the browser gives up (UNI-416). Every failure exit runs through
+  `failCallback()`: it `report()`s the exception so Sentry sees it, counts consecutive failures in
+  the session inside a rolling window (`sso.callback_failure_window_seconds`, 120s), and at
+  `sso.callback_failure_threshold` (3) renders the `sso::sign-in-failed` view with a 500 instead of
+  redirecting. A success clears the counter. If the session store itself is broken the counter can't
+  persist and the breaker can't trip — accepted, and documented in the method.
 - **`SsoUserSynchronizer`** — the heart of the package. Idempotently upserts the user, resolves/creates
   local companies (match order: `sso_company_id` → `core_tenant_id` → name), attaches memberships,
   syncs per-company roles into `company_user_roles`, syncs staff roles into `users.staff_roles`, and
   syncs enabled modules. Apps override by binding `SsoUserSynchronizerContract`.
+  **Link-key collisions never break login.** Before stamping `sso_company_id` or `core_tenant_id`
+  onto the matched row it checks whether a different local row already holds that value; if one does
+  the stamp is skipped and a `CompanyLinkCollisionException` is logged and `report()`ed for a human
+  to merge. An app provisioned before SSO linked the agency's legacy tenant id ends up with exactly
+  this shape, and the unique-key violation used to escape the login transaction (UNI-416). Rows are
+  never merged automatically.
 - **Webhook / provisioning endpoint** — `POST /api/sso/provision` (`SsoWebhookController`), HMAC-verified
   in the controller, no CSRF/auth middleware. Handles `user.created/updated/deleted`,
   `company.updated/activated`, `user.role.changed`, `user.app_role.changed`, `user.staff_role.changed`,
@@ -53,6 +67,15 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   (`config('sso.action_handlers')` map to `SsoActionHandler`), both HMAC-verified.
 - **Session actions** — `EnforceSsoSessionActions` is auto-appended to the `web` group in every app,
   so impersonation/forced-logout land on the next request without per-app wiring.
+- **Legacy cookie scrub** — `Middleware\PurgeLegacyApexCookies` (`sso.purge-legacy-cookies`), also
+  auto-appended to the `web` group. The legacy ASP.NET app set several cookies on `.unified-apps.com`,
+  so browsers still send them to every app on the platform; its own logout only wrote host-only
+  deletions that never matched the parent-domain copies. When a request carries a name from
+  `config('sso.legacy_cookies.names')` the middleware expires it in both the host-only and
+  parent-domain form. Clean requests are a no-op. Every listed name is one Unified.Base provably sets
+  (evidence is in the config comment). The middleware hard-refuses `XSRF-TOKEN`, `config('session.cookie')`,
+  anything ending `_session`, and anything starting `remember_web` regardless of the config list —
+  scrubbing those would sign every user out on every request. Empty list disables it.
 - **Roster reconcile** — `sso:sync-users` command, scheduled hourly from the provider via
   `config('sso.roster_sync')`, `withoutOverlapping()`. Pulls each locally-known company's full roster
   from SSO and runs every member through `SsoUserSynchronizer`, so apps see users who never logged in.

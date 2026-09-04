@@ -107,6 +107,61 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Legacy Cookie Scrub
+    |--------------------------------------------------------------------------
+    |
+    | Cookies the legacy ASP.NET application set, several of them on the parent
+    | domain, which browsers keep sending to every Laravel app on the platform
+    | long after the customer moved off it. PurgeLegacyApexCookies expires each
+    | listed name in both its host-only and parent-domain form whenever the
+    | request still carries it.
+    |
+    | Every name below is one the legacy app provably SET (Unified.Base):
+    |
+    |   .AspNetCore.Identity.Application  Web.Mvc/Startup/Startup.cs:121-131,
+    |                                     the only cookie given an explicit
+    |                                     Domain of ".{App:Domain}"
+    |   Abp.TenantId                      Web.Core/Controllers/CloudPCRControllerBase.cs:23,
+    |                                     and client side with abp.domain from
+    |                                     Areas/App/Views/Layout/_Layout.cshtml:109
+    |   userInfo                          Common/Modals/_InactivityControllerNotifyModal.js:65,
+    |                                     written with abp.domain
+    |   utmSource / utmMedium /           Views/Account/Login.cshtml:39-53, written
+    |   utmCampaign / utmTerm /           with abp.domain for any utm_* query param
+    |   utmContent
+    |   v4-sso-attempts                   Web.Mvc/Startup/AuthConfigurer.cs:34,89
+    |   UserLastActivity                  Common/Scripts/InactivityController.js:31,65
+    |   cookieconsent_status              Common/Scripts/cookieConsent.js
+    |   Public-XSRF-TOKEN                 Web.Public/Startup/CloudPCRWebFrontEndModule.cs:30
+    |
+    | Deliberately NOT listed: XSRF-TOKEN (the legacy app sets it host-only, but
+    | it is also every Laravel app's own CSRF cookie), anything ending in
+    | _session, Abp.AuthToken (the only write is commented out), enc_auth_token
+    | (a query parameter, never a cookie), and the framework cookies whose names
+    | carry a generated hash. The middleware refuses the first two categories
+    | outright regardless of what this list says.
+    |
+    */
+    'legacy_cookies' => [
+        'apex_domain' => env('SSO_LEGACY_COOKIE_DOMAIN', '.unified-apps.com'),
+        'names' => [
+            '.AspNetCore.Identity.Application',
+            'Abp.TenantId',
+            'userInfo',
+            'v4-sso-attempts',
+            'UserLastActivity',
+            'cookieconsent_status',
+            'Public-XSRF-TOKEN',
+            'utmSource',
+            'utmMedium',
+            'utmCampaign',
+            'utmTerm',
+            'utmContent',
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Callback Loop Breaker
     |--------------------------------------------------------------------------
     |

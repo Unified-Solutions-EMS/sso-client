@@ -62,21 +62,33 @@ class SsoServiceProvider extends ServiceProvider
 
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
 
+        $this->loadViewsFrom(__DIR__.'/../resources/views', 'sso');
+
+        $this->publishes([
+            __DIR__.'/../resources/views' => resource_path('views/vendor/sso'),
+        ], 'sso-views');
+
         $this->loadRoutesFrom(__DIR__.'/../routes/sso.php');
 
         $router = $this->app->make('router');
         $router->aliasMiddleware('sso.session', Middleware\EnsureSsoSessionIsFresh::class);
         $router->aliasMiddleware('sso.api', Middleware\SsoApiAuthenticate::class);
         $router->aliasMiddleware('sso.session-actions', Middleware\EnforceSsoSessionActions::class);
+        $router->aliasMiddleware('sso.purge-legacy-cookies', Middleware\PurgeLegacyApexCookies::class);
         $router->aliasMiddleware('metrics.session', Metrics\Middleware\TrackSessionMetric::class);
 
         // Auto-register the session-actions middleware in the `web` group
         // so every authenticated route in every consuming app picks up
         // pending impersonation / logout actions on the next request
         // without each app having to wire it manually.
+        //
+        // Same treatment for the legacy cookie scrub: the parent-domain
+        // cookies the old ASP.NET app left behind are sent to every app on
+        // the platform, so every app has to be the one that clears them.
         $kernel = $this->app->make(HttpKernel::class);
         if (method_exists($kernel, 'appendMiddlewareToGroup')) {
             $kernel->appendMiddlewareToGroup('web', Middleware\EnforceSsoSessionActions::class);
+            $kernel->appendMiddlewareToGroup('web', Middleware\PurgeLegacyApexCookies::class);
         }
     }
 }

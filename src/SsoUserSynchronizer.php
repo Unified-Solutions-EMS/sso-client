@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Unified\SsoClient\Concerns\PrunesStaleCompanyMemberships;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
+use Unified\SsoClient\Exceptions\CompanyLinkCollisionException;
 
 class SsoUserSynchronizer implements SsoUserSynchronizerContract
 {
@@ -254,10 +255,18 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
 
             if ($company) {
                 $updates = [];
-                if ($ssoCompanyId && ($company->sso_company_id ?? null) != $ssoCompanyId) {
+                if (
+                    $ssoCompanyId
+                    && ($company->sso_company_id ?? null) != $ssoCompanyId
+                    && $this->linkValueIsClaimable($companyModel, $company, 'sso_company_id', $ssoCompanyId, $ssoCompanyId)
+                ) {
                     $updates['sso_company_id'] = $ssoCompanyId;
                 }
-                if ($legacyTenantId && ! $company->core_tenant_id) {
+                if (
+                    $legacyTenantId
+                    && ! $company->core_tenant_id
+                    && $this->linkValueIsClaimable($companyModel, $company, 'core_tenant_id', $legacyTenantId, $ssoCompanyId)
+                ) {
                     $updates['core_tenant_id'] = $legacyTenantId;
                 }
                 if ($syncsTimezone && $timezone && ($company->timezone ?? null) !== $timezone) {
@@ -291,6 +300,59 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
         }
 
         return $resolved;
+    }
+
+    /**
+     * Decide whether the matched company row may take a unique link value
+     * (`sso_company_id` / `core_tenant_id`) without colliding with another row.
+     *
+     * An app provisioned before SSO linked the agency's legacy tenant id ends
+     * up with two local rows: the one SSO matches by `sso_company_id`, and an
+     * older unlinked row that already owns the legacy tenant id. Stamping the
+     * legacy id onto the matched row then violates the unique key, the
+     * exception escapes the login transaction, and the SSO callback's catch-all
+     * bounces the browser straight back into the SSO flow — an invisible
+     * infinite redirect (Pelican Ambulance, UNI-416).
+     *
+     * Login wins. The stamp is skipped, both rows are left exactly as they are,
+     * and the conflict is logged and reported so a human can merge them.
+     * Merging rows automatically is far too destructive for a login path.
+     */
+    protected function linkValueIsClaimable(
+        string $companyModel,
+        $company,
+        string $column,
+        int|string $value,
+        int|string|null $ssoCompanyId,
+    ): bool {
+        // Authoritative-sync context (DEV_GUIDELINES §4a): the value comes from
+        // the verified SSO payload and the query is pinned to that one unique
+        // value, so dropping tenant scopes cannot widen the result set.
+        $conflicting = $companyModel::withoutGlobalScopes()
+            ->where($column, $value)
+            ->first();
+
+        if (! $conflicting || (string) $conflicting->getKey() === (string) $company->getKey()) {
+            return true;
+        }
+
+        $collision = CompanyLinkCollisionException::forColumn(
+            $column,
+            $value,
+            $company->getKey(),
+            $conflicting->getKey(),
+            $ssoCompanyId,
+        );
+
+        Log::warning('SSO sync: company link collision, stamp skipped', $collision->context() + [
+            'conflicting_row_is_linked_to_sso' => ($conflicting->sso_company_id ?? null) !== null,
+        ]);
+
+        // report() hands this to the host app's exception handler (Sentry in
+        // every deployed app) without interrupting the login.
+        report($collision);
+
+        return false;
     }
 
     /**

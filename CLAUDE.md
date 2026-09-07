@@ -17,6 +17,15 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
 - **OAuth2 login flow** — `SsoClient` (authorize URL + PKCE, code exchange, refresh, `/api/user`
   fetch, logout URL) driving `SsoCallbackController` on `/auth/sso/{redirect,callback,logout}`.
   `EnsureSsoSessionIsFresh` (`sso.session`) and `SsoApiAuthenticate` (`sso.api`) middleware.
+  **The callback URL is single-use.** `consumeOAuthState()` pulls the OAuth state and the PKCE
+  verifier together at the top of `callback()`, so the pair authorizes exactly one trip. They used
+  to be plain reads, and the success path only calls `session()->regenerate()`, which keeps every
+  attribute — so a browser re-navigating to a callback URL it had already used (iOS Safari tab
+  restore, back button, reload) matched the stale state and went on to re-redeem a code SSO had
+  already spent, drawing a 400 `invalid_grant` (UNI-438). A replay now stops at the state check and
+  redirects to login, which SSO answers from its own live session, so the user never sees it. Token
+  exchange and refresh failures name the OAuth `error` and `hint` in the exception message rather
+  than only the status code — four different causes all surface as "HTTP 400" otherwise.
   **Callback failures never redirect forever.** Redirecting a failed callback to the login route
   re-enters the SSO flow, SSO answers instantly from its own live session, and any deterministic
   failure loops until the browser gives up (UNI-416). Every failure exit runs through

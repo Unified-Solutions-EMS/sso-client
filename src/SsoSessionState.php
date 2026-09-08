@@ -96,6 +96,26 @@ class SsoSessionState
         return Session::get(self::KEY_CODE_VERIFIER);
     }
 
+    /**
+     * Read the pending OAuth state and PKCE verifier, clearing both in the
+     * same step.
+     *
+     * The pair authorizes exactly one trip through the callback: the state
+     * authenticates that one redirect back from SSO, and the verifier unlocks
+     * the single authorization code that redirect carried. Leaving them in the
+     * session after the trip is what let a replayed callback URL pass the state
+     * check and go on to re-redeem a spent code (UNI-438).
+     *
+     * @return array{state: ?string, code_verifier: ?string}
+     */
+    public function consumeOAuthState(): array
+    {
+        return [
+            'state' => Session::pull(self::KEY_OAUTH_STATE),
+            'code_verifier' => Session::pull(self::KEY_CODE_VERIFIER),
+        ];
+    }
+
     public function storeIntendedUrl(string $url): void
     {
         Session::put(self::KEY_INTENDED_URL, $url);

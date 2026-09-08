@@ -2,6 +2,7 @@
 
 namespace Unified\SsoClient;
 
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -63,7 +64,7 @@ class SsoClient
                 'status' => $response->status(),
                 'body' => substr($response->body(), 0, 500),
             ]);
-            throw SsoClientException::tokenExchangeFailed("HTTP {$response->status()}");
+            throw SsoClientException::tokenExchangeFailed($this->describeOAuthFailure($response));
         }
 
         $data = $response->json();
@@ -74,6 +75,32 @@ class SsoClient
             'expires_in' => $data['expires_in'] ?? 3600,
             'token_type' => $data['token_type'] ?? 'Bearer',
         ];
+    }
+
+    /**
+     * Summarize an OAuth error response for the exception message.
+     *
+     * "HTTP 400" on its own says nothing: an expired code, a spent code, a bad
+     * verifier and a wrong client secret are all 400s, and telling them apart
+     * from Sentry alone used to mean measuring the response body's length
+     * (UNI-438). The OAuth error identifier and hint are the two fields that
+     * name the cause, and neither carries a token or a secret.
+     */
+    protected function describeOAuthFailure(Response $response): string
+    {
+        $reason = "HTTP {$response->status()}";
+
+        $error = $response->json('error');
+
+        if (! is_string($error) || $error === '') {
+            return $reason;
+        }
+
+        $hint = $response->json('hint');
+
+        return is_string($hint) && $hint !== ''
+            ? "{$reason} {$error}: {$hint}"
+            : "{$reason} {$error}";
     }
 
     /**
@@ -101,7 +128,7 @@ class SsoClient
             Log::warning('SSO token refresh failed', [
                 'status' => $response->status(),
             ]);
-            throw SsoClientException::tokenRefreshFailed("HTTP {$response->status()}");
+            throw SsoClientException::tokenRefreshFailed($this->describeOAuthFailure($response));
         }
 
         $data = $response->json();

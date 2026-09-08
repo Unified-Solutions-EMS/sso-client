@@ -39,8 +39,13 @@ class SsoCallbackController extends Controller
      */
     public function callback(Request $request)
     {
-        // Verify state to prevent CSRF
-        $expectedState = $this->sessionState->getOAuthState();
+        // Verify state to prevent CSRF. Consuming the state (and the verifier
+        // that travels with it) is what makes this callback URL single-use: a
+        // browser that re-navigates to it — an iOS Safari tab restore, a back
+        // button, a reload — finds nothing to match against and starts a fresh
+        // login instead of re-redeeming an authorization code SSO has already
+        // spent and revoked (UNI-438).
+        ['state' => $expectedState, 'code_verifier' => $codeVerifier] = $this->sessionState->consumeOAuthState();
 
         if (! $expectedState || $request->query('state') !== $expectedState) {
             Log::warning('SSO callback: state mismatch', [
@@ -68,7 +73,7 @@ class SsoCallbackController extends Controller
 
         try {
             // Exchange code for tokens
-            $tokens = $this->ssoClient->exchangeCode($code, $this->sessionState->getCodeVerifier());
+            $tokens = $this->ssoClient->exchangeCode($code, (string) $codeVerifier);
 
             // Fetch user profile from SSO
             $payload = $this->ssoClient->fetchUser($tokens['access_token']);

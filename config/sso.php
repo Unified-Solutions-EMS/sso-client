@@ -12,7 +12,7 @@ return [
     | The base URL of the SSO application (e.g., https://sso.unified-apps.com).
     |
     */
-    'base_url' => env('SSO_BASE_URL', 'https://sso.test'),
+    'base_url' => env('SSO_BASE_URL', 'https://sso.unified-apps.com'),
 
     /*
     |--------------------------------------------------------------------------

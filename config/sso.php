@@ -178,6 +178,34 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Concurrency Coordination
+    |--------------------------------------------------------------------------
+    |
+    | An OAuth authorization code and a Passport refresh token may each be
+    | spent exactly once, and the session cannot enforce that: overlapping
+    | requests all read the session as it was before any of them wrote, so they
+    | all believe they hold an unspent credential. SsoSingleFlight settles it in
+    | the cache instead, where a conditional write is atomic across every app
+    | instance.
+    |
+    | Leave the store null to use the app's default cache. Point it at a named
+    | store only if that default is per-instance (array, file) — those cannot
+    | coordinate anything, and the package will simply fall back to the old
+    | behaviour rather than block a login.
+    |
+    | state_claim_ttl_seconds outlives the authorization code it guards.
+    | refresh_share_ttl_seconds only has to outlive the burst of requests that
+    | were in flight when the access token aged out.
+    |
+    */
+    'coordination_store' => env('SSO_COORDINATION_STORE'),
+    'state_claim_ttl_seconds' => env('SSO_STATE_CLAIM_TTL', 600),
+    'refresh_share_ttl_seconds' => env('SSO_REFRESH_SHARE_TTL', 60),
+    'refresh_lock_seconds' => env('SSO_REFRESH_LOCK_SECONDS', 20),
+    'refresh_lock_wait_seconds' => env('SSO_REFRESH_LOCK_WAIT', 8),
+
+    /*
+    |--------------------------------------------------------------------------
     | Routes
     |--------------------------------------------------------------------------
     |

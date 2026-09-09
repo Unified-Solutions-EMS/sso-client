@@ -6,6 +6,7 @@ use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Testing\TestResponse;
 use Mockery;
 use RuntimeException;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
@@ -62,26 +63,37 @@ class SsoCallbackCircuitBreakerTest extends TestCase
     {
         $this->bindFailingExchange();
 
-        $session = [
-            SsoSessionState::KEY_OAUTH_STATE => 'state-abc',
-            SsoSessionState::KEY_CODE_VERIFIER => 'verifier-xyz',
-        ];
+        // A fresh state per attempt, because that is what the loop really
+        // looks like: the failure redirects to login, /auth/sso/redirect mints
+        // a new state and PKCE verifier, and SSO answers the authorize request
+        // instantly from its own live session. Reusing one state would instead
+        // exercise the duplicate-callback stand-down (UNI-438), which is a
+        // different branch and deliberately does not count as a failure.
+        $session = [];
 
-        $first = $this->withSession($session)->get('/auth/sso/callback?state=state-abc&code=auth-code');
+        $first = $this->attemptWithFreshState($session, 'state-one');
         $first->assertRedirect('/login');
         $first->assertSessionHas(SsoSessionState::KEY_CALLBACK_FAILURES, 1);
         $session = array_merge($session, $first->getSession()->all());
 
-        $second = $this->withSession($session)->get('/auth/sso/callback?state=state-abc&code=auth-code');
+        $second = $this->attemptWithFreshState($session, 'state-two');
         $second->assertRedirect('/login');
         $second->assertSessionHas(SsoSessionState::KEY_CALLBACK_FAILURES, 2);
         $session = array_merge($session, $second->getSession()->all());
 
-        $third = $this->withSession($session)->get('/auth/sso/callback?state=state-abc&code=auth-code');
+        $third = $this->attemptWithFreshState($session, 'state-three');
 
         $third->assertStatus(500);
         $third->assertSee('We could not sign you in');
         $this->assertNull($third->headers->get('Location'), 'The loop must stop, not redirect again.');
+    }
+
+    private function attemptWithFreshState(array $session, string $state): TestResponse
+    {
+        return $this->withSession(array_merge($session, [
+            SsoSessionState::KEY_OAUTH_STATE => $state,
+            SsoSessionState::KEY_CODE_VERIFIER => 'verifier-'.$state,
+        ]))->get('/auth/sso/callback?state='.$state.'&code=auth-code');
     }
 
     public function test_the_state_mismatch_branch_carries_the_same_breaker(): void

@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Log;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
 use Unified\SsoClient\SsoClient;
 use Unified\SsoClient\SsoSessionState;
+use Unified\SsoClient\SsoSingleFlight;
 
 class SsoCallbackController extends Controller
 {
@@ -16,6 +17,7 @@ class SsoCallbackController extends Controller
         protected SsoClient $ssoClient,
         protected SsoSessionState $sessionState,
         protected SsoUserSynchronizerContract $synchronizer,
+        protected SsoSingleFlight $singleFlight,
     ) {}
 
     /**
@@ -58,6 +60,25 @@ class SsoCallbackController extends Controller
             // SSO answers immediately from its own live session, and the state
             // is gone again on the way back.
             return $this->failCallback('Sign in failed. Please try again.');
+        }
+
+        // Consuming the state stops a SEQUENTIAL replay, and only that. Two
+        // callbacks that overlap both read the session before either one's
+        // write lands, so both find the state intact and both go on to redeem
+        // the same authorization code — the winner gets tokens, the loser gets
+        // 400 invalid_grant, and prod showed exactly that shape: a successful
+        // token issued one to three seconds before every logged failure
+        // (UNI-438, reopened). The claim below is a single conditional write in
+        // the shared cache, so it settles the race no matter which instance
+        // each request landed on.
+        if (! $this->singleFlight->claimOAuthState($expectedState)) {
+            Log::info('SSO callback: a concurrent request is already redeeming this state, standing down');
+
+            // Not a fault. A duplicate callback is ordinary browser behaviour,
+            // so this exits without reporting an exception and without counting
+            // toward the loop breaker. Login is the safe landing: SSO answers it
+            // from its own live session, so the user still ends up inside.
+            return redirect()->route('login');
         }
 
         $code = $request->query('code');

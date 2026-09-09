@@ -49,6 +49,15 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   `company.updated/activated`, `user.role.changed`, `user.app_role.changed`, `user.staff_role.changed`,
   `impersonation.started/ended`, `user.logged_out`, `trial.seed_data`, `trial.purge_data`,
   `cad.migrate_data`. Unknown events ack rather than 500.
+  **`trial.purge_data` is verified before it destroys anything.** The handler asks SSO's
+  authoritative `GET /api/internal/companies/trials` (CORE_APP_API_KEY) whether the company is a
+  current trial or in the response's `purge_pending` id list (the conversion flow flips
+  `companies.status` to active before the queued purge webhook is delivered, so the trials list
+  alone would reject every legitimate convert-and-erase purge). `TrialPurgeVerifier` fails closed:
+  missing config, SSO unreachable, an error response, or a company on neither list skips the purge,
+  logs a warning, and records a `trial.purge_blocked` security event — a malformed, replayed, or
+  mistargeted delivery can no longer wipe a live customer. Against an SSO that predates
+  `purge_pending`, conversion purges are skipped (data retained) until SSO ships the intent marker.
 - **Agency-status route** — `GET /api/internal/agency-status/{ssoCompanyId}` behind `ValidateCoreApiKey`,
   registered by the package so apps never add the route. Apps implement `Contracts\AgencyStatusProvider`
   and bind it. See DEV_GUIDELINES §2a for the response contract and the HIPAA redaction boundary

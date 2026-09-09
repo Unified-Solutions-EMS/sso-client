@@ -12,6 +12,8 @@ use Illuminate\Support\Str;
 use Unified\SsoClient\Concerns\PrunesStaleCompanyMemberships;
 use Unified\SsoClient\Http\Concerns\VerifiesSsoWebhookSignature;
 use Unified\SsoClient\Models\SsoSessionAction;
+use Unified\SsoClient\Security\SecurityEvents;
+use Unified\SsoClient\TrialPurgeVerifier;
 
 class SsoWebhookController extends Controller
 {
@@ -396,7 +398,8 @@ class SsoWebhookController extends Controller
     protected function handleTrialPurgeData(Request $request): array
     {
         $companyData = $request->input('company', []);
-        $company = $this->findCompanyBySsoId($companyData['id'] ?? null, null);
+        $ssoCompanyId = $companyData['id'] ?? null;
+        $company = $this->findCompanyBySsoId($ssoCompanyId, null);
 
         if (! $company) {
             return ['status' => 'ok', 'action' => 'trial.purge_data', 'reason' => 'company_not_found'];
@@ -408,6 +411,24 @@ class SsoWebhookController extends Controller
             Log::info('SSO webhook: no TrialDataPurger found, skipping trial.purge_data');
 
             return ['status' => 'ok', 'action' => 'trial.purge_data', 'skipped' => true];
+        }
+
+        $verification = app(TrialPurgeVerifier::class)->verify($ssoCompanyId);
+
+        if ($verification !== TrialPurgeVerifier::PURGEABLE) {
+            Log::warning('SSO webhook: trial.purge_data blocked, SSO did not confirm the company as purgeable', [
+                'sso_company_id' => $ssoCompanyId,
+                'local_company_id' => $company->getKey(),
+                'reason' => $verification,
+            ]);
+
+            app(SecurityEvents::class)->warning('trial.purge_blocked', [
+                'sso_company_id' => (string) $ssoCompanyId,
+                'local_company_id' => $company->getKey(),
+                'reason' => $verification,
+            ]);
+
+            return ['status' => 'ok', 'action' => 'trial.purge_data', 'skipped' => true, 'reason' => $verification];
         }
 
         $jobClass = 'App\\Jobs\\RunTrialPurger';

@@ -26,6 +26,29 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   redirects to login, which SSO answers from its own live session, so the user never sees it. Token
   exchange and refresh failures name the OAuth `error` and `hint` in the exception message rather
   than only the status code — four different causes all surface as "HTTP 400" otherwise.
+  **Consuming the state only stops a SEQUENTIAL replay.** A session cannot make read-then-write
+  atomic: Laravel loads the payload at the start of a request and writes it back at the end, so two
+  callbacks that OVERLAP both find the state intact, both pass the state check, and both redeem the
+  same authorization code. SSO's own oauth tables showed it — a successful access token issued one to
+  three seconds before every logged failure (UNI-438, reopened). `SsoSingleFlight::claimOAuthState()`
+  settles it with `Cache::add()`, one conditional write the store resolves atomically, so it holds
+  across the several instances Laravel Cloud and Vapor run. The loser stands down: it redirects to
+  login, does **not** `report()` (a duplicate callback is ordinary browser behaviour, not a fault),
+  and does **not** count toward the loop breaker — otherwise a browser that duplicates its callback
+  three times would be shown the sign-in-failed page for a login that actually worked.
+- **`SsoSingleFlight`** — the shared coordination point for credentials that may be spent exactly
+  once, cache-backed because the session cannot do it. `claimOAuthState()` for the callback above;
+  `refreshTokens()` for Passport's ROTATING refresh tokens, where a polling dashboard has several
+  requests in flight when the access token ages out, they all read the same refresh token, and the
+  losers used to present one SSO had already revoked — read as "signed out", session cleared, and the
+  cleared copy written over the winner's freshly refreshed one, ending a session mid-shift over a
+  perfectly good token (UNI-455). One request now runs the exchange under a lock and publishes the
+  result for the short window the others need, so every caller stores the same live pair and whichever
+  write lands last is still correct. A genuinely revoked token still signs the user out, so SSO logout
+  keeps propagating. Everything in the class **fails open**: an unreachable cache degrades to the old
+  uncoordinated behaviour rather than locking the platform out of logging in. Config lives under
+  `sso.coordination_store` / `state_claim_ttl_seconds` / `refresh_*`; leave the store null unless the
+  app's default cache is per-instance (`array`, `file`), which cannot coordinate anything.
   **Callback failures never redirect forever.** Redirecting a failed callback to the login route
   re-enters the SSO flow, SSO answers instantly from its own live session, and any deterministic
   failure loops until the browser gives up (UNI-416). Every failure exit runs through

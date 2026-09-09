@@ -8,12 +8,14 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Unified\SsoClient\SsoClient;
 use Unified\SsoClient\SsoSessionState;
+use Unified\SsoClient\SsoSingleFlight;
 
 class EnsureSsoSessionIsFresh
 {
     public function __construct(
         protected SsoClient $ssoClient,
         protected SsoSessionState $sessionState,
+        protected SsoSingleFlight $singleFlight,
     ) {}
 
     public function handle(Request $request, Closure $next)
@@ -114,21 +116,37 @@ class EnsureSsoSessionIsFresh
             return false;
         }
 
+        // Passport rotates refresh tokens, so this exchange may only happen
+        // once per token. A polling dashboard has several requests in flight
+        // when the access token ages out; they all carry the same refresh
+        // token, and without coordination the losers present one SSO has
+        // already revoked, get told no, and sign the user out mid-shift over a
+        // session that is in fact perfectly healthy (UNI-455). Single-flight
+        // means one request does the exchange and the rest store its result.
         try {
-            $tokens = $this->ssoClient->refreshToken($refreshToken);
-
-            $this->sessionState->storeTokens(
-                $tokens['access_token'],
-                $tokens['refresh_token'] ?? $refreshToken,
-                $tokens['expires_in'] ?? 3600,
+            $tokens = $this->singleFlight->refreshTokens(
+                $refreshToken,
+                fn (): array => $this->ssoClient->refreshToken($refreshToken),
             );
-
-            return true;
         } catch (\Throwable $e) {
             Log::warning('SSO session: token refresh failed', ['message' => $e->getMessage()]);
 
             return false;
         }
+
+        if ($tokens === null) {
+            Log::info('SSO session: another request holds this refresh token and published no result');
+
+            return false;
+        }
+
+        $this->sessionState->storeTokens(
+            $tokens['access_token'],
+            $tokens['refresh_token'] ?? $refreshToken,
+            $tokens['expires_in'] ?? 3600,
+        );
+
+        return true;
     }
 
     protected function handleUnauthenticated(Request $request)

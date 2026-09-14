@@ -42,6 +42,10 @@ class SsoServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        if ($this->app->runningInConsole()) {
+            $this->commands([Console\PurgeFakeUsersCommand::class]);
+        }
+
         $this->publishes([
             __DIR__.'/../config/sso.php' => config_path('sso.php'),
         ], 'sso-config');

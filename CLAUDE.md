@@ -26,6 +26,15 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   redirects to login, which SSO answers from its own live session, so the user never sees it. Token
   exchange and refresh failures name the OAuth `error` and `hint` in the exception message rather
   than only the status code — four different causes all surface as "HTTP 400" otherwise.
+  **Token requests retry transport errors and 5xx only, never 4xx** (UNI-539). A connection failure
+  or 5xx means Passport never processed the grant, so `exchangeCode()`/`refreshToken()` retry twice
+  (250ms apart) instead of burning a one-shot code on a blip. A 4xx means Passport DID process the
+  grant and refused — retrying would re-present a possibly-consumed credential (double-redeem), so
+  4xx returns immediately. `SsoClientException` carries the OAuth error identifier
+  (`oauthError()` / `isInvalidGrant()`); the callback's catch treats `invalid_grant` as the ordinary
+  tail of a duplicate callback or aged-out code: it logs at info, does **not** `report()` (this was
+  the daily CLOUDPCR-6E / CREW-SCHEDULING-10 Sentry noise), and redirects back through the authorize
+  flow — while still counting toward the loop breaker so a deterministic invalid_grant loop breaks.
   **Consuming the state only stops a SEQUENTIAL replay.** A session cannot make read-then-write
   atomic: Laravel loads the payload at the start of a request and writes it back at the end, so two
   callbacks that OVERLAP both find the state intact, both pass the state check, and both redeem the

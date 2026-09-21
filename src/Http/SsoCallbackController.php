@@ -7,6 +7,7 @@ use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
+use Unified\SsoClient\Exceptions\SsoClientException;
 use Unified\SsoClient\SsoClient;
 use Unified\SsoClient\SsoSessionState;
 use Unified\SsoClient\SsoSingleFlight;
@@ -163,6 +164,21 @@ class SsoCallbackController extends Controller
             return redirect()->to($intendedUrl);
 
         } catch (\Throwable $e) {
+            // A revoked or expired code is not an application fault — it is
+            // the tail end of a duplicate callback that slipped past the
+            // claims above, or a code that aged out while the request sat in
+            // a queue. The authorize flow re-issues instantly from SSO's live
+            // session, so the user lands inside without noticing; reporting
+            // it only feeds Sentry noise (UNI-539). It still counts toward
+            // the loop breaker so a deterministic invalid_grant loop breaks.
+            if ($e instanceof SsoClientException && $e->isInvalidGrant()) {
+                Log::info('SSO callback: grant already spent or revoked, restarting the authorize flow', [
+                    'message' => $e->getMessage(),
+                ]);
+
+                return $this->failCallback('Sign in failed. Please try again.');
+            }
+
             Log::error('SSO callback error', [
                 'message' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),

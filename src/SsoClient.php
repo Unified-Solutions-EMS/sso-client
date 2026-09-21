@@ -2,6 +2,9 @@
 
 namespace Unified\SsoClient;
 
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -44,8 +47,7 @@ class SsoClient
         $baseUrl = rtrim(config('sso.base_url'), '/');
 
         try {
-            $response = Http::timeout(config('sso.timeout', 10))
-                ->asForm()
+            $response = $this->tokenRequest()
                 ->post($baseUrl.'/oauth/token', [
                     'grant_type' => 'authorization_code',
                     'client_id' => config('sso.client_id'),
@@ -64,7 +66,10 @@ class SsoClient
                 'status' => $response->status(),
                 'body' => substr($response->body(), 0, 500),
             ]);
-            throw SsoClientException::tokenExchangeFailed($this->describeOAuthFailure($response));
+            throw SsoClientException::tokenExchangeFailed(
+                $this->describeOAuthFailure($response),
+                $this->oauthError($response),
+            );
         }
 
         $data = $response->json();
@@ -75,6 +80,44 @@ class SsoClient
             'expires_in' => $data['expires_in'] ?? 3600,
             'token_type' => $data['token_type'] ?? 'Bearer',
         ];
+    }
+
+    /**
+     * A pending request for the token endpoint, retrying transport errors and
+     * 5xx responses only.
+     *
+     * A single SSO blip during the exchange used to burn the one-shot
+     * credential the request carried — the authorization code, or Passport's
+     * rotating refresh token — and force the user back through a full
+     * re-authorize (UNI-539). A transport failure or a 5xx means the request
+     * died before Passport processed the grant, so presenting the same
+     * credential again is safe. A 4xx means Passport DID process it and said
+     * no; retrying a 4xx would re-present a grant the first attempt may have
+     * consumed, which is exactly the double-redeem this package exists to
+     * avoid, so 4xx responses return immediately.
+     */
+    protected function tokenRequest(): PendingRequest
+    {
+        return Http::timeout(config('sso.timeout', 10))
+            ->retry(
+                2,
+                250,
+                when: fn (\Throwable $e) => $e instanceof ConnectionException
+                    || ($e instanceof RequestException && $e->response->serverError()),
+                throw: false,
+            )
+            ->asForm();
+    }
+
+    /**
+     * The OAuth error identifier from a failed token response, if the body
+     * carried one.
+     */
+    protected function oauthError(Response $response): ?string
+    {
+        $error = $response->json('error');
+
+        return is_string($error) && $error !== '' ? $error : null;
     }
 
     /**
@@ -111,8 +154,7 @@ class SsoClient
         $baseUrl = rtrim(config('sso.base_url'), '/');
 
         try {
-            $response = Http::timeout(config('sso.timeout', 10))
-                ->asForm()
+            $response = $this->tokenRequest()
                 ->post($baseUrl.'/oauth/token', [
                     'grant_type' => 'refresh_token',
                     'client_id' => config('sso.client_id'),
@@ -128,7 +170,10 @@ class SsoClient
             Log::warning('SSO token refresh failed', [
                 'status' => $response->status(),
             ]);
-            throw SsoClientException::tokenRefreshFailed($this->describeOAuthFailure($response));
+            throw SsoClientException::tokenRefreshFailed(
+                $this->describeOAuthFailure($response),
+                $this->oauthError($response),
+            );
         }
 
         $data = $response->json();

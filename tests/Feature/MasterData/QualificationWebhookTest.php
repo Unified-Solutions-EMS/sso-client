@@ -225,4 +225,40 @@ class QualificationWebhookTest extends MasterDataTestCase
         $this->assertSame([$bMedic, $bLinked], $this->assignedIds($userId, $companyB));
         $this->assertSame([(int) $this->mirrored($companyA, 501)->id], $this->assignedIds($userId, $companyA));
     }
+
+    public function test_an_older_update_delivered_late_is_ignored_as_stale(): void
+    {
+        $companyId = $this->company(70);
+        $this->postWebhook('qualification.updated', [
+            'company' => ['id' => 70],
+            'qualification' => $this->qualificationRecord(501, 'Paramedic II', ['updated_at' => '2026-10-06T14:00:00+00:00']),
+        ])->assertJson(['result' => 'created']);
+
+        $this->postWebhook('qualification.updated', [
+            'company' => ['id' => 70],
+            'qualification' => $this->qualificationRecord(501, 'Paramedic', ['updated_at' => '2026-10-06T09:59:59-04:00']),
+        ])->assertOk()->assertJson(['status' => 'stale', 'result' => 'stale']);
+
+        $row = $this->mirrored($companyId, 501);
+        $this->assertSame('Paramedic II', $row->name);
+        $this->assertSame('2026-10-06 14:00:00', $row->sso_updated_at);
+    }
+
+    public function test_a_newer_update_applies_and_records_its_timestamp_in_utc(): void
+    {
+        $companyId = $this->company(70);
+        $this->postWebhook('qualification.created', [
+            'company' => ['id' => 70],
+            'qualification' => $this->qualificationRecord(501, 'Paramedic', ['updated_at' => '2026-10-06T12:00:00Z']),
+        ]);
+
+        $this->postWebhook('qualification.updated', [
+            'company' => ['id' => 70],
+            'qualification' => $this->qualificationRecord(501, 'Paramedic II', ['updated_at' => '2026-10-06T08:30:00-04:00']),
+        ])->assertOk()->assertJson(['status' => 'ok', 'result' => 'updated']);
+
+        $row = $this->mirrored($companyId, 501);
+        $this->assertSame('Paramedic II', $row->name);
+        $this->assertSame('2026-10-06 12:30:00', $row->sso_updated_at);
+    }
 }

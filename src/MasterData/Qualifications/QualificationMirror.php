@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Unified\SsoClient\MasterData\Qualifications;
 
+use Carbon\CarbonImmutable;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -34,6 +35,8 @@ class QualificationMirror implements EntityMirror
     public const ASSIGNMENT_TABLE = 'company_user_qualifications';
 
     public const SSO_ID_COLUMN = 'sso_qualification_id';
+
+    public const SSO_UPDATED_AT_COLUMN = 'sso_updated_at';
 
     public function __construct(private readonly LocalTenantResolver $tenants) {}
 
@@ -66,16 +69,13 @@ class QualificationMirror implements EntityMirror
     {
         return Schema::hasTable(self::TABLE)
             && Schema::hasTable(self::ASSIGNMENT_TABLE)
-            && Schema::hasColumns(self::TABLE, [self::SSO_ID_COLUMN, 'applies_to', 'is_active']);
+            && Schema::hasColumns(self::TABLE, [self::SSO_ID_COLUMN, 'applies_to', 'is_active', self::SSO_UPDATED_AT_COLUMN]);
     }
 
     public function applyWebhook(string $event, int $localCompanyId, array $payload): array
     {
         return match ($event) {
-            'qualification.created', 'qualification.updated' => [
-                'status' => 'ok',
-                'result' => $this->upsert($localCompanyId, (array) ($payload['qualification'] ?? [])),
-            ],
+            'qualification.created', 'qualification.updated' => $this->applyUpsertWebhook($event, $localCompanyId, (array) ($payload['qualification'] ?? [])),
             'qualification.deleted' => [
                 'status' => 'ok',
                 'result' => $this->deactivate($localCompanyId, (int) ($payload['qualification']['id'] ?? 0)) ? 'deactivated' : 'not_found',
@@ -92,10 +92,15 @@ class QualificationMirror implements EntityMirror
      * same name (case-insensitive) when exactly one exists, so the mirror never
      * creates a duplicate of a qualification the agency already had.
      *
+     * With $rejectStale (webhook deliveries), a record whose updated_at is
+     * older than the stored sso_updated_at is ignored and 'stale' returned:
+     * SSO queues deliveries, so an older one can arrive after a newer one.
+     * A resync passes false because the snapshot is current by definition.
+     *
      * @param  array<string, mixed>  $record
-     * @return 'created'|'updated'|'linked'|'unchanged'
+     * @return 'created'|'updated'|'linked'|'unchanged'|'stale'
      */
-    public function upsert(int $localCompanyId, array $record): string
+    public function upsert(int $localCompanyId, array $record, bool $rejectStale = false): string
     {
         $ssoId = (int) ($record['id'] ?? 0);
         $name = trim((string) ($record['name'] ?? ''));
@@ -109,9 +114,14 @@ class QualificationMirror implements EntityMirror
             'description' => isset($record['description']) && $record['description'] !== '' ? (string) $record['description'] : null,
             'applies_to' => $this->normalizeAppliesTo($record['applies_to'] ?? []),
             'is_active' => array_key_exists('is_active', $record) ? (bool) $record['is_active'] : true,
+            'sso_updated_at' => $this->normalizeTimestamp($record['updated_at'] ?? null),
         ];
 
         $row = $this->findLinked($localCompanyId, $ssoId);
+
+        if ($rejectStale && $row !== null && $this->isStale($row, $attributes['sso_updated_at'])) {
+            return 'stale';
+        }
 
         if ($row === null) {
             $candidate = $this->findAdoptable($localCompanyId, $name);
@@ -414,6 +424,28 @@ class QualificationMirror implements EntityMirror
     }
 
     /**
+     * @param  array<string, mixed>  $record
+     * @return array<string, mixed>
+     */
+    private function applyUpsertWebhook(string $event, int $localCompanyId, array $record): array
+    {
+        $result = $this->upsert($localCompanyId, $record, rejectStale: true);
+
+        if ($result === 'stale') {
+            Log::info('SSO master data: stale qualification delivery ignored', [
+                'event' => $event,
+                'company_id' => $localCompanyId,
+                'sso_qualification_id' => $record['id'] ?? null,
+                'updated_at' => $record['updated_at'] ?? null,
+            ]);
+
+            return ['status' => 'stale', 'result' => 'stale'];
+        }
+
+        return ['status' => 'ok', 'result' => $result];
+    }
+
+    /**
      * @param  array<string, mixed>  $payload
      * @return array<string, mixed>
      */
@@ -475,7 +507,7 @@ class QualificationMirror implements EntityMirror
     }
 
     /**
-     * @param  array{name: string, description: ?string, applies_to: list<string>, is_active: bool}  $attributes
+     * @param  array{name: string, description: ?string, applies_to: list<string>, is_active: bool, sso_updated_at: ?string}  $attributes
      */
     private function insert(int $localCompanyId, int $ssoId, array $attributes): void
     {
@@ -490,21 +522,28 @@ class QualificationMirror implements EntityMirror
     }
 
     /**
-     * @param  array{name: string, description: ?string, applies_to: list<string>, is_active: bool}  $attributes
+     * @param  array{name: string, description: ?string, applies_to: list<string>, is_active: bool, sso_updated_at: ?string}  $attributes
      * @return array<string, mixed>
      */
     private function toColumns(array $attributes): array
     {
-        return [
+        $columns = [
             'name' => $attributes['name'],
             'description' => $attributes['description'],
             'applies_to' => json_encode($attributes['applies_to']),
             'is_active' => $attributes['is_active'],
         ];
+
+        // A record without updated_at (the login payload) keeps the stored one.
+        if ($attributes['sso_updated_at'] !== null) {
+            $columns[self::SSO_UPDATED_AT_COLUMN] = $attributes['sso_updated_at'];
+        }
+
+        return $columns;
     }
 
     /**
-     * @param  array{name: string, description: ?string, applies_to: list<string>, is_active: bool}  $attributes
+     * @param  array{name: string, description: ?string, applies_to: list<string>, is_active: bool, sso_updated_at: ?string}  $attributes
      */
     private function matches(object $row, array $attributes): bool
     {
@@ -513,7 +552,32 @@ class QualificationMirror implements EntityMirror
         return (string) $row->name === $attributes['name']
             && ($row->description === null ? null : (string) $row->description) === $attributes['description']
             && $this->normalizeAppliesTo(is_array($storedAppliesTo) ? $storedAppliesTo : []) === $attributes['applies_to']
-            && (bool) $row->is_active === $attributes['is_active'];
+            && (bool) $row->is_active === $attributes['is_active']
+            && ($attributes['sso_updated_at'] === null || $this->normalizeTimestamp($row->{self::SSO_UPDATED_AT_COLUMN}) === $attributes['sso_updated_at']);
+    }
+
+    private function isStale(object $row, ?string $incoming): bool
+    {
+        $stored = $this->normalizeTimestamp($row->{self::SSO_UPDATED_AT_COLUMN});
+
+        return $stored !== null && $incoming !== null && $incoming < $stored;
+    }
+
+    /**
+     * SSO sends ISO 8601 with an offset; store and compare as UTC
+     * 'Y-m-d H:i:s', which also sorts correctly as a string.
+     */
+    private function normalizeTimestamp(mixed $value): ?string
+    {
+        if (! is_string($value) || trim($value) === '') {
+            return null;
+        }
+
+        try {
+            return CarbonImmutable::parse($value, 'UTC')->utc()->format('Y-m-d H:i:s');
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     /**

@@ -22,8 +22,9 @@ return new class extends Migration
         $addSsoId = ! Schema::hasColumn('qualifications', 'sso_qualification_id');
         $addAppliesTo = ! Schema::hasColumn('qualifications', 'applies_to');
         $addIsActive = ! Schema::hasColumn('qualifications', 'is_active');
+        $addSsoUpdatedAt = ! Schema::hasColumn('qualifications', 'sso_updated_at');
 
-        Schema::table('qualifications', function (Blueprint $table) use ($addSsoId, $addAppliesTo, $addIsActive): void {
+        Schema::table('qualifications', function (Blueprint $table) use ($addSsoId, $addAppliesTo, $addIsActive, $addSsoUpdatedAt): void {
             if ($addSsoId) {
                 $table->unsignedBigInteger('sso_qualification_id')->nullable()->after('company_id');
             }
@@ -34,6 +35,12 @@ return new class extends Migration
 
             if ($addIsActive) {
                 $table->boolean('is_active')->default(true);
+            }
+
+            // SSO's own updated_at (UTC) for the row, so a delayed webhook
+            // delivery cannot overwrite a newer one.
+            if ($addSsoUpdatedAt) {
+                $table->timestamp('sso_updated_at')->nullable();
             }
         });
 
@@ -47,13 +54,24 @@ return new class extends Migration
     public function down(): void
     {
         if (Schema::hasIndex('qualifications', self::UNIQUE_INDEX)) {
-            Schema::table('qualifications', function (Blueprint $table): void {
+            // MySQL adopts the unique index as the company_id foreign key's
+            // index once it exists, and refuses to drop it while the foreign
+            // key has no other index to use. Give it one first.
+            $companyIdIndexed = collect(Schema::getIndexes('qualifications'))->contains(
+                fn (array $index): bool => $index['name'] !== self::UNIQUE_INDEX && ($index['columns'][0] ?? null) === 'company_id',
+            );
+
+            Schema::table('qualifications', function (Blueprint $table) use ($companyIdIndexed): void {
+                if (! $companyIdIndexed) {
+                    $table->index('company_id', 'qualifications_company_id_foreign');
+                }
+
                 $table->dropUnique(self::UNIQUE_INDEX);
             });
         }
 
         $columns = array_values(array_filter(
-            ['sso_qualification_id', 'applies_to', 'is_active'],
+            ['sso_qualification_id', 'applies_to', 'is_active', 'sso_updated_at'],
             fn (string $column): bool => Schema::hasColumn('qualifications', $column),
         ));
 

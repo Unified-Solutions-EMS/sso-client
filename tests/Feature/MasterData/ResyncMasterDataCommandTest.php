@@ -37,7 +37,7 @@ class ResyncMasterDataCommandTest extends MasterDataTestCase
     private function state(): array
     {
         return [
-            DB::table('qualifications')->orderBy('id')->get(['id', 'company_id', 'sso_qualification_id', 'name', 'description', 'applies_to', 'is_active'])->map(fn ($row): array => (array) $row)->all(),
+            DB::table('qualifications')->orderBy('id')->get(['id', 'company_id', 'sso_qualification_id', 'name', 'description', 'applies_to', 'is_active', 'sso_updated_at'])->map(fn ($row): array => (array) $row)->all(),
             DB::table('company_user_qualifications')->orderBy('id')->get(['user_id', 'company_id', 'qualification_id'])->map(fn ($row): array => (array) $row)->all(),
         ];
     }
@@ -205,5 +205,26 @@ class ResyncMasterDataCommandTest extends MasterDataTestCase
             ->assertFailed();
 
         Http::assertNothingSent();
+    }
+
+    public function test_resync_wins_over_a_newer_stored_timestamp(): void
+    {
+        $companyId = $this->company(70);
+        $this->postWebhook('qualification.updated', [
+            'company' => ['id' => 70],
+            'qualification' => $this->qualificationRecord(501, 'Paramedic II', ['updated_at' => '2026-10-07T00:00:00Z']),
+        ])->assertJson(['result' => 'created']);
+
+        $this->fakeSso([70 => $this->snapshot(70, [
+            $this->qualificationRecord(501, 'Paramedic', ['updated_at' => '2026-10-06T00:00:00Z']),
+        ])]);
+
+        $this->artisan('sso:resync-master-data', ['entity' => 'qualifications'])
+            ->expectsOutputToContain('updated=1')
+            ->assertSuccessful();
+
+        $row = $this->mirrored($companyId, 501);
+        $this->assertSame('Paramedic', $row->name);
+        $this->assertSame('2026-10-06 00:00:00', $row->sso_updated_at);
     }
 }

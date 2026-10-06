@@ -148,7 +148,9 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   **Qualifications** (first entity) mirror into the app's existing `qualifications` +
   `company_user_qualifications` tables. Events: `qualification.created|updated` (upsert),
   `qualification.deleted` (`is_active=false`), `user.qualifications_changed` (the user's full set
-  in that company). `/api/user` `companies[].qualifications: [{id, name}]` is mirrored on login by
+  in that company). The payload's `updated_at` is stored (UTC) in `sso_updated_at`; a
+  `qualification.created|updated` delivery older than the stored value is ignored and acked
+  `"status": "stale"` (SSO queues deliveries, so they can arrive out of order). A resync always wins. `/api/user` `companies[].qualifications: [{id, name}]` is mirrored on login by
   `SsoUserSynchronizer` (no-op when the key is absent). Assignment replacement only touches rows
   linked to SSO, so unlinked pre-cutover rows keep their assignments; an SSO row with no linked
   local row adopts a single unlinked row of the same name (case-insensitive) instead of inserting a
@@ -158,7 +160,8 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   return only active rows whose `applies_to` is empty or contains `sso.app_slug`.
   **Per-app cutover order:**
   1. `php artisan vendor:publish --tag=sso-master-data` and `php artisan migrate` (adds
-     `sso_qualification_id`, `applies_to`, `is_active`, skipping any column already present).
+     `sso_qualification_id`, `applies_to`, `is_active`, `sso_updated_at`, skipping any column already
+     present).
   2. Set `SSO_MASTER_DATA_QUALIFICATIONS=true`. Webhooks and logins start mirroring.
   3. `php artisan sso:resync-master-data qualifications --link-by-name` links existing rows to SSO
      by name and prints a review table (ambiguous names, local-only rows, SSO-only rows). It never

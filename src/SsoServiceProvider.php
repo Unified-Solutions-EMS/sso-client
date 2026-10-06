@@ -43,7 +43,10 @@ class SsoServiceProvider extends ServiceProvider
     public function boot(): void
     {
         if ($this->app->runningInConsole()) {
-            $this->commands([Console\PurgeFakeUsersCommand::class]);
+            $this->commands([
+                Console\PurgeFakeUsersCommand::class,
+                MasterData\Console\ResyncMasterDataCommand::class,
+            ]);
         }
 
         $this->publishes([
@@ -57,6 +60,12 @@ class SsoServiceProvider extends ServiceProvider
         $this->publishes([
             __DIR__.'/../config/security.php' => config_path('security.php'),
         ], 'security-config');
+
+        // Master-data mirror migrations are opt-in per app, so they are
+        // published rather than loaded.
+        $this->publishesMigrations([
+            __DIR__.'/../database/master-data' => database_path('migrations'),
+        ], 'sso-master-data');
 
         // Auto-record failed logins / lockouts / password resets as
         // security events in every consuming app.

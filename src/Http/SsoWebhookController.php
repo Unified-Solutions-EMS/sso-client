@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Unified\SsoClient\Concerns\PrunesStaleCompanyMemberships;
 use Unified\SsoClient\Http\Concerns\VerifiesSsoWebhookSignature;
+use Unified\SsoClient\MasterData\MasterDataWebhookHandler;
 use Unified\SsoClient\Models\SsoSessionAction;
 use Unified\SsoClient\Security\SecurityEvents;
 use Unified\SsoClient\TrialPurgeVerifier;
@@ -59,6 +60,10 @@ class SsoWebhookController extends Controller
                 'trial.seed_data' => $this->handleTrialSeedData($request),
                 'trial.purge_data' => $this->handleTrialPurgeData($request),
                 'cad.migrate_data' => $this->handleCadMigrateData($request),
+                'qualification.created',
+                'qualification.updated',
+                'qualification.deleted',
+                'user.qualifications_changed' => app(MasterDataWebhookHandler::class)->handle($event, $request->all()),
                 default => $this->handleUnknownEvent($event),
             };
 

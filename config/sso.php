@@ -255,6 +255,23 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Master Data Mirrors
+    |--------------------------------------------------------------------------
+    |
+    | SSO is canonical for shared master data. Each entity listed here is a
+    | read-only local mirror kept fresh by SSO webhooks, the /api/user login
+    | payload and `sso:resync-master-data`. Opt in per entity, and only after
+    | publishing and running the entity's mirror migration
+    | (`php artisan vendor:publish --tag=sso-master-data`). While an entity is
+    | false its webhooks are acknowledged and ignored.
+    |
+    */
+    'master_data' => [
+        'qualifications' => env('SSO_MASTER_DATA_QUALIFICATIONS', false),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Routes
     |--------------------------------------------------------------------------
     |

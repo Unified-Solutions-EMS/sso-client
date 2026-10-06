@@ -134,6 +134,39 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   `Schema::hasColumn()` so apps that haven't adopted the column ignore it. Apps must NOT ship their
   own timezone selector.
 - **Migrations** — `sso_session_actions` table and `users.staff_roles` column, loaded from the package.
+- **Master data mirrors** (`src/MasterData/`) — SSO is canonical for shared master data; apps hold
+  a read-only mirror per entity, opted into with `config('sso.master_data.<entity>')` (env
+  `SSO_MASTER_DATA_QUALIFICATIONS` for the first one). Pieces: `Contracts\EntityMirror` (one class
+  per entity: table, SSO id column, webhook apply, resync, link-by-name), `MasterDataRegistry`
+  (known entities + opt-in check; mirrors resolve through the container so an app can bind a
+  subclass), `MasterDataWebhookHandler` (the webhook controller's `match` sends `qualification.*`
+  and `user.qualifications_changed` here; a disabled entity, an unmigrated mirror, or an unknown
+  company is a 200 ack), `MasterDataClient` (`GET {SSO_BASE_URL}/api/internal/companies/{id}/{entity}`,
+  bearer `CORE_APP_API_KEY`) and `sso:resync-master-data {entity} {--company=} {--link-by-name}`.
+  Every mirror write is query-builder SQL pinned to the local company resolved from the
+  authoritative SSO company id (§4a); rows SSO deleted or dropped are deactivated, never deleted.
+  **Qualifications** (first entity) mirror into the app's existing `qualifications` +
+  `company_user_qualifications` tables. Events: `qualification.created|updated` (upsert),
+  `qualification.deleted` (`is_active=false`), `user.qualifications_changed` (the user's full set
+  in that company). `/api/user` `companies[].qualifications: [{id, name}]` is mirrored on login by
+  `SsoUserSynchronizer` (no-op when the key is absent). Assignment replacement only touches rows
+  linked to SSO, so unlinked pre-cutover rows keep their assignments; an SSO row with no linked
+  local row adopts a single unlinked row of the same name (case-insensitive) instead of inserting a
+  duplicate. Read side: `MasterData\Qualifications\HasMirroredQualifications` on the User model
+  (`companyQualifications()`, `companyQualificationNames()`, `companyQualificationIds()`,
+  `hasQualificationInCompany()`) and `QualificationCatalog::usableForCompany()` for pickers; both
+  return only active rows whose `applies_to` is empty or contains `sso.app_slug`.
+  **Per-app cutover order:**
+  1. `php artisan vendor:publish --tag=sso-master-data` and `php artisan migrate` (adds
+     `sso_qualification_id`, `applies_to`, `is_active`, skipping any column already present).
+  2. Set `SSO_MASTER_DATA_QUALIFICATIONS=true`. Webhooks and logins start mirroring.
+  3. `php artisan sso:resync-master-data qualifications --link-by-name` links existing rows to SSO
+     by name and prints a review table (ambiguous names, local-only rows, SSO-only rows). It never
+     creates, merges or deletes. Resolve the review list by hand (rename in SSO or locally, rerun).
+  4. `php artisan sso:resync-master-data qualifications` pulls the full catalog + assignments.
+     Idempotent; rerun any time as the healer.
+  5. Switch the app's qualifications editor to SSO (delete the local settings panel) and read
+     through `HasMirroredQualifications`.
 
 ## Release discipline
 

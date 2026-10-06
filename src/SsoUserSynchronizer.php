@@ -10,6 +10,8 @@ use Illuminate\Support\Str;
 use Unified\SsoClient\Concerns\PrunesStaleCompanyMemberships;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
 use Unified\SsoClient\Exceptions\CompanyLinkCollisionException;
+use Unified\SsoClient\MasterData\MasterDataRegistry;
+use Unified\SsoClient\MasterData\Qualifications\QualificationMirror;
 
 class SsoUserSynchronizer implements SsoUserSynchronizerContract
 {
@@ -23,6 +25,12 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
      * @var array<string, bool>
      */
     private static array $timezoneColumnSupport = [];
+
+    /**
+     * Whether the qualifications mirror migration has run, memoized per
+     * process for the same reason as the timezone column check.
+     */
+    private static ?bool $qualificationMirrorInstalled = null;
 
     /**
      * Synchronize the SSO user payload into local database records.
@@ -70,6 +78,7 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
 
             $this->attachUserToCompanies($user, $localCompanies);
             $this->syncRolesForCompanies($user, $companies, $localCompanies);
+            $this->syncMirroredQualifications($user, $companies, $localCompanies);
             $this->pruneStaleCompanyMemberships(
                 $user,
                 array_values(array_map(static fn ($company) => $company->id, $localCompanies)),
@@ -480,6 +489,67 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
             ->whereIn('company_id', $companyIds)
             ->whereRaw('(company_id, role_id) NOT IN ('.implode(', ', $keptPairs).')', $keptBindings)
             ->delete();
+    }
+
+    /**
+     * Mirror the user's qualifications in each company from
+     * `companies[].qualifications` (SSO ids + names), replacing the user's
+     * SSO-linked assignments in that company, the same way roles are synced.
+     *
+     * No-op unless the app opted in (`sso.master_data.qualifications`) and ran
+     * the mirror migration, and per company when the payload has no
+     * `qualifications` key (an SSO that predates the field). A failure here is
+     * reported and rolled back to a savepoint; it never fails the login.
+     *
+     * @param  array<int, array<string, mixed>>  $companies
+     * @param  array<int|string, object>  $localCompanies
+     */
+    protected function syncMirroredQualifications($user, array $companies, array $localCompanies): void
+    {
+        $withQualifications = array_filter(
+            $companies,
+            static fn ($companyData): bool => is_array($companyData)
+                && is_array($companyData['qualifications'] ?? null)
+                && isset($companyData['id'], $localCompanies[$companyData['id']]),
+        );
+
+        if ($withQualifications === []) {
+            return;
+        }
+
+        $registry = app(MasterDataRegistry::class);
+
+        if (! $registry->enabled('qualifications')) {
+            return;
+        }
+
+        $mirror = $registry->mirror('qualifications');
+
+        if (! $mirror instanceof QualificationMirror || ! (self::$qualificationMirrorInstalled ??= $mirror->isInstalled())) {
+            return;
+        }
+
+        try {
+            DB::transaction(function () use ($mirror, $user, $withQualifications, $localCompanies): void {
+                foreach ($withQualifications as $companyData) {
+                    $localCompanyId = (int) $localCompanies[$companyData['id']]->id;
+                    $ssoIds = $mirror->ensureFromLoginPayload($localCompanyId, $companyData['qualifications']);
+                    $mirror->replaceUserAssignments($localCompanyId, (int) $user->id, $ssoIds);
+                }
+            });
+        } catch (\Throwable $e) {
+            Log::warning('SSO sync: qualifications mirror failed, login continues', [
+                'user_id' => $user->id,
+                'error' => $e->getMessage(),
+            ]);
+            report($e);
+        }
+    }
+
+    public static function flushSchemaCache(): void
+    {
+        self::$timezoneColumnSupport = [];
+        self::$qualificationMirrorInstalled = null;
     }
 
     /**

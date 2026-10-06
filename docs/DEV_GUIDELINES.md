@@ -10,7 +10,7 @@ Owner: James Kenworthy. Amend via PR to this file when a pattern changes or some
 
 ## 1. Platform map
 
-- **SSO** (`/sso`) — hub. Users, companies, roles, OAuth (Passport), webhook dispatch. Laravel 13 + Filament 5 + Livewire 4.
+- **SSO** (`/sso`) — hub. Users, companies, roles, OAuth (Passport), webhook dispatch. Laravel 13 + Inertia 3 + React 19 + Tailwind 4 + Octane (cutover 2026-10-06; Filament and Livewire removed). Staff `/admin` is React too.
 - **CloudPCR** (`/cloudpcr`) — ePCR. Laravel 11 + Filament 3 + Livewire 3 + Alpine. Owns the legacy SQL Server connection.
 - **HR** (`/HR`) — personnel system of record. Deployed on Vapor (no `pdo_sqlsrv`).
 - **CAD** (`/CAD`) — dispatch.

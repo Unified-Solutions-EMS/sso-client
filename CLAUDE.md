@@ -94,6 +94,51 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   registered by the package so apps never add the route. Apps implement `Contracts\AgencyStatusProvider`
   and bind it. See DEV_GUIDELINES §2a for the response contract and the HIPAA redaction boundary
   (redaction happens in the SSO MCP server, not in apps).
+- **Settings rail** — `GET` / `PATCH /api/internal/settings/{ssoCompanyId}` behind `ValidateCoreApiKey`
+  (`routes/settings.php`), read and written by SSO's central Settings page and the AI setup assistant.
+  Apps implement `Contracts\SettingsProvider` (`schema()`, `values()`, `apply()`) and bind it; with
+  nothing bound both routes answer 200 `supported: false`. GET returns `{app_slug, supported, schema,
+  values}` with schema defaults filled in for keys the provider leaves out. PATCH takes
+  `{patch: {key: value}, actor: {sso_user_id, name, source: sso|app|ai}}` and always answers 200 with
+  per-key `results` (`saved`, `invalid` + message, `blocked` + reason, `unknown_key`); 422 means the
+  body shape is wrong. The package validates every key against the schema before calling `apply()`
+  (values are validated alone, so cross-field rules don't apply; use `requires()` + `blocked()`), so
+  `apply()` only sees known, valid keys and only the provider ever answers `blocked`. A key the
+  provider forgets to report comes back `blocked`, never assumed saved. Values are never logged.
+  `apply()` must call the app's own services so observers, webhooks and metrics still fire.
+
+  ```php
+  // app/Settings/Registry.php
+  class Registry implements SettingsProvider
+  {
+      public function __construct(private AgencyPreferences $preferences) {}
+
+      public function schema(): SettingsSchema
+      {
+          return SettingsSchema::make()
+              ->group('alerts', 'Dispatch alerts')
+              ->toggle('alerts.pre_pickup', 'Pre-pickup alert')->default(false)
+              ->number('alerts.pre_pickup_minutes', 'Minutes before pickup')->rules('integer|min:1|max:120')
+                  ->default(15)->requires('alerts.pre_pickup')
+              ->group('numbering', 'Incident numbering')
+              ->select('numbering.reset', 'Reset numbering', ['yearly' => 'Every year', 'never' => 'Never'])->danger()
+              ->entity('dispatch.default_station', 'Default station', SettingEntity::Station)->requires('station');
+      }
+
+      public function values(int $ssoCompanyId): array
+      {
+          return $this->preferences->forSsoCompany($ssoCompanyId);
+      }
+
+      public function apply(int $ssoCompanyId, array $patch, SettingsActor $actor): SettingsResult
+      {
+          return $this->preferences->update($ssoCompanyId, $patch, $actor); // app service returns per-key results
+      }
+  }
+
+  // AppServiceProvider::register()
+  $this->app->bind(SettingsProvider::class, \App\Settings\Registry::class);
+  ```
 - **`Concerns\SyncsCompanyRoles`** — `loadRolesForCompany()`, `hasRoleInCompany()`, `companyRoleNames()`
   plus staff helpers `isStaff()`, `hasStaffRole()`, `isGlobalAdmin()` reading the package-managed
   `users.staff_roles` column. Apps must delete hand-rolled copies of these.

@@ -105,6 +105,11 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   (values are validated alone, so cross-field rules don't apply; use `requires()` + `blocked()`), so
   `apply()` only sees known, valid keys and only the provider ever answers `blocked`. A key the
   provider forgets to report comes back `blocked`, never assumed saved. Values are never logged.
+  `secret()` settings (integration tokens, passwords) are never returned: GET answers
+  `{value: null, has_value: bool}` for them. On PATCH a non-empty string sets one, `null` clears it,
+  and `""` or an absent key leaves it unchanged (dropped before validation, no result entry), so a form
+  that round-trips the masked field can't blank a credential. The patch is read from the raw JSON body
+  because apps' global `ConvertEmptyStringsToNull` would otherwise turn `""` into a clear.
   `apply()` must call the app's own services so observers, webhooks and metrics still fire.
 
   ```php
@@ -122,7 +127,9 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
                   ->default(15)->requires('alerts.pre_pickup')
               ->group('numbering', 'Incident numbering')
               ->select('numbering.reset', 'Reset numbering', ['yearly' => 'Every year', 'never' => 'Never'])->danger()
-              ->entity('dispatch.default_station', 'Default station', SettingEntity::Station)->requires('station');
+              ->entity('dispatch.default_station', 'Default station', SettingEntity::Station)->requires('station')
+              ->group('integrations', 'Integrations')
+              ->text('integrations.bryx_token', 'Bryx API token')->rules('min:8')->secret();
       }
 
       public function values(int $ssoCompanyId): array

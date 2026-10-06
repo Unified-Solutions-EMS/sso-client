@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Log;
 use Unified\SsoClient\Contracts\SettingsProvider;
 use Unified\SsoClient\Settings\SettingsPatchValidator;
 use Unified\SsoClient\Settings\SettingsResult;
+use Unified\SsoClient\Settings\SettingsSchema;
 
 class SettingsController extends Controller
 {
@@ -20,13 +21,13 @@ class SettingsController extends Controller
         }
 
         $schema = $provider->schema();
-        $values = $provider->values($ssoCompanyId);
+        $values = array_merge($schema->defaults(), array_intersect_key($provider->values($ssoCompanyId), $schema->settings()));
 
         return response()->json([
             'app_slug' => $this->appSlug(),
             'supported' => true,
             'schema' => $schema->toArray(),
-            'values' => array_merge($schema->defaults(), array_intersect_key($values, $schema->settings())),
+            'values' => $this->maskSecrets($schema, $values),
         ]);
     }
 
@@ -84,6 +85,21 @@ class SettingsController extends Controller
                 'keys' => $unreported,
             ]);
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $values
+     * @return array<string, mixed>
+     */
+    private function maskSecrets(SettingsSchema $schema, array $values): array
+    {
+        foreach ($schema->settings() as $key => $setting) {
+            if ($setting->isSecret()) {
+                $values[$key] = ['value' => null, 'has_value' => $values[$key] !== null && $values[$key] !== ''];
+            }
+        }
+
+        return $values;
     }
 
     private function provider(): ?SettingsProvider

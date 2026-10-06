@@ -15,7 +15,7 @@ use LogicException;
  *           ->requires('alerts.pre_pickup');
  *
  * Setting methods (text, toggle, select, ...) add to the current group;
- * modifier methods (help, default, rules, requires, danger) change the
+ * modifier methods (help, default, rules, requires, danger, secret) change the
  * setting declared just before them.
  */
 final class SettingsSchema
@@ -136,6 +136,18 @@ final class SettingsSchema
     public function danger(bool $danger = true): self
     {
         $this->currentSetting()->setDanger($danger);
+
+        return $this;
+    }
+
+    /**
+     * Marks a credential (integration token, password). GET never returns its
+     * value, only whether one is set; on PATCH an empty string means
+     * "unchanged" so a form that round-trips the masked field can't blank it.
+     */
+    public function secret(bool $secret = true): self
+    {
+        $this->currentSetting()->setSecret($secret);
 
         return $this;
     }

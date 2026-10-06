@@ -35,11 +35,17 @@ class UpdateSettingsRequest extends FormRequest
     }
 
     /**
+     * Read from the raw JSON body: apps run ConvertEmptyStringsToNull globally,
+     * which would turn a secret's "" (unchanged) into null (clear) and wipe
+     * the credential.
+     *
      * @return array<string|int, mixed>
      */
     public function settingsPatch(): array
     {
-        return $this->input('patch', []);
+        $raw = json_decode($this->getContent(), true);
+
+        return is_array($raw) && is_array($raw['patch'] ?? null) ? $raw['patch'] : $this->input('patch', []);
     }
 
     public function settingsActor(): SettingsActor

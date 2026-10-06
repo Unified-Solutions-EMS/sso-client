@@ -8,6 +8,9 @@ use Illuminate\Contracts\Validation\Factory as ValidationFactory;
  * Checks a patch against the schema so every app returns the same messages.
  * Produces unknown_key and invalid results; the keys that pass are handed to
  * the provider. Never produces blocked: that is the provider's call.
+ *
+ * An empty string for a secret setting is dropped as if the key were absent:
+ * it is what a form sends back for a masked field it never showed.
  */
 final class SettingsPatchValidator
 {
@@ -29,6 +32,10 @@ final class SettingsPatchValidator
             if ($setting === null) {
                 $result->unknownKey($key);
 
+                continue;
+            }
+
+            if ($setting->isSecret() && $value === '') {
                 continue;
             }
 

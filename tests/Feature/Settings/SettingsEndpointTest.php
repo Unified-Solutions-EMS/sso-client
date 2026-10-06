@@ -205,4 +205,74 @@ class SettingsEndpointTest extends TestCase
         $this->withToken('core-key')->patchJson('/api/internal/settings/42', $this->body(['numbering.reset' => 'never']))
             ->assertJsonPath('results', ['numbering.reset' => ['status' => 'saved']]);
     }
+
+    public function test_get_masks_secret_values(): void
+    {
+        $provider = $this->bindProvider();
+        $provider->stored[42] = ['integrations.bryx_token' => 'tok_live_secret'];
+        $provider->stored[43] = [];
+
+        $response = $this->withToken('core-key')->getJson('/api/internal/settings/42')->assertOk();
+
+        $this->assertSame(['value' => null, 'has_value' => true], $response->json('values')['integrations.bryx_token']);
+        $this->assertStringNotContainsString('tok_live_secret', $response->getContent());
+
+        $empty = $this->withToken('core-key')->getJson('/api/internal/settings/43')->json('values');
+        $this->assertSame(['value' => null, 'has_value' => false], $empty['integrations.bryx_token']);
+    }
+
+    public function test_patch_sets_a_secret_with_a_non_empty_string(): void
+    {
+        $provider = $this->bindProvider();
+
+        $this->withToken('core-key')->patchJson('/api/internal/settings/42', $this->body(['integrations.bryx_token' => 'tok_new_value']))
+            ->assertOk()
+            ->assertJsonPath('results', ['integrations.bryx_token' => ['status' => 'saved']]);
+
+        $this->assertSame('tok_new_value', $provider->stored[42]['integrations.bryx_token']);
+    }
+
+    public function test_patch_clears_a_secret_with_null(): void
+    {
+        $provider = $this->bindProvider();
+        $provider->stored[42] = ['integrations.bryx_token' => 'tok_live_secret'];
+
+        $this->withToken('core-key')->patchJson('/api/internal/settings/42', $this->body(['integrations.bryx_token' => null]))
+            ->assertOk()
+            ->assertJsonPath('results', ['integrations.bryx_token' => ['status' => 'saved']]);
+
+        $this->assertNull($provider->stored[42]['integrations.bryx_token']);
+    }
+
+    public function test_empty_string_or_absent_secret_leaves_it_unchanged(): void
+    {
+        $provider = $this->bindProvider();
+        $provider->stored[42] = ['integrations.bryx_token' => 'tok_live_secret'];
+
+        $this->withToken('core-key')->patchJson('/api/internal/settings/42', $this->body([
+            'integrations.bryx_token' => '',
+            'numbering.prefix' => 'CAD',
+        ]))
+            ->assertOk()
+            ->assertJsonPath('results', ['numbering.prefix' => ['status' => 'saved']]);
+
+        $this->withToken('core-key')->patchJson('/api/internal/settings/42', $this->body(['numbering.prefix' => 'EMS']))
+            ->assertOk();
+
+        $this->assertSame('tok_live_secret', $provider->stored[42]['integrations.bryx_token']);
+        foreach ($provider->applyCalls as $call) {
+            $this->assertArrayNotHasKey('integrations.bryx_token', $call['patch']);
+        }
+    }
+
+    public function test_secret_value_is_still_validated(): void
+    {
+        $provider = $this->bindProvider();
+
+        $this->withToken('core-key')->patchJson('/api/internal/settings/42', $this->body(['integrations.bryx_token' => 'short']))
+            ->assertOk()
+            ->assertJsonPath('results', ['integrations.bryx_token' => ['status' => 'invalid', 'message' => 'The Bryx API token field must be at least 8 characters.']]);
+
+        $this->assertSame([], $provider->applyCalls);
+    }
 }

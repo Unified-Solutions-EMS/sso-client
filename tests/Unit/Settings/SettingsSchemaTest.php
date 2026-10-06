@@ -14,8 +14,8 @@ class SettingsSchemaTest extends TestCase
     {
         $schema = (new FakeSettingsProvider)->schema()->toArray();
 
-        $this->assertSame(['dispatch', 'numbering'], array_column($schema['groups'], 'key'));
-        $this->assertSame([1, 2], array_column($schema['groups'], 'order'));
+        $this->assertSame(['dispatch', 'numbering', 'integrations'], array_column($schema['groups'], 'key'));
+        $this->assertSame([1, 2, 3], array_column($schema['groups'], 'order'));
         $this->assertSame('Dispatch alerts', $schema['groups'][0]['label']);
         $this->assertSame(
             ['alerts.pre_pickup', 'alerts.pre_pickup_minutes', 'alerts.quiet_start'],
@@ -38,6 +38,7 @@ class SettingsSchemaTest extends TestCase
             'default' => 15,
             'requires' => ['alerts.pre_pickup'],
             'danger' => false,
+            'secret' => false,
             'group' => 'dispatch',
         ], $setting);
     }
@@ -58,6 +59,14 @@ class SettingsSchemaTest extends TestCase
         $this->assertSame('entity', $station['type']);
         $this->assertSame('station', $station['entity']);
         $this->assertSame(['station'], $station['requires']);
+    }
+
+    public function test_secret_flag_serializes(): void
+    {
+        $token = (new FakeSettingsProvider)->schema()->toArray()['groups'][2]['settings'][0];
+
+        $this->assertSame('integrations.bryx_token', $token['key']);
+        $this->assertTrue($token['secret']);
     }
 
     public function test_explicit_group_order_wins_over_declaration_order(): void

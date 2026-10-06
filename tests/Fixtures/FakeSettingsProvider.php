@@ -40,7 +40,9 @@ class FakeSettingsProvider implements SettingsProvider
             ->danger()
             ->multiSelect('numbering.service_types', 'Numbered service types', ['ems' => 'EMS', 'fire' => 'Fire'])
             ->entity('dispatch.default_station', 'Default station', SettingEntity::Station)->requires('station')
-            ->textarea('numbering.notes', 'Notes');
+            ->textarea('numbering.notes', 'Notes')
+            ->group('integrations', 'Integrations')
+            ->text('integrations.bryx_token', 'Bryx API token')->rules('min:8')->secret();
     }
 
     public function values(int $ssoCompanyId): array

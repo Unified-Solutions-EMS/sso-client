@@ -23,6 +23,8 @@ final class Setting
 
     private bool $danger = false;
 
+    private bool $secret = false;
+
     /**
      * @param  array<int, array{value: string|int, label: string}>  $options
      */
@@ -64,6 +66,16 @@ final class Setting
     public function setDanger(bool $danger): void
     {
         $this->danger = $danger;
+    }
+
+    public function setSecret(bool $secret): void
+    {
+        $this->secret = $secret;
+    }
+
+    public function isSecret(): bool
+    {
+        return $this->secret;
     }
 
     public function default(): mixed
@@ -129,6 +141,7 @@ final class Setting
             'default' => $this->default,
             'requires' => $this->requires,
             'danger' => $this->danger,
+            'secret' => $this->secret,
             'group' => $this->group,
         ];
     }

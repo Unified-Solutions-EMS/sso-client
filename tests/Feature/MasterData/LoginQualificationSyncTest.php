@@ -83,4 +83,28 @@ class LoginQualificationSyncTest extends MasterDataTestCase
         $this->assertSame([$medic], $this->assignedIds($userId, $companyId));
         $this->assertNull($this->mirrored($companyId, 502));
     }
+
+    public function test_login_treats_the_payload_as_the_active_set_and_leaves_inactive_assignments_alone(): void
+    {
+        $companyId = $this->company(70);
+        $userId = $this->user(9001);
+        $medic = $this->localQualification($companyId, 'Paramedic', 501);
+        $driver = $this->localQualification($companyId, 'Driver', 502);
+        $retired = $this->localQualification($companyId, 'Retired Cert', 503);
+        DB::table('qualifications')->where('id', $retired)->update(['is_active' => false]);
+        foreach ([$medic, $driver, $retired] as $id) {
+            $this->assign($userId, $companyId, $id);
+        }
+
+        // SSO omits the inactive qualification from /api/user even though the
+        // user still holds it; Driver was genuinely removed.
+        $this->login([['id' => 70, 'name' => 'Agency 70', 'qualifications' => [['id' => 501, 'name' => 'Paramedic']]]]);
+
+        $this->assertEqualsCanonicalizing([$medic, $retired], $this->assignedIds($userId, $companyId));
+
+        // Logging in again changes nothing: no flapping against the webhook state.
+        $this->login([['id' => 70, 'name' => 'Agency 70', 'qualifications' => [['id' => 501, 'name' => 'Paramedic']]]]);
+
+        $this->assertEqualsCanonicalizing([$medic, $retired], $this->assignedIds($userId, $companyId));
+    }
 }

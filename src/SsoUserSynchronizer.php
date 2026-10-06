@@ -493,8 +493,11 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
 
     /**
      * Mirror the user's qualifications in each company from
-     * `companies[].qualifications` (SSO ids + names), replacing the user's
-     * SSO-linked assignments in that company, the same way roles are synced.
+     * `companies[].qualifications` (SSO ids + names). The payload carries only
+     * ACTIVE qualifications, so it replaces the user's assignments to active
+     * SSO-linked rows and leaves assignments to inactive rows to the webhook
+     * and resync path (which carry the full set) — a login never undoes a
+     * webhook.
      *
      * No-op unless the app opted in (`sso.master_data.qualifications`) and ran
      * the mirror migration, and per company when the payload has no
@@ -534,7 +537,7 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
                 foreach ($withQualifications as $companyData) {
                     $localCompanyId = (int) $localCompanies[$companyData['id']]->id;
                     $ssoIds = $mirror->ensureFromLoginPayload($localCompanyId, $companyData['qualifications']);
-                    $mirror->replaceUserAssignments($localCompanyId, (int) $user->id, $ssoIds);
+                    $mirror->replaceUserAssignments($localCompanyId, (int) $user->id, $ssoIds, activeOnly: true);
                 }
             });
         } catch (\Throwable $e) {

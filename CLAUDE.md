@@ -150,8 +150,17 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   `qualification.deleted` (`is_active=false`), `user.qualifications_changed` (the user's full set
   in that company). The payload's `updated_at` is stored (UTC) in `sso_updated_at`; a
   `qualification.created|updated` delivery older than the stored value is ignored and acked
-  `"status": "stale"` (SSO queues deliveries, so they can arrive out of order). A resync always wins. `/api/user` `companies[].qualifications: [{id, name}]` is mirrored on login by
-  `SsoUserSynchronizer` (no-op when the key is absent). Assignment replacement only touches rows
+  `"status": "stale"` (SSO queues deliveries, so they can arrive out of order). A resync always wins.
+  SSO gives no ordering guarantee across events either: a `user.qualifications_changed` naming an
+  SSO id the mirror lacks pulls the company's catalog once from the internal endpoint, inserts the
+  missing rows, then applies the assignment (if SSO is unreachable, unknown ids are skipped and
+  logged; the next resync heals). `applies_to` is a hint for readers, not a delivery filter: SSO
+  sends every qualification event to every app that has the entity enabled, and the mirror stores
+  them all; `HasMirroredQualifications` / `QualificationCatalog` apply the filter when reading. `/api/user` `companies[].qualifications: [{id, name}]` (also on the roster endpoint
+  `sso:sync-users` reads) is mirrored on login by `SsoUserSynchronizer` (no-op when the key is
+  absent). That payload carries only ACTIVE qualifications, while webhooks and the internal
+  endpoint carry the full set, so the login sync only adds/removes assignments to active rows and
+  never touches assignments to inactive ones; a login cannot undo a webhook. Assignment replacement only touches rows
   linked to SSO, so unlinked pre-cutover rows keep their assignments; an SSO row with no linked
   local row adopts a single unlinked row of the same name (case-insensitive) instead of inserting a
   duplicate. Read side: `MasterData\Qualifications\HasMirroredQualifications` on the User model

@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Schema;
 use InvalidArgumentException;
 use Unified\SsoClient\MasterData\Contracts\EntityMirror;
 use Unified\SsoClient\MasterData\LocalTenantResolver;
+use Unified\SsoClient\MasterData\MasterDataClient;
 
 /**
  * Mirrors SSO's qualifications catalog into the app's existing
@@ -38,7 +39,10 @@ class QualificationMirror implements EntityMirror
 
     public const SSO_UPDATED_AT_COLUMN = 'sso_updated_at';
 
-    public function __construct(private readonly LocalTenantResolver $tenants) {}
+    public function __construct(
+        private readonly LocalTenantResolver $tenants,
+        private readonly MasterDataClient $client,
+    ) {}
 
     public function entity(): string
     {
@@ -214,13 +218,20 @@ class QualificationMirror implements EntityMirror
      * Replace one user's linked assignments in one company with exactly the
      * given SSO qualification ids.
      *
+     * With $activeOnly the given ids are the user's ACTIVE set (the /api/user
+     * and roster payloads carry only active qualifications), so only
+     * assignments to active local rows are eligible for removal. Assignments
+     * to inactive rows are left for the webhook/resync path, which carries the
+     * full set; a login therefore never undoes a webhook.
+     *
      * @param  array<int, int|string>  $ssoQualificationIds
      * @param  array<int, int>|null  $linkedMap  local id keyed by SSO id, to skip the lookup in bulk runs
      * @return array{added: int, removed: int, unknown: list<int>}
      */
-    public function replaceUserAssignments(int $localCompanyId, int $localUserId, array $ssoQualificationIds, ?array $linkedMap = null): array
+    public function replaceUserAssignments(int $localCompanyId, int $localUserId, array $ssoQualificationIds, ?array $linkedMap = null, bool $activeOnly = false): array
     {
         $linkedMap ??= $this->linkedMap($localCompanyId);
+        $managed = $activeOnly ? $this->linkedMap($localCompanyId, activeOnly: true) : $linkedMap;
 
         $desired = [];
         $unknown = [];
@@ -246,7 +257,7 @@ class QualificationMirror implements EntityMirror
             ->unique()
             ->all();
 
-        $remove = array_values(array_diff($current, array_keys($desired)));
+        $remove = array_values(array_intersect(array_diff($current, array_keys($desired)), array_values($managed)));
         $add = array_values(array_diff(array_keys($desired), $current));
 
         if ($remove !== []) {
@@ -413,10 +424,15 @@ class QualificationMirror implements EntityMirror
      *
      * @return array<int, int>
      */
-    public function linkedMap(int $localCompanyId): array
+    public function linkedMap(int $localCompanyId, bool $activeOnly = false): array
     {
         $map = [];
-        foreach ($this->scoped($localCompanyId)->whereNotNull(self::SSO_ID_COLUMN)->get(['id', self::SSO_ID_COLUMN]) as $row) {
+        $rows = $this->scoped($localCompanyId)
+            ->whereNotNull(self::SSO_ID_COLUMN)
+            ->when($activeOnly, fn (Builder $query) => $query->where('is_active', true))
+            ->get(['id', self::SSO_ID_COLUMN]);
+
+        foreach ($rows as $row) {
             $map[(int) $row->{self::SSO_ID_COLUMN}] = (int) $row->id;
         }
 
@@ -457,13 +473,53 @@ class QualificationMirror implements EntityMirror
             return ['status' => 'skipped', 'reason' => 'user_not_found'];
         }
 
-        $result = $this->replaceUserAssignments(
-            $localCompanyId,
-            $localUserId,
-            array_values((array) ($payload['qualification_ids'] ?? [])),
-        );
+        $ssoQualificationIds = array_values((array) ($payload['qualification_ids'] ?? []));
+        $linkedMap = $this->linkedMap($localCompanyId);
+        $missing = array_filter($ssoQualificationIds, fn ($id): bool => (int) $id > 0 && ! isset($linkedMap[(int) $id]));
+
+        if ($missing !== []) {
+            $linkedMap = $this->fetchMissingCatalogRows($localCompanyId, $payload['company']['id'] ?? null) ?? $linkedMap;
+        }
+
+        $result = $this->replaceUserAssignments($localCompanyId, $localUserId, $ssoQualificationIds, $linkedMap);
 
         return ['status' => 'ok'] + $result;
+    }
+
+    /**
+     * SSO does not order webhook deliveries, so user.qualifications_changed
+     * can arrive before the qualification.created it depends on. Pull the
+     * company's catalog once and insert the rows we lack, so the assignment
+     * is not dropped until the next resync. Existing rows are not touched
+     * (their own webhooks carry the stale-delivery guard).
+     *
+     * @return array<int, int>|null the refreshed linked map, or null when SSO could not be reached
+     */
+    private function fetchMissingCatalogRows(int $localCompanyId, mixed $ssoCompanyId): ?array
+    {
+        if (! is_int($ssoCompanyId) && ! is_string($ssoCompanyId)) {
+            return null;
+        }
+
+        try {
+            $records = $this->snapshotRecords($this->client->fetch($this->entity(), $ssoCompanyId));
+        } catch (\Throwable $e) {
+            Log::warning('SSO master data: catalog fetch for an early assignment failed, unknown ids skipped', [
+                'company_id' => $localCompanyId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+
+        $linkedMap = $this->linkedMap($localCompanyId);
+        foreach ($records as $record) {
+            if (! isset($linkedMap[(int) $record['id']])) {
+                $this->upsert($localCompanyId, $record);
+            }
+        }
+
+        return $this->linkedMap($localCompanyId);
     }
 
     /**

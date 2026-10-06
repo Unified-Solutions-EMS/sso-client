@@ -3,6 +3,7 @@
 namespace Unified\SsoClient\Tests\Feature\MasterData;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 
 class QualificationWebhookTest extends MasterDataTestCase
 {
@@ -103,6 +104,7 @@ class QualificationWebhookTest extends MasterDataTestCase
         $driver = $this->localQualification($companyId, 'Driver', 502);
         $this->assign($userId, $companyId, $emt);
         $this->assign($userId, $companyId, $medic);
+        Http::fake(['sso.test/*' => Http::response(['message' => 'down'], 503)]);
 
         $this->postWebhook('user.qualifications_changed', [
             'company' => ['id' => 70],
@@ -260,5 +262,73 @@ class QualificationWebhookTest extends MasterDataTestCase
         $row = $this->mirrored($companyId, 501);
         $this->assertSame('Paramedic II', $row->name);
         $this->assertSame('2026-10-06 12:30:00', $row->sso_updated_at);
+    }
+
+    public function test_an_assignment_that_arrives_before_its_qualification_pulls_the_catalog_once(): void
+    {
+        $companyId = $this->company(70);
+        $userId = $this->user(9001);
+        $this->localQualification($companyId, 'Driver', 502);
+
+        Http::fake(['sso.test/api/internal/companies/70/qualifications' => Http::response([
+            'company' => ['id' => 70],
+            'qualifications' => [
+                $this->qualificationRecord(501, 'Paramedic', ['updated_at' => '2026-10-06T12:00:00Z']),
+                $this->qualificationRecord(502, 'Driver (renamed in SSO)'),
+            ],
+            'assignments' => [],
+        ])]);
+
+        $this->postWebhook('user.qualifications_changed', [
+            'company' => ['id' => 70],
+            'user' => ['id' => 9001],
+            'qualification_ids' => [501, 502],
+        ])->assertOk()->assertJson(['status' => 'ok', 'added' => 2, 'unknown' => []]);
+
+        $medic = $this->mirrored($companyId, 501);
+        $this->assertNotNull($medic);
+        $this->assertSame('2026-10-06 12:00:00', $medic->sso_updated_at);
+        $this->assertSame('Driver', $this->mirrored($companyId, 502)->name, 'rows we already had are left to their own webhooks');
+        $this->assertEqualsCanonicalizing([(int) $medic->id, (int) $this->mirrored($companyId, 502)->id], $this->assignedIds($userId, $companyId));
+        Http::assertSentCount(1);
+
+        // The later qualification.created is then an ordinary no-op.
+        $this->postWebhook('qualification.created', [
+            'company' => ['id' => 70],
+            'qualification' => $this->qualificationRecord(501, 'Paramedic', ['updated_at' => '2026-10-06T12:00:00Z']),
+        ])->assertJson(['result' => 'unchanged']);
+    }
+
+    public function test_an_early_assignment_skips_unknown_ids_when_sso_is_unreachable(): void
+    {
+        $companyId = $this->company(70);
+        $userId = $this->user(9001);
+        $driver = $this->localQualification($companyId, 'Driver', 502);
+        Http::fake(['sso.test/*' => Http::response(['message' => 'down'], 500)]);
+
+        $this->postWebhook('user.qualifications_changed', [
+            'company' => ['id' => 70],
+            'user' => ['id' => 9001],
+            'qualification_ids' => [501, 502],
+        ])->assertOk()->assertJson(['status' => 'ok', 'added' => 1, 'unknown' => [501]]);
+
+        $this->assertNull($this->mirrored($companyId, 501));
+        $this->assertSame([$driver], $this->assignedIds($userId, $companyId));
+    }
+
+    public function test_an_assignment_with_only_known_ids_does_not_call_sso(): void
+    {
+        $companyId = $this->company(70);
+        $this->user(9001);
+        $this->localQualification($companyId, 'Driver', 502);
+        Http::fake();
+
+        $this->postWebhook('user.qualifications_changed', [
+            'company' => ['id' => 70],
+            'user' => ['id' => 9001],
+            'qualification_ids' => [502],
+        ])->assertOk();
+
+        Http::assertNothingSent();
     }
 }

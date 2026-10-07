@@ -41,9 +41,7 @@ class SsoActionController extends Controller
                 return response()->json(['error' => 'Invalid action handler'], 500);
             }
 
-            $result = $handler->handle($request->json()->all());
-
-            return response()->json($result);
+            return ActionResponse::from($handler->handle($request->json()->all()))->toResponse();
         } catch (\Throwable $e) {
             Log::error("SSO action [{$action}] failed", [
                 'error' => $e->getMessage(),

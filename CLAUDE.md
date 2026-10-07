@@ -115,6 +115,15 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
 - **Dashboard + action endpoints** — `POST /api/sso/dashboard` (`config('sso.dashboard_provider')`
   implementing `DashboardDataProvider`) and `POST /api/sso/actions/{action}`
   (`config('sso.action_handlers')` map to `SsoActionHandler`), both HMAC-verified.
+  Action handlers return `array|ActionResponse`. A plain array is a 200, as it always was. To answer
+  with another status, either put an integer `http_status` (200-599) in the array (the controller
+  uses it as the status and strips the key from the body) or return
+  `Unified\SsoClient\Http\ActionResponse` — `ok(array)`, `notFound($message)` (404),
+  `tooManyRequests($message, ?$retryAfterSeconds)` (429, sets `Retry-After`),
+  `notImplemented($message)` (501, e.g. a missing third-party key), `error($status, $body)`. Prefer
+  `ActionResponse` in new handlers. Apps must not bind their own controller over `SsoActionController`
+  to get statuses (CAD's `CadSsoActionController` existed only because this was missing). Anything a
+  handler throws is still a 500.
 - **Session actions** — `EnforceSsoSessionActions` is auto-appended to the `web` group in every app,
   so impersonation/forced-logout land on the next request without per-app wiring.
 - **Legacy cookie scrub** — `Middleware\PurgeLegacyApexCookies` (`sso.purge-legacy-cookies`), also

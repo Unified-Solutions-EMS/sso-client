@@ -12,7 +12,8 @@ use Unified\SsoClient\MasterData\MasterDataClient;
 use Unified\SsoClient\MasterData\MasterDataRegistry;
 
 /**
- * One-time upward seed for the per-app cutover: sends each company's local
+ * One-time upward seed for the per-app cutover, run with the entity still
+ * disabled (only the mirror migration is required): sends each company's local
  * catalog and assignments to SSO's import endpoint and links the local rows
  * to the SSO ids in the response mapping, so no name re-match is needed.
  *
@@ -32,7 +33,10 @@ class PushMasterDataCommand extends MasterDataCommand
     {
         $entity = (string) $this->argument('entity');
 
-        $mirror = $this->resolveMirror($registry, $entity);
+        // The push runs BEFORE the entity is enabled: while the mirror is
+        // live, webhooks and logins would already be replacing this app's
+        // assignments with SSO's set, which does not include them yet.
+        $mirror = $this->resolveMirror($registry, $entity, requireEnabled: false);
 
         if ($mirror === null) {
             return self::FAILURE;

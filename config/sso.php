@@ -268,6 +268,15 @@ return [
     */
     'master_data' => [
         'qualifications' => env('SSO_MASTER_DATA_QUALIFICATIONS', false),
+
+        // Daily `sso:resync-master-data <entity>` for every enabled entity,
+        // so assignments dropped by early-arriving webhooks (user not yet
+        // provisioned) heal without waiting for that user to log in.
+        'schedule_resync' => env('SSO_MASTER_DATA_SCHEDULE_RESYNC', true),
+
+        // Seconds for the resync fetch and the push import. SSO's import fans
+        // out per user synchronously, far beyond the 10 s login timeout.
+        'timeout' => env('SSO_MASTER_DATA_TIMEOUT', 120),
     ],
 
     /*

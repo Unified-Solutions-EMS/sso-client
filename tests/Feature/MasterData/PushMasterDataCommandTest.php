@@ -2,6 +2,7 @@
 
 namespace Unified\SsoClient\Tests\Feature\MasterData;
 
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -71,9 +72,10 @@ class PushMasterDataCommandTest extends MasterDataTestCase
         $companyId = $this->company(70);
         $medic = $this->localQualification($companyId, 'Paramedic');
         $driver = $this->localQualification($companyId, 'Driver');
-        $this->travelTo('2026-10-07 15:30:00');
-
-        $this->fakeImport([(string) $medic => 501, (string) $driver => 502], [
+        $this->fakeImport([
+            (string) $medic => ['sso_id' => 501, 'updated_at' => '2026-10-07T11:30:00-04:00'],
+            (string) $driver => ['sso_id' => 502, 'updated_at' => '2026-10-07T15:30:05Z'],
+        ], [
             'created' => 1,
             'matched' => 1,
             'assignments_added' => 4,
@@ -89,6 +91,7 @@ class PushMasterDataCommandTest extends MasterDataTestCase
         $this->assertSame($medic, (int) $this->mirrored($companyId, 501)->id);
         $this->assertSame($driver, (int) $this->mirrored($companyId, 502)->id);
         $this->assertSame('2026-10-07 15:30:00', $this->mirrored($companyId, 501)->sso_updated_at);
+        $this->assertSame('2026-10-07 15:30:05', $this->mirrored($companyId, 502)->sso_updated_at);
         $this->assertSame(2, DB::table('qualifications')->count());
     }
 
@@ -155,14 +158,72 @@ class PushMasterDataCommandTest extends MasterDataTestCase
         $this->assertNull(DB::table('qualifications')->where('id', $medic)->value('sso_qualification_id'));
     }
 
-    public function test_it_refuses_when_the_entity_is_disabled(): void
+    public function test_it_runs_while_the_entity_is_still_disabled(): void
+    {
+        config(['sso.master_data.qualifications' => false]);
+        $companyId = $this->company(70);
+        $medic = $this->localQualification($companyId, 'Paramedic');
+        $this->fakeImport([(string) $medic => 501]);
+
+        $this->artisan('sso:push-master-data', ['entity' => 'qualifications'])
+            ->expectsOutputToContain('linked=1')
+            ->assertSuccessful();
+
+        $this->assertSame($medic, (int) $this->mirrored($companyId, 501)->id);
+    }
+
+    public function test_the_bare_int_mapping_form_leaves_sso_updated_at_empty_so_the_next_delivery_applies(): void
+    {
+        $companyId = $this->company(70);
+        $medic = $this->localQualification($companyId, 'Paramedic');
+        $this->fakeImport([(string) $medic => 501]);
+
+        $this->artisan('sso:push-master-data', ['entity' => 'qualifications'])->assertSuccessful();
+
+        $this->assertNull($this->mirrored($companyId, 501)->sso_updated_at);
+
+        $this->postWebhook('qualification.updated', [
+            'company' => ['id' => 70],
+            'qualification' => $this->qualificationRecord(501, 'Paramedic', ['description' => 'From SSO', 'updated_at' => '2026-10-07T09:00:00Z']),
+        ])->assertJson(['status' => 'ok', 'result' => 'updated']);
+    }
+
+    public function test_the_imports_own_webhooks_are_not_stale_against_the_mapping_stamp(): void
+    {
+        $companyId = $this->company(70);
+        $medic = $this->localQualification($companyId, 'paramedic');
+        $this->fakeImport([(string) $medic => ['sso_id' => 501, 'updated_at' => '2026-10-07T12:00:00Z']]);
+
+        $this->artisan('sso:push-master-data', ['entity' => 'qualifications'])->assertSuccessful();
+
+        $this->postWebhook('qualification.created', [
+            'company' => ['id' => 70],
+            'qualification' => $this->qualificationRecord(501, 'Paramedic', ['applies_to' => ['cloudpcr'], 'updated_at' => '2026-10-07T12:00:00Z']),
+        ])->assertJson(['status' => 'ok', 'result' => 'updated']);
+
+        $this->assertSame('Paramedic', $this->mirrored($companyId, 501)->name);
+    }
+
+    public function test_an_import_timeout_prints_a_clear_message_and_links_nothing(): void
+    {
+        config(['sso.master_data.timeout' => 120]);
+        $companyId = $this->company(70);
+        $medic = $this->localQualification($companyId, 'Paramedic');
+        Http::fake(fn () => throw new ConnectionException('cURL error 28: Operation timed out after 120001 milliseconds'));
+
+        $this->artisan('sso:push-master-data', ['entity' => 'qualifications'])
+            ->expectsOutputToContain('did not answer qualifications/import for company 70 within 120s; nothing was changed locally')
+            ->assertFailed();
+
+        $this->assertNull(DB::table('qualifications')->where('id', $medic)->value('sso_qualification_id'));
+    }
+
+    public function test_an_unknown_entity_is_refused_even_when_disabled(): void
     {
         config(['sso.master_data.qualifications' => false]);
         Http::fake();
 
-        $this->artisan('sso:push-master-data', ['entity' => 'qualifications'])
-            ->expectsOutputToContain('disabled')
-            ->assertFailed();
+        $this->artisan('sso:push-master-data', ['entity' => 'vehicles'])->assertFailed();
 
         Http::assertNothingSent();
     }

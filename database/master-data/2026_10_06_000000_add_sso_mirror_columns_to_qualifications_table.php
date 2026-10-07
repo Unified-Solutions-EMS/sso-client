@@ -23,8 +23,9 @@ return new class extends Migration
         $addAppliesTo = ! Schema::hasColumn('qualifications', 'applies_to');
         $addIsActive = ! Schema::hasColumn('qualifications', 'is_active');
         $addSsoUpdatedAt = ! Schema::hasColumn('qualifications', 'sso_updated_at');
+        $addLinkPending = ! Schema::hasColumn('qualifications', 'sso_link_pending');
 
-        Schema::table('qualifications', function (Blueprint $table) use ($addSsoId, $addAppliesTo, $addIsActive, $addSsoUpdatedAt): void {
+        Schema::table('qualifications', function (Blueprint $table) use ($addSsoId, $addAppliesTo, $addIsActive, $addSsoUpdatedAt, $addLinkPending): void {
             if ($addSsoId) {
                 $table->unsignedBigInteger('sso_qualification_id')->nullable()->after('company_id');
             }
@@ -41,6 +42,13 @@ return new class extends Migration
             // delivery cannot overwrite a newer one.
             if ($addSsoUpdatedAt) {
                 $table->timestamp('sso_updated_at')->nullable();
+            }
+
+            // A row a webhook or login linked by name before this app pushed
+            // its data to SSO. Deliveries leave it and its assignments alone
+            // until the push, --link-by-name or a full resync confirms it.
+            if ($addLinkPending) {
+                $table->boolean('sso_link_pending')->default(false);
             }
         });
 
@@ -71,7 +79,7 @@ return new class extends Migration
         }
 
         $columns = array_values(array_filter(
-            ['sso_qualification_id', 'applies_to', 'is_active', 'sso_updated_at'],
+            ['sso_qualification_id', 'applies_to', 'is_active', 'sso_updated_at', 'sso_link_pending'],
             fn (string $column): bool => Schema::hasColumn('qualifications', $column),
         ));
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Unified\SsoClient\MasterData;
 
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Unified\SsoClient\MasterData\Exceptions\MasterDataSyncException;
@@ -54,13 +55,26 @@ class MasterDataClient
 
         $url = $baseUrl.'/api/internal/companies/'.rawurlencode((string) $ssoCompanyId).'/'.rawurlencode($entity).$suffix;
 
+        $timeout = (int) config('sso.master_data.timeout', 120);
+
         try {
             $request = Http::withToken($apiKey)
                 ->acceptJson()
-                ->timeout((int) config('sso.timeout', 10));
+                ->timeout($timeout);
 
             /** @var Response $response */
             $response = $method === 'post' ? $request->post($url, $payload) : $request->get($url);
+        } catch (ConnectionException $e) {
+            if (str_contains($e->getMessage(), 'cURL error 28') || stripos($e->getMessage(), 'timed out') !== false) {
+                throw new MasterDataSyncException(
+                    "SSO did not answer {$entity}{$suffix} for company {$ssoCompanyId} within {$timeout}s; nothing was changed locally. "
+                    .'SSO may still finish the request. Rerun it (it is idempotent) or raise SSO_MASTER_DATA_TIMEOUT.',
+                    0,
+                    $e,
+                );
+            }
+
+            throw new MasterDataSyncException("Could not reach SSO for {$entity}: {$e->getMessage()}", 0, $e);
         } catch (\Throwable $e) {
             throw new MasterDataSyncException("Could not reach SSO for {$entity}: {$e->getMessage()}", 0, $e);
         }

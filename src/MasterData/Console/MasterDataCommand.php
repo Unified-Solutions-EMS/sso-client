@@ -10,12 +10,13 @@ use Unified\SsoClient\MasterData\LocalTenantResolver;
 use Unified\SsoClient\MasterData\MasterDataRegistry;
 
 /**
- * Shared guards for the master-data commands: the entity must be known,
- * enabled in `sso.master_data`, and its mirror migration applied.
+ * Shared guards for the master-data commands: the entity must be known, its
+ * mirror migration applied, and (except for the pre-enable push) enabled in
+ * `sso.master_data`.
  */
 abstract class MasterDataCommand extends Command
 {
-    protected function resolveMirror(MasterDataRegistry $registry, string $entity): ?EntityMirror
+    protected function resolveMirror(MasterDataRegistry $registry, string $entity, bool $requireEnabled = true): ?EntityMirror
     {
         if (! $registry->knows($entity)) {
             $this->error("Unknown entity [{$entity}]. Known: ".implode(', ', $registry->entities()).'.');
@@ -23,7 +24,7 @@ abstract class MasterDataCommand extends Command
             return null;
         }
 
-        if (! $registry->enabled($entity)) {
+        if ($requireEnabled && ! $registry->enabled($entity)) {
             $this->error("sso.master_data.{$entity} is disabled. Enable it first.");
 
             return null;

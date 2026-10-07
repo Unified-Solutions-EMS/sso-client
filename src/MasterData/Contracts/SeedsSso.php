@@ -17,7 +17,8 @@ interface SeedsSso
     public function buildImportPayload(int $localCompanyId): array;
 
     /**
-     * @param  array<int|string, int|string>  $mapping  SSO id keyed by local id
+     * @param  array<int|string, int|string|array{sso_id: int|string, updated_at?: string|null}>  $mapping
+     *                                                                                                      SSO id (or {sso_id, updated_at}) keyed by local id
      * @return array{applied: int, collisions: list<array{local_id: int, sso_id: int, reason: string}>}
      */
     public function applyImportMapping(int $localCompanyId, array $mapping): array;

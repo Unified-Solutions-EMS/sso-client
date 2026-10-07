@@ -40,6 +40,15 @@ class QualificationMirror implements EntityMirror, SeedsSso
 
     public const SSO_UPDATED_AT_COLUMN = 'sso_updated_at';
 
+    /**
+     * True on a local row that a webhook or login linked by name before the
+     * app pushed its data to SSO. Until the push mapping, --link-by-name or a
+     * full resync confirms it, deliveries leave the row's fields and its
+     * assignments alone: SSO's set for it does not yet include this app's
+     * holders, so replacing from SSO would delete them.
+     */
+    public const LINK_PENDING_COLUMN = 'sso_link_pending';
+
     public function __construct(
         private readonly LocalTenantResolver $tenants,
         private readonly MasterDataClient $client,
@@ -74,7 +83,7 @@ class QualificationMirror implements EntityMirror, SeedsSso
     {
         return Schema::hasTable(self::TABLE)
             && Schema::hasTable(self::ASSIGNMENT_TABLE)
-            && Schema::hasColumns(self::TABLE, [self::SSO_ID_COLUMN, 'applies_to', 'is_active', self::SSO_UPDATED_AT_COLUMN]);
+            && Schema::hasColumns(self::TABLE, [self::SSO_ID_COLUMN, 'applies_to', 'is_active', self::SSO_UPDATED_AT_COLUMN, self::LINK_PENDING_COLUMN]);
     }
 
     public function applyWebhook(string $event, int $localCompanyId, array $payload): array
@@ -83,7 +92,7 @@ class QualificationMirror implements EntityMirror, SeedsSso
             'qualification.created', 'qualification.updated' => $this->applyUpsertWebhook($event, $localCompanyId, (array) ($payload['qualification'] ?? [])),
             'qualification.deleted' => [
                 'status' => 'ok',
-                'result' => $this->deactivate($localCompanyId, (int) ($payload['qualification']['id'] ?? 0)) ? 'deactivated' : 'not_found',
+                'result' => $this->deactivate($localCompanyId, (int) ($payload['qualification']['id'] ?? 0)),
             ],
             'user.qualifications_changed' => $this->applyAssignmentWebhook($localCompanyId, $payload),
             default => ['status' => 'ignored', 'reason' => 'unknown_event'],
@@ -97,15 +106,18 @@ class QualificationMirror implements EntityMirror, SeedsSso
      * same name (case-insensitive) when exactly one exists, so the mirror never
      * creates a duplicate of a qualification the agency already had.
      *
-     * With $rejectStale (webhook deliveries), a record whose updated_at is
-     * older than the stored sso_updated_at is ignored and 'stale' returned:
-     * SSO queues deliveries, so an older one can arrive after a newer one.
-     * A resync passes false because the snapshot is current by definition.
+     * $delivery marks a webhook or login (as opposed to a resync, which is
+     * authoritative and current by definition):
+     * - a record older than the stored sso_updated_at is ignored ('stale');
+     *   SSO queues deliveries, so an older one can arrive after a newer one;
+     * - adoption only links the row and marks it pending; the local name,
+     *   description, applies_to and activity stay as the agency had them;
+     * - a pending row is left untouched ('pending') until confirmed.
      *
      * @param  array<string, mixed>  $record
-     * @return 'created'|'updated'|'linked'|'unchanged'|'stale'
+     * @return 'created'|'updated'|'linked'|'unchanged'|'stale'|'pending'
      */
-    public function upsert(int $localCompanyId, array $record, bool $rejectStale = false): string
+    public function upsert(int $localCompanyId, array $record, bool $delivery = false): string
     {
         $ssoId = (int) ($record['id'] ?? 0);
         $name = trim((string) ($record['name'] ?? ''));
@@ -124,8 +136,14 @@ class QualificationMirror implements EntityMirror, SeedsSso
 
         $row = $this->findLinked($localCompanyId, $ssoId);
 
-        if ($rejectStale && $row !== null && $this->isStale($row, $attributes['sso_updated_at'])) {
-            return 'stale';
+        if ($delivery && $row !== null) {
+            if ((bool) $row->{self::LINK_PENDING_COLUMN}) {
+                return 'pending';
+            }
+
+            if ($this->isStale($row, $attributes['sso_updated_at'])) {
+                return 'stale';
+            }
         }
 
         if ($row === null) {
@@ -137,39 +155,46 @@ class QualificationMirror implements EntityMirror, SeedsSso
                 return 'created';
             }
 
+            $link = $delivery
+                ? [self::SSO_ID_COLUMN => $ssoId, self::LINK_PENDING_COLUMN => true]
+                : $this->toColumns($attributes) + [self::SSO_ID_COLUMN => $ssoId, self::LINK_PENDING_COLUMN => false];
+
             $this->scoped($localCompanyId)
                 ->where('id', $candidate->id)
                 ->whereNull(self::SSO_ID_COLUMN)
-                ->update($this->toColumns($attributes) + [self::SSO_ID_COLUMN => $ssoId, 'updated_at' => now()]);
+                ->update($link + ['updated_at' => now()]);
 
             return 'linked';
         }
 
-        if ($this->matches($row, $attributes)) {
+        if (! (bool) $row->{self::LINK_PENDING_COLUMN} && $this->matches($row, $attributes)) {
             return 'unchanged';
         }
 
         $this->scoped($localCompanyId)
             ->where('id', $row->id)
-            ->update($this->toColumns($attributes) + ['updated_at' => now()]);
+            ->update($this->toColumns($attributes) + [self::LINK_PENDING_COLUMN => false, 'updated_at' => now()]);
 
         return 'updated';
     }
 
     /**
      * SSO deleted the qualification. The row is deactivated, never removed:
-     * shifts, slots and gates in the app may still reference it.
+     * shifts, slots and gates in the app may still reference it. A pending
+     * (name-adopted, unconfirmed) row is left alone until confirmed.
+     *
+     * @return 'deactivated'|'not_found'|'pending'
      */
-    public function deactivate(int $localCompanyId, int $ssoId): bool
+    public function deactivate(int $localCompanyId, int $ssoId): string
     {
-        if ($ssoId <= 0) {
-            return false;
-        }
-
-        $row = $this->findLinked($localCompanyId, $ssoId);
+        $row = $ssoId > 0 ? $this->findLinked($localCompanyId, $ssoId) : null;
 
         if ($row === null) {
-            return false;
+            return 'not_found';
+        }
+
+        if ((bool) $row->{self::LINK_PENDING_COLUMN}) {
+            return 'pending';
         }
 
         if ((bool) $row->is_active) {
@@ -178,13 +203,14 @@ class QualificationMirror implements EntityMirror, SeedsSso
                 ->update(['is_active' => false, 'updated_at' => now()]);
         }
 
-        return true;
+        return 'deactivated';
     }
 
     /**
      * Make sure every qualification named in the /api/user payload exists
-     * locally. Existing rows are left as they are (the login payload carries
-     * only id and name, so it must not overwrite the catalog fields).
+     * locally. Existing rows are left as they are, and an adopted local row is
+     * only linked (pending): the login payload carries only id and name, so it
+     * must never overwrite a description or reset applies_to.
      *
      * @param  array<int, mixed>  $items  [{id, name}, ...]
      * @return list<int> the SSO ids that are now linked locally
@@ -206,7 +232,7 @@ class QualificationMirror implements EntityMirror, SeedsSso
             }
 
             if ($this->findLinked($localCompanyId, $ssoId) === null && $name !== '') {
-                $this->upsert($localCompanyId, ['id' => $ssoId, 'name' => $name]);
+                $this->upsert($localCompanyId, ['id' => $ssoId, 'name' => $name], delivery: true);
             }
 
             $ids[] = $ssoId;
@@ -225,6 +251,9 @@ class QualificationMirror implements EntityMirror, SeedsSso
      * to inactive rows are left for the webhook/resync path, which carries the
      * full set; a login therefore never undoes a webhook.
      *
+     * Pending rows (name-adopted before this app pushed) are never removed:
+     * SSO's set for them does not include this app's holders yet.
+     *
      * @param  array<int, int|string>  $ssoQualificationIds
      * @param  array<int, int>|null  $linkedMap  local id keyed by SSO id, to skip the lookup in bulk runs
      * @return array{added: int, removed: int, unknown: list<int>}
@@ -232,7 +261,7 @@ class QualificationMirror implements EntityMirror, SeedsSso
     public function replaceUserAssignments(int $localCompanyId, int $localUserId, array $ssoQualificationIds, ?array $linkedMap = null, bool $activeOnly = false): array
     {
         $linkedMap ??= $this->linkedMap($localCompanyId);
-        $managed = $activeOnly ? $this->linkedMap($localCompanyId, activeOnly: true) : $linkedMap;
+        $managed = $this->linkedMap($localCompanyId, activeOnly: $activeOnly, confirmedOnly: true);
 
         $desired = [];
         $unknown = [];
@@ -408,7 +437,7 @@ class QualificationMirror implements EntityMirror, SeedsSso
             $this->scoped($localCompanyId)
                 ->where('id', $localRows[0]['id'])
                 ->whereNull(self::SSO_ID_COLUMN)
-                ->update([self::SSO_ID_COLUMN => $ssoRows[0]['id'], 'updated_at' => now()]);
+                ->update([self::SSO_ID_COLUMN => $ssoRows[0]['id'], self::LINK_PENDING_COLUMN => false, 'updated_at' => now()]);
 
             $result['linked'][] = ['local_id' => $localRows[0]['id'], 'sso_id' => $ssoRows[0]['id'], 'name' => $localRows[0]['name']];
         }
@@ -491,18 +520,26 @@ class QualificationMirror implements EntityMirror, SeedsSso
     public function applyImportMapping(int $localCompanyId, array $mapping): array
     {
         $pairs = [];
-        foreach ($mapping as $localId => $ssoId) {
-            if ((int) $localId > 0 && (int) $ssoId > 0) {
-                $pairs[(int) $localId] = (int) $ssoId;
+        foreach ($mapping as $localId => $entry) {
+            $ssoId = (int) (is_array($entry) ? ($entry['sso_id'] ?? 0) : $entry);
+
+            if ((int) $localId > 0 && $ssoId > 0) {
+                $pairs[(int) $localId] = [
+                    'sso_id' => $ssoId,
+                    // SSO's own timestamp, so the webhooks this same import
+                    // dispatched are not judged stale against our clock. The
+                    // bare-int form carries none: leave it null so the next
+                    // delivery always applies.
+                    'updated_at' => is_array($entry) ? $this->normalizeTimestamp($entry['updated_at'] ?? null) : null,
+                ];
             }
         }
         ksort($pairs);
 
-        $now = now()->utc()->format('Y-m-d H:i:s');
         $applied = 0;
         $collisions = [];
 
-        foreach ($pairs as $localId => $ssoId) {
+        foreach ($pairs as $localId => ['sso_id' => $ssoId, 'updated_at' => $ssoUpdatedAt]) {
             $row = $this->scoped($localCompanyId)->where('id', $localId)->first();
 
             $reason = match (true) {
@@ -520,7 +557,11 @@ class QualificationMirror implements EntityMirror, SeedsSso
 
             $this->scoped($localCompanyId)
                 ->where('id', $localId)
-                ->update([self::SSO_ID_COLUMN => $ssoId, self::SSO_UPDATED_AT_COLUMN => $now]);
+                ->update([
+                    self::SSO_ID_COLUMN => $ssoId,
+                    self::SSO_UPDATED_AT_COLUMN => $ssoUpdatedAt,
+                    self::LINK_PENDING_COLUMN => false,
+                ]);
             $applied++;
         }
 
@@ -532,12 +573,13 @@ class QualificationMirror implements EntityMirror, SeedsSso
      *
      * @return array<int, int>
      */
-    public function linkedMap(int $localCompanyId, bool $activeOnly = false): array
+    public function linkedMap(int $localCompanyId, bool $activeOnly = false, bool $confirmedOnly = false): array
     {
         $map = [];
         $rows = $this->scoped($localCompanyId)
             ->whereNotNull(self::SSO_ID_COLUMN)
             ->when($activeOnly, fn (Builder $query) => $query->where('is_active', true))
+            ->when($confirmedOnly, fn (Builder $query) => $query->where(self::LINK_PENDING_COLUMN, false))
             ->get(['id', self::SSO_ID_COLUMN]);
 
         foreach ($rows as $row) {
@@ -553,7 +595,7 @@ class QualificationMirror implements EntityMirror, SeedsSso
      */
     private function applyUpsertWebhook(string $event, int $localCompanyId, array $record): array
     {
-        $result = $this->upsert($localCompanyId, $record, rejectStale: true);
+        $result = $this->upsert($localCompanyId, $record, delivery: true);
 
         if ($result === 'stale') {
             Log::info('SSO master data: stale qualification delivery ignored', [
@@ -623,7 +665,7 @@ class QualificationMirror implements EntityMirror, SeedsSso
         $linkedMap = $this->linkedMap($localCompanyId);
         foreach ($records as $record) {
             if (! isset($linkedMap[(int) $record['id']])) {
-                $this->upsert($localCompanyId, $record);
+                $this->upsert($localCompanyId, $record, delivery: true);
             }
         }
 

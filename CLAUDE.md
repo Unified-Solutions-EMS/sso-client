@@ -97,19 +97,27 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
 - **Settings rail** — `GET` / `PATCH /api/internal/settings/{ssoCompanyId}` behind `ValidateCoreApiKey`
   (`routes/settings.php`), read and written by SSO's central Settings page and the AI setup assistant.
   Apps implement `Contracts\SettingsProvider` (`schema()`, `values()`, `apply()`) and bind it; with
-  nothing bound both routes answer 200 `supported: false`. GET returns `{app_slug, supported, schema,
-  values}` with schema defaults filled in for keys the provider leaves out. PATCH takes
-  `{patch: {key: value}, actor: {sso_user_id, name, source: sso|app|ai}}` and always answers 200 with
+  nothing bound both routes answer 200 `supported: false`. GET returns `{app_slug, supported,
+  provisioned, schema, values}` with schema defaults filled in for keys the provider leaves out.
+  **Tenancy:** these routes have no session user, so `HasCompanyScope` protects nothing; the provider
+  resolves the company from `companies.sso_company_id` itself and filters by that local id (§4a).
+  `values()` returns `null` when the app has no such company: GET answers `provisioned: false,
+  values: null` and PATCH answers `provisioned: false, results: {}` without calling `apply()`.
+  PATCH takes `{patch: {key: value}, actor: {sso_user_id, name, source: sso|app|ai}}`
+  (`sso_user_id` required for every source; an AI change names its approver) and always answers 200 with
   per-key `results` (`saved`, `invalid` + message, `blocked` + reason, `unknown_key`); 422 means the
   body shape is wrong. The package validates every key against the schema before calling `apply()`
   (values are validated alone, so cross-field rules don't apply; use `requires()` + `blocked()`), so
   `apply()` only sees known, valid keys and only the provider ever answers `blocked`. A key the
   provider forgets to report comes back `blocked`, never assumed saved. Values are never logged.
   `secret()` settings (integration tokens, passwords) are never returned: GET answers
-  `{value: null, has_value: bool}` for them. On PATCH a non-empty string sets one, `null` clears it,
+  `{value: null, has_value: bool}` for them, and their `default` is never emitted or counted, so
+  `has_value` means a stored value. On PATCH a non-empty string sets one, `null` clears it,
   and `""` or an absent key leaves it unchanged (dropped before validation, no result entry), so a form
   that round-trips the masked field can't blank a credential. The patch is read from the raw JSON body
   because apps' global `ConvertEmptyStringsToNull` would otherwise turn `""` into a clear.
+  `atomic()` on a group (pay-period frequency + start date) tells the renderer to save the group's keys
+  in one PATCH behind an explicit Save instead of per-field autosave; package validation stays per key.
   `apply()` must call the app's own services so observers, webhooks and metrics still fire.
 
   ```php
@@ -129,22 +137,69 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
               ->select('numbering.reset', 'Reset numbering', ['yearly' => 'Every year', 'never' => 'Never'])->danger()
               ->entity('dispatch.default_station', 'Default station', SettingEntity::Station)->requires('station')
               ->group('integrations', 'Integrations')
-              ->text('integrations.bryx_token', 'Bryx API token')->rules('min:8')->secret();
+              ->text('integrations.bryx_token', 'Bryx API token')->rules('min:8')->secret()
+              ->group('pay', 'Pay period')->atomic()
+              ->select('pay.frequency', 'Pay period frequency', ['weekly' => 'Weekly', 'biweekly' => 'Every two weeks'])
+              ->text('pay.start_date', 'Pay period start date')->rules('date');
       }
 
-      public function values(int $ssoCompanyId): array
+      public function values(int $ssoCompanyId): ?array
       {
-          return $this->preferences->forSsoCompany($ssoCompanyId);
+          // No session user here: resolve by sso_company_id, then filter by that local id (§4a).
+          $company = Company::query()->where('sso_company_id', $ssoCompanyId)->first();
+
+          return $company ? $this->preferences->forCompany($company->id) : null;
       }
 
       public function apply(int $ssoCompanyId, array $patch, SettingsActor $actor): SettingsResult
       {
-          return $this->preferences->update($ssoCompanyId, $patch, $actor); // app service returns per-key results
+          $companyId = Company::query()->where('sso_company_id', $ssoCompanyId)->value('id');
+
+          return $this->preferences->update($companyId, $patch, $actor); // app service returns per-key results
       }
   }
 
   // AppServiceProvider::register()
   $this->app->bind(SettingsProvider::class, \App\Settings\Registry::class);
+  ```
+
+  **Smoke test template.** Every app that binds a provider copies this into
+  `tests/Feature/Settings/SettingsRailSmokeTest.php` (adjust the company factory and the patched key):
+
+  ```php
+  class SettingsRailSmokeTest extends TestCase
+  {
+      use RefreshDatabase;
+
+      public function test_settings_rail_serves_a_valid_schema_and_applies_a_patch(): void
+      {
+          config(['app.core_api_key' => 'test-core-key']);
+          Company::factory()->create(['sso_company_id' => 4242]);
+
+          $get = $this->withToken('test-core-key')->getJson('/api/internal/settings/4242')
+              ->assertOk()->assertJson(['supported' => true, 'provisioned' => true]);
+
+          $settings = collect($get->json('schema.groups'))->flatMap(fn (array $group): array => $group['settings']);
+          $this->assertSame($settings->count(), $settings->pluck('key')->unique()->count(), 'Setting keys must be unique');
+          foreach ($settings as $setting) {
+              if (in_array($setting['type'], ['select', 'multi_select'], true)) {
+                  $this->assertNotEmpty($setting['options'], "{$setting['key']} has no options");
+              }
+              if ($setting['secret']) {
+                  $this->assertNull($setting['default'], "{$setting['key']} is secret and must not carry a default");
+              }
+          }
+
+          $key = $settings->firstWhere('type', 'toggle')['key']; // any key that is safe to write in tests
+          $this->withToken('test-core-key')->patchJson('/api/internal/settings/4242', [
+              'patch' => [$key => true],
+              'actor' => ['sso_user_id' => 1, 'name' => 'Smoke test', 'source' => 'sso'],
+          ])->assertOk()->assertJsonPath('results', [$key => ['status' => 'saved']]);
+
+          $this->withToken('test-core-key')->getJson('/api/internal/settings/999999')
+              ->assertOk()->assertJson(['provisioned' => false, 'values' => null]);
+      }
+  }
   ```
 - **`Concerns\SyncsCompanyRoles`** — `loadRolesForCompany()`, `hasRoleInCompany()`, `companyRoleNames()`
   plus staff helpers `isStaff()`, `hasStaffRole()`, `isGlobalAdmin()` reading the package-managed

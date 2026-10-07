@@ -28,7 +28,7 @@ class UpdateSettingsRequest extends FormRequest
         return [
             'patch' => ['present', 'array'],
             'actor' => ['required', 'array'],
-            'actor.sso_user_id' => ['nullable', 'integer'],
+            'actor.sso_user_id' => ['required', 'integer'],
             'actor.name' => ['required', 'string', 'max:255'],
             'actor.source' => ['required', Rule::enum(SettingsActorSource::class)],
         ];

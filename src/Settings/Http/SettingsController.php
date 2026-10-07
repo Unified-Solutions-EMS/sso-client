@@ -21,13 +21,20 @@ class SettingsController extends Controller
         }
 
         $schema = $provider->schema();
-        $values = array_merge($schema->defaults(), array_intersect_key($provider->values($ssoCompanyId), $schema->settings()));
+        $stored = $provider->values($ssoCompanyId);
+
+        if ($stored === null) {
+            return $this->notProvisioned(['schema' => $schema->toArray(), 'values' => null]);
+        }
+
+        $stored = array_intersect_key($stored, $schema->settings());
 
         return response()->json([
             'app_slug' => $this->appSlug(),
             'supported' => true,
+            'provisioned' => true,
             'schema' => $schema->toArray(),
-            'values' => $this->maskSecrets($schema, $values),
+            'values' => $this->maskSecrets($schema, array_merge($schema->defaults(), $stored)),
         ]);
     }
 
@@ -37,6 +44,10 @@ class SettingsController extends Controller
 
         if ($provider === null) {
             return $this->unsupported(['results' => (object) []]);
+        }
+
+        if ($provider->values($ssoCompanyId) === null) {
+            return $this->notProvisioned(['results' => (object) []]);
         }
 
         [$accepted, $results] = $validator->validate($provider->schema(), $request->settingsPatch());
@@ -52,6 +63,7 @@ class SettingsController extends Controller
         return response()->json([
             'app_slug' => $this->appSlug(),
             'supported' => true,
+            'provisioned' => true,
             'results' => (object) $results->toArray(),
         ]);
     }
@@ -88,6 +100,9 @@ class SettingsController extends Controller
     }
 
     /**
+     * Secrets have no default (Setting::default() is null for them), so
+     * has_value reflects a stored value only.
+     *
      * @param  array<string, mixed>  $values
      * @return array<string, mixed>
      */
@@ -115,6 +130,19 @@ class SettingsController extends Controller
         return response()->json([
             'app_slug' => $this->appSlug(),
             'supported' => false,
+            ...$payload,
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function notProvisioned(array $payload): JsonResponse
+    {
+        return response()->json([
+            'app_slug' => $this->appSlug(),
+            'supported' => true,
+            'provisioned' => false,
             ...$payload,
         ]);
     }

@@ -18,6 +18,13 @@ use Unified\SsoClient\Settings\SettingsSchema;
  *
  * The schema is declared in code because it doubles as the description the
  * AI setup assistant reads, so keys, labels and help text are a contract.
+ *
+ * Tenancy: these routes run with no session user, so HasCompanyScope gives
+ * no protection (and Billing-style scopes are a no-op). Providers resolve
+ * the company themselves from companies.sso_company_id and filter every
+ * read and write by that local company id (DEV_GUIDELINES §4a: the route's
+ * ssoCompanyId is the authoritative source; withoutGlobalScopes() only when
+ * the very next clause is ->where('company_id', $companyId)).
  */
 interface SettingsProvider
 {
@@ -27,12 +34,18 @@ interface SettingsProvider
      * Current values for the company, keyed by setting key. Keys the provider
      * leaves out are answered with the schema default.
      *
-     * @return array<string, mixed>
+     * Return null when this app has no record of the company (no local row
+     * with that sso_company_id). The package then answers provisioned=false
+     * and never calls apply() for it, the settings counterpart of
+     * AgencyStatusResponse::notProvisioned().
+     *
+     * @return array<string, mixed>|null
      */
-    public function values(int $ssoCompanyId): array;
+    public function values(int $ssoCompanyId): ?array;
 
     /**
-     * Applies an already-validated partial patch. The package has checked every
+     * Applies an already-validated partial patch for a company values() has
+     * just confirmed exists. The package has checked every
      * key against the schema and its rules before calling this, so $patch only
      * holds known keys with valid values.
      *

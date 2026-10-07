@@ -14,8 +14,8 @@ class SettingsSchemaTest extends TestCase
     {
         $schema = (new FakeSettingsProvider)->schema()->toArray();
 
-        $this->assertSame(['dispatch', 'numbering', 'integrations'], array_column($schema['groups'], 'key'));
-        $this->assertSame([1, 2, 3], array_column($schema['groups'], 'order'));
+        $this->assertSame(['dispatch', 'numbering', 'integrations', 'pay'], array_column($schema['groups'], 'key'));
+        $this->assertSame([1, 2, 3, 4], array_column($schema['groups'], 'order'));
         $this->assertSame('Dispatch alerts', $schema['groups'][0]['label']);
         $this->assertSame(
             ['alerts.pre_pickup', 'alerts.pre_pickup_minutes', 'alerts.quiet_start'],
@@ -67,6 +67,30 @@ class SettingsSchemaTest extends TestCase
 
         $this->assertSame('integrations.bryx_token', $token['key']);
         $this->assertTrue($token['secret']);
+    }
+
+    public function test_secret_default_is_never_emitted(): void
+    {
+        $schema = (new FakeSettingsProvider)->schema();
+
+        $this->assertNull($schema->toArray()['groups'][2]['settings'][0]['default']);
+        $this->assertNull($schema->defaults()['integrations.bryx_token']);
+        $this->assertStringNotContainsString('platform-fallback-key', json_encode($schema->toArray()));
+    }
+
+    public function test_atomic_group_serializes(): void
+    {
+        $groups = collect((new FakeSettingsProvider)->schema()->toArray()['groups'])->keyBy('key');
+
+        $this->assertTrue($groups['pay']['atomic']);
+        $this->assertFalse($groups['dispatch']['atomic']);
+    }
+
+    public function test_atomic_before_group_is_rejected(): void
+    {
+        $this->expectException(LogicException::class);
+
+        SettingsSchema::make()->atomic();
     }
 
     public function test_explicit_group_order_wins_over_declaration_order(): void

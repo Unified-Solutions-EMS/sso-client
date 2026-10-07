@@ -17,6 +17,9 @@ class FakeSettingsProvider implements SettingsProvider
     /** @var array<int, array<string, mixed>> */
     public array $stored = [];
 
+    /** @var array<int, int> sso company ids this app has a local record of */
+    public array $provisioned = [42, 43];
+
     /** @var array<int, array{company: int, patch: array<string, mixed>, actor: SettingsActor}> */
     public array $applyCalls = [];
 
@@ -42,11 +45,19 @@ class FakeSettingsProvider implements SettingsProvider
             ->entity('dispatch.default_station', 'Default station', SettingEntity::Station)->requires('station')
             ->textarea('numbering.notes', 'Notes')
             ->group('integrations', 'Integrations')
-            ->text('integrations.bryx_token', 'Bryx API token')->rules('min:8')->secret();
+            ->text('integrations.bryx_token', 'Bryx API token')->rules('min:8')->secret()
+            ->default('platform-fallback-key')
+            ->group('pay', 'Pay period')->atomic()
+            ->select('pay.frequency', 'Pay period frequency', ['weekly' => 'Weekly', 'biweekly' => 'Every two weeks'])
+            ->text('pay.start_date', 'Pay period start date')->rules('date');
     }
 
-    public function values(int $ssoCompanyId): array
+    public function values(int $ssoCompanyId): ?array
     {
+        if (! in_array($ssoCompanyId, $this->provisioned, true)) {
+            return null;
+        }
+
         return $this->stored[$ssoCompanyId] ?? [];
     }
 

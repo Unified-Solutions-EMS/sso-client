@@ -103,6 +103,7 @@ class SettingsEndpointTest extends TestCase
             ->assertExactJson([
                 'app_slug' => 'cad',
                 'supported' => true,
+                'provisioned' => true,
                 'results' => [
                     'alerts.pre_pickup' => ['status' => 'saved'],
                     'alerts.pre_pickup_minutes' => ['status' => 'invalid', 'message' => 'The Minutes before pickup field must not be greater than 120.'],
@@ -217,8 +218,9 @@ class SettingsEndpointTest extends TestCase
         $this->assertSame(['value' => null, 'has_value' => true], $response->json('values')['integrations.bryx_token']);
         $this->assertStringNotContainsString('tok_live_secret', $response->getContent());
 
-        $empty = $this->withToken('core-key')->getJson('/api/internal/settings/43')->json('values');
-        $this->assertSame(['value' => null, 'has_value' => false], $empty['integrations.bryx_token']);
+        $empty = $this->withToken('core-key')->getJson('/api/internal/settings/43');
+        $this->assertSame(['value' => null, 'has_value' => false], $empty->json('values')['integrations.bryx_token']);
+        $this->assertStringNotContainsString('platform-fallback-key', $empty->getContent());
     }
 
     public function test_patch_sets_a_secret_with_a_non_empty_string(): void
@@ -274,5 +276,69 @@ class SettingsEndpointTest extends TestCase
             ->assertJsonPath('results', ['integrations.bryx_token' => ['status' => 'invalid', 'message' => 'The Bryx API token field must be at least 8 characters.']]);
 
         $this->assertSame([], $provider->applyCalls);
+    }
+
+    public function test_get_for_unknown_company_is_not_provisioned(): void
+    {
+        $this->bindProvider();
+
+        $response = $this->withToken('core-key')->getJson('/api/internal/settings/999')->assertOk();
+
+        $response->assertJson(['app_slug' => 'cad', 'supported' => true, 'provisioned' => false, 'values' => null])
+            ->assertJsonPath('schema.groups.0.key', 'dispatch');
+    }
+
+    public function test_patch_for_unknown_company_never_calls_apply(): void
+    {
+        $provider = $this->bindProvider();
+
+        $this->withToken('core-key')->patchJson('/api/internal/settings/999', $this->body(['numbering.prefix' => 'CAD']))
+            ->assertOk()
+            ->assertExactJson(['app_slug' => 'cad', 'supported' => true, 'provisioned' => false, 'results' => []]);
+
+        $this->assertSame([], $provider->applyCalls);
+    }
+
+    public function test_provisioned_company_reports_provisioned_true(): void
+    {
+        $this->bindProvider();
+
+        $this->withToken('core-key')->getJson('/api/internal/settings/42')->assertJsonPath('provisioned', true);
+        $this->withToken('core-key')->patchJson('/api/internal/settings/42', $this->body(['numbering.prefix' => 'CAD']))
+            ->assertJsonPath('provisioned', true);
+    }
+
+    public function test_actor_sso_user_id_is_required_for_every_source(): void
+    {
+        $provider = $this->bindProvider();
+
+        foreach (['sso', 'app', 'ai'] as $source) {
+            $this->withToken('core-key')->patchJson('/api/internal/settings/42', [
+                'patch' => ['numbering.prefix' => 'CAD'],
+                'actor' => ['sso_user_id' => null, 'name' => 'Someone', 'source' => $source],
+            ])->assertStatus(422)->assertJsonValidationErrors(['actor.sso_user_id']);
+
+            $this->withToken('core-key')->patchJson('/api/internal/settings/42', [
+                'patch' => ['numbering.prefix' => 'CAD'],
+                'actor' => ['name' => 'Someone', 'source' => $source],
+            ])->assertStatus(422)->assertJsonValidationErrors(['actor.sso_user_id']);
+        }
+
+        $this->assertSame([], $provider->applyCalls);
+    }
+
+    public function test_atomic_group_keys_are_still_validated_per_key(): void
+    {
+        $this->bindProvider();
+
+        $this->withToken('core-key')->getJson('/api/internal/settings/42')->assertJsonPath('schema.groups.3.atomic', true);
+
+        $results = $this->withToken('core-key')->patchJson('/api/internal/settings/42', $this->body([
+            'pay.frequency' => 'weekly',
+            'pay.start_date' => 'not a date',
+        ]))->json('results');
+
+        $this->assertSame('saved', $results['pay.frequency']['status']);
+        $this->assertSame('invalid', $results['pay.start_date']['status']);
     }
 }

@@ -14,6 +14,7 @@ use LogicException;
  *       ->number('alerts.pre_pickup_minutes', 'Minutes before pickup')->rules('integer|min:1|max:120')
  *           ->requires('alerts.pre_pickup');
  *
+ * atomic() marks the current group as saved-together.
  * Setting methods (text, toggle, select, ...) add to the current group;
  * modifier methods (help, default, rules, requires, danger, secret) change the
  * setting declared just before them.
@@ -39,6 +40,20 @@ final class SettingsSchema
     {
         $this->currentGroup = $this->groups[$key] ??= new SettingsGroup($key, $label, $order ?? count($this->groups) + 1);
         $this->current = null;
+
+        return $this;
+    }
+
+    /**
+     * Marks the current group atomic; see SettingsGroup::atomic().
+     */
+    public function atomic(bool $atomic = true): self
+    {
+        if ($this->currentGroup === null) {
+            throw new LogicException('atomic() called before any group(); call group() first.');
+        }
+
+        $this->currentGroup->atomic($atomic);
 
         return $this;
     }

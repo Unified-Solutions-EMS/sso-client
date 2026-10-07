@@ -78,9 +78,13 @@ final class Setting
         return $this->secret;
     }
 
+    /**
+     * A secret's default is never exposed: it would ship in the schema to SSO
+     * and the AI tool description, and would make has_value read true.
+     */
     public function default(): mixed
     {
-        return $this->default;
+        return $this->secret ? null : $this->default;
     }
 
     public function isDanger(): bool
@@ -138,7 +142,7 @@ final class Setting
             'help' => $this->help,
             'options' => $this->type->hasOptions() ? $this->options : null,
             'validation' => $this->serializableRules(),
-            'default' => $this->default,
+            'default' => $this->default(),
             'requires' => $this->requires,
             'danger' => $this->danger,
             'secret' => $this->secret,

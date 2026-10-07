@@ -49,6 +49,11 @@ class QualificationMirror implements EntityMirror, SeedsSso
      */
     public const LINK_PENDING_COLUMN = 'sso_link_pending';
 
+    /**
+     * SSO's qualification name limit; longer local names are cut on push.
+     */
+    public const MAX_NAME_LENGTH = 255;
+
     public function __construct(
         private readonly LocalTenantResolver $tenants,
         private readonly MasterDataClient $client,
@@ -453,20 +458,29 @@ class QualificationMirror implements EntityMirror, SeedsSso
      * The company's whole local catalog and every assignment to it, in the
      * shape of SSO's POST .../qualifications/import. Assignments travel by the
      * user's SSO id; local users without one cannot be represented in SSO and
-     * are only counted.
+     * are only counted. Names longer than SSO's 255-character limit are cut
+     * and reported in truncated_names.
      */
     public function buildImportPayload(int $localCompanyId): array
     {
-        $qualifications = $this->scoped($localCompanyId)
-            ->orderBy('id')
-            ->get(['id', 'name', 'description', 'is_active'])
-            ->map(fn (object $row): array => [
+        $truncatedNames = [];
+        $qualifications = [];
+
+        foreach ($this->scoped($localCompanyId)->orderBy('id')->get(['id', 'name', 'description', 'is_active']) as $row) {
+            $name = (string) $row->name;
+
+            if (mb_strlen($name) > self::MAX_NAME_LENGTH) {
+                $truncatedNames[] = ['local_id' => (int) $row->id, 'name' => $name];
+                $name = mb_substr($name, 0, self::MAX_NAME_LENGTH);
+            }
+
+            $qualifications[] = [
                 'local_id' => (int) $row->id,
-                'name' => (string) $row->name,
+                'name' => $name,
                 'description' => $row->description === null ? null : (string) $row->description,
                 'is_active' => (bool) $row->is_active,
-            ])
-            ->all();
+            ];
+        }
 
         $byUser = [];
         $skipped = [];
@@ -508,6 +522,7 @@ class QualificationMirror implements EntityMirror, SeedsSso
                 'assignments' => $assignments,
             ],
             'skipped_users' => count($skipped),
+            'truncated_names' => $truncatedNames,
         ];
     }
 

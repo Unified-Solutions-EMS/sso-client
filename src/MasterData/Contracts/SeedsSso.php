@@ -12,7 +12,7 @@ namespace Unified\SsoClient\MasterData\Contracts;
 interface SeedsSso
 {
     /**
-     * @return array{payload: array<string, mixed>, skipped_users: int}
+     * @return array{payload: array<string, mixed>, skipped_users: int, truncated_names: list<array{local_id: int, name: string}>}
      */
     public function buildImportPayload(int $localCompanyId): array;
 

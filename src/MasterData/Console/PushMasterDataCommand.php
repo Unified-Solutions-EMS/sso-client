@@ -71,8 +71,12 @@ class PushMasterDataCommand extends MasterDataCommand
 
     private function pushCompany(SeedsSso $mirror, MasterDataClient $client, string $entity, int $localCompanyId, int|string $ssoCompanyId): void
     {
-        ['payload' => $payload, 'skipped_users' => $skipped] = $mirror->buildImportPayload($localCompanyId);
+        ['payload' => $payload, 'skipped_users' => $skipped, 'truncated_names' => $truncatedNames] = $mirror->buildImportPayload($localCompanyId);
         $label = "Company {$ssoCompanyId} (local {$localCompanyId})";
+
+        foreach ($truncatedNames as $truncated) {
+            $this->warn("{$label}: name of local row {$truncated['local_id']} is longer than SSO allows and is sent cut to its first 255 characters: \"{$truncated['name']}\"");
+        }
 
         if ($this->option('dry-run')) {
             $this->line(sprintf(
@@ -99,12 +103,13 @@ class PushMasterDataCommand extends MasterDataCommand
         $unknownUsers = $response['unknown_users'] ?? 0;
 
         $this->line(sprintf(
-            '%s: created=%d matched=%d assignments_added=%d conflicts=%d unknown_users=%d skipped_local_users_without_sso_id=%d linked=%d link_collisions=%d',
+            '%s: created=%d matched=%d assignments_added=%d conflicts=%d truncated_descriptions=%d unknown_users=%d skipped_local_users_without_sso_id=%d linked=%d link_collisions=%d',
             $label,
             (int) ($response['created'] ?? 0),
             (int) ($response['matched'] ?? 0),
             (int) ($response['assignments_added'] ?? 0),
             count($conflicts),
+            count(array_filter($conflicts, fn ($conflict): bool => is_array($conflict) && (bool) ($conflict['truncated'] ?? false))),
             is_array($unknownUsers) ? count($unknownUsers) : (int) $unknownUsers,
             $skipped,
             $result['applied'],
@@ -112,11 +117,12 @@ class PushMasterDataCommand extends MasterDataCommand
         ));
 
         if ($conflicts !== []) {
-            $this->table(['Conflict', 'Local description', 'SSO description'], array_map(fn ($conflict): array => [
+            $this->table(['Conflict', 'Local description', 'SSO description', 'Truncated'], array_map(fn ($conflict): array => [
                 (string) ($conflict['name'] ?? ''),
                 (string) ($conflict['local_description'] ?? ''),
                 (string) ($conflict['sso_description'] ?? ''),
-            ], array_filter($conflicts, 'is_array')));
+                ($conflict['truncated'] ?? false) ? 'yes' : 'no',
+            ], array_values(array_filter($conflicts, 'is_array'))));
         }
 
         if ($result['collisions'] !== []) {

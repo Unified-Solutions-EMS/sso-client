@@ -194,10 +194,12 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      `POST /api/internal/companies/{id}/qualifications/import` and links each local row to the SSO
      id in the response `mapping` (`{local_id: sso_id}` or `{local_id: {sso_id, updated_at}}`;
      `sso_updated_at` is taken from SSO, never the app clock, so the import's own webhooks are not
-     stale). It prints SSO's created / matched / assignments_added / conflicts (name + both
-     descriptions) / unknown_users, plus local users skipped for having no `sso_id` and any mapping
+     stale). It prints SSO's created / matched / assignments_added / conflicts (name, both
+     descriptions, and whether SSO cut the incoming description to 500 characters; the summary
+     counts those as truncated_descriptions) / unknown_users, plus local users skipped for having no `sso_id` and any mapping
      it refused to apply (a row already linked elsewhere, or two local spellings SSO folded into
-     one row). Rerunning creates nothing new in SSO and re-applies the same mapping.
+     one row). Names longer than SSO's 255-character limit are sent cut, with a warning (the local name is
+     unchanged). Rerunning creates nothing new in SSO and re-applies the same mapping.
   3. Review the conflicts in SSO `/system`, **and resolve every `unknown_users` and skipped local
      user** (no `sso_id`, or not a member of the company in SSO) before step 5: the full resync
      treats SSO as authoritative and clears the linked assignments of every local user SSO does not

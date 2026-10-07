@@ -79,13 +79,19 @@ class PushMasterDataCommandTest extends MasterDataTestCase
             'created' => 1,
             'matched' => 1,
             'assignments_added' => 4,
-            'conflicts' => [['name' => 'Driver', 'local_description' => 'Ours', 'sso_description' => 'Theirs']],
+            'conflicts' => [
+                ['name' => 'Driver', 'local_description' => 'Ours', 'sso_description' => 'Theirs', 'truncated' => false],
+                ['name' => 'Paramedic', 'local_description' => str_repeat('a', 500), 'sso_description' => 'Short', 'truncated' => true],
+            ],
             'unknown_users' => [9999, 9998],
         ]);
 
         $this->artisan('sso:push-master-data', ['entity' => 'qualifications'])
-            ->expectsOutputToContain('created=1 matched=1 assignments_added=4 conflicts=1 unknown_users=2 skipped_local_users_without_sso_id=0 linked=2')
-            ->expectsTable(['Conflict', 'Local description', 'SSO description'], [['Driver', 'Ours', 'Theirs']])
+            ->expectsOutputToContain('created=1 matched=1 assignments_added=4 conflicts=2 truncated_descriptions=1 unknown_users=2 skipped_local_users_without_sso_id=0 linked=2')
+            ->expectsTable(['Conflict', 'Local description', 'SSO description', 'Truncated'], [
+                ['Driver', 'Ours', 'Theirs', 'no'],
+                ['Paramedic', str_repeat('a', 500), 'Short', 'yes'],
+            ])
             ->assertSuccessful();
 
         $this->assertSame($medic, (int) $this->mirrored($companyId, 501)->id);
@@ -226,5 +232,20 @@ class PushMasterDataCommandTest extends MasterDataTestCase
         $this->artisan('sso:push-master-data', ['entity' => 'vehicles'])->assertFailed();
 
         Http::assertNothingSent();
+    }
+
+    public function test_names_longer_than_255_characters_are_cut_with_a_warning(): void
+    {
+        $companyId = $this->company(70);
+        $long = str_repeat('Ä', 300);
+        $longId = $this->localQualification($companyId, $long);
+        $this->fakeImport([(string) $longId => 501]);
+
+        $this->artisan('sso:push-master-data', ['entity' => 'qualifications'])
+            ->expectsOutputToContain("name of local row {$longId} is longer than SSO allows")
+            ->assertSuccessful();
+
+        Http::assertSent(fn (Request $request): bool => $request['qualifications'][0]['name'] === str_repeat('Ä', 255));
+        $this->assertSame($long, DB::table('qualifications')->where('id', $longId)->value('name'), 'the local name is not changed');
     }
 }

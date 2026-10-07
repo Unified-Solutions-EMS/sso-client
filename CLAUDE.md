@@ -142,7 +142,9 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   subclass), `MasterDataWebhookHandler` (the webhook controller's `match` sends `qualification.*`
   and `user.qualifications_changed` here; a disabled entity, an unmigrated mirror, or an unknown
   company is a 200 ack), `MasterDataClient` (`GET {SSO_BASE_URL}/api/internal/companies/{id}/{entity}`,
-  bearer `CORE_APP_API_KEY`) and `sso:resync-master-data {entity} {--company=} {--link-by-name}`.
+  bearer `CORE_APP_API_KEY`), `sso:resync-master-data {entity} {--company=} {--link-by-name}` and the
+  one-time upward seed `sso:push-master-data {entity} {--company=} {--dry-run}` (mirrors that
+  implement `Contracts\SeedsSso`).
   Every mirror write is query-builder SQL pinned to the local company resolved from the
   authoritative SSO company id (§4a); rows SSO deleted or dropped are deactivated, never deleted.
   **Qualifications** (first entity) mirror into the app's existing `qualifications` +
@@ -172,12 +174,18 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      `sso_qualification_id`, `applies_to`, `is_active`, `sso_updated_at`, skipping any column already
      present).
   2. Set `SSO_MASTER_DATA_QUALIFICATIONS=true`. Webhooks and logins start mirroring.
-  3. `php artisan sso:resync-master-data qualifications --link-by-name` links existing rows to SSO
-     by name and prints a review table (ambiguous names, local-only rows, SSO-only rows). It never
-     creates, merges or deletes. Resolve the review list by hand (rename in SSO or locally, rerun).
-  4. `php artisan sso:resync-master-data qualifications` pulls the full catalog + assignments.
-     Idempotent; rerun any time as the healer.
-  5. Switch the app's qualifications editor to SSO (delete the local settings panel) and read
+  3. `php artisan sso:push-master-data qualifications` (try `--dry-run` first) seeds SSO with the
+     app's local catalog + assignments via `POST /api/internal/companies/{id}/qualifications/import`
+     and links each local row to the SSO id in the response `mapping` (no name re-match needed).
+     It prints SSO's created / matched / assignments_added / conflicts (name + both descriptions) /
+     unknown_users, plus local users skipped for having no `sso_id` and any mapping it refused to
+     apply (a row already linked elsewhere, or two local spellings SSO folded into one row).
+     Rerunning creates nothing new in SSO and re-applies the same mapping.
+  4. Review the conflicts in SSO `/system`.
+  5. `php artisan sso:resync-master-data qualifications` (full) pulls the catalog + assignments.
+     Idempotent; rerun any time as the healer. (`--link-by-name` remains for an app whose rows
+     were never pushed: it links by name without creating, merging or deleting.)
+  6. Switch the app's qualifications editor to SSO (delete the local settings panel) and read
      through `HasMirroredQualifications`.
 
 ## Release discipline

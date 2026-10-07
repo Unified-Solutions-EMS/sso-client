@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Unified\SsoClient\MasterData\Console;
 
-use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Unified\SsoClient\MasterData\Contracts\EntityMirror;
 use Unified\SsoClient\MasterData\LocalTenantResolver;
@@ -18,7 +17,7 @@ use Unified\SsoClient\MasterData\MasterDataRegistry;
  * With --link-by-name it instead links existing local rows to SSO rows by
  * name (the per-app cutover step) and prints what still needs a human.
  */
-class ResyncMasterDataCommand extends Command
+class ResyncMasterDataCommand extends MasterDataCommand
 {
     protected $signature = 'sso:resync-master-data
         {entity : Master-data entity to reconcile, e.g. qualifications}
@@ -31,23 +30,9 @@ class ResyncMasterDataCommand extends Command
     {
         $entity = (string) $this->argument('entity');
 
-        if (! $registry->knows($entity)) {
-            $this->error("Unknown entity [{$entity}]. Known: ".implode(', ', $registry->entities()).'.');
+        $mirror = $this->resolveMirror($registry, $entity);
 
-            return self::FAILURE;
-        }
-
-        if (! $registry->enabled($entity)) {
-            $this->error("sso.master_data.{$entity} is disabled. Enable it before resyncing.");
-
-            return self::FAILURE;
-        }
-
-        $mirror = $registry->mirror($entity);
-
-        if (! $mirror->isInstalled()) {
-            $this->error("The {$entity} mirror migration has not run. Publish it with `php artisan vendor:publish --tag=sso-master-data` and migrate.");
-
+        if ($mirror === null) {
             return self::FAILURE;
         }
 
@@ -73,31 +58,7 @@ class ResyncMasterDataCommand extends Command
             }
         }
 
-        $this->info(sprintf('%d compan%s processed, %d failed.', count($companies), count($companies) === 1 ? 'y' : 'ies', $failed));
-
-        return $failed === 0 ? self::SUCCESS : self::FAILURE;
-    }
-
-    /**
-     * @return array<int, int|string>|null SSO company id keyed by local company id
-     */
-    private function targetCompanies(LocalTenantResolver $tenants): ?array
-    {
-        $only = $this->option('company');
-
-        if ($only === null || $only === '') {
-            return $tenants->linkedCompanies();
-        }
-
-        $localCompanyId = $tenants->companyId((string) $only);
-
-        if ($localCompanyId === null) {
-            $this->error("No local company is linked to SSO company {$only}.");
-
-            return null;
-        }
-
-        return [$localCompanyId => (string) $only];
+        return $this->summarize(count($companies), $failed);
     }
 
     /**

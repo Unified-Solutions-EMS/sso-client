@@ -46,6 +46,7 @@ class SsoServiceProvider extends ServiceProvider
             $this->commands([
                 Console\PurgeFakeUsersCommand::class,
                 MasterData\Console\ResyncMasterDataCommand::class,
+                MasterData\Console\PushMasterDataCommand::class,
             ]);
         }
 

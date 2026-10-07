@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use InvalidArgumentException;
 use Unified\SsoClient\MasterData\Contracts\EntityMirror;
+use Unified\SsoClient\MasterData\Contracts\SeedsSso;
 use Unified\SsoClient\MasterData\LocalTenantResolver;
 use Unified\SsoClient\MasterData\MasterDataClient;
 
@@ -29,7 +30,7 @@ use Unified\SsoClient\MasterData\MasterDataClient;
  * an agency's existing assignments. Once every row is linked the replacement
  * is total, which is the "full set" semantics of user.qualifications_changed.
  */
-class QualificationMirror implements EntityMirror
+class QualificationMirror implements EntityMirror, SeedsSso
 {
     public const TABLE = 'qualifications';
 
@@ -417,6 +418,113 @@ class QualificationMirror implements EntityMirror
         }
 
         return $result;
+    }
+
+    /**
+     * The company's whole local catalog and every assignment to it, in the
+     * shape of SSO's POST .../qualifications/import. Assignments travel by the
+     * user's SSO id; local users without one cannot be represented in SSO and
+     * are only counted.
+     */
+    public function buildImportPayload(int $localCompanyId): array
+    {
+        $qualifications = $this->scoped($localCompanyId)
+            ->orderBy('id')
+            ->get(['id', 'name', 'description', 'is_active'])
+            ->map(fn (object $row): array => [
+                'local_id' => (int) $row->id,
+                'name' => (string) $row->name,
+                'description' => $row->description === null ? null : (string) $row->description,
+                'is_active' => (bool) $row->is_active,
+            ])
+            ->all();
+
+        $byUser = [];
+        $skipped = [];
+
+        if ($qualifications !== []) {
+            $rows = DB::table(self::ASSIGNMENT_TABLE)
+                ->join('users', 'users.id', '=', self::ASSIGNMENT_TABLE.'.user_id')
+                ->where(self::ASSIGNMENT_TABLE.'.company_id', $localCompanyId)
+                ->whereIn(self::ASSIGNMENT_TABLE.'.qualification_id', array_column($qualifications, 'local_id'))
+                ->orderBy(self::ASSIGNMENT_TABLE.'.user_id')
+                ->orderBy(self::ASSIGNMENT_TABLE.'.qualification_id')
+                ->get([self::ASSIGNMENT_TABLE.'.user_id', 'users.sso_id', self::ASSIGNMENT_TABLE.'.qualification_id']);
+
+            foreach ($rows as $row) {
+                $ssoUserId = trim((string) ($row->sso_id ?? ''));
+
+                if ($ssoUserId === '') {
+                    $skipped[(int) $row->user_id] = true;
+
+                    continue;
+                }
+
+                $byUser[$ssoUserId][(int) $row->qualification_id] = true;
+            }
+        }
+
+        $assignments = [];
+        foreach ($byUser as $ssoUserId => $qualificationIds) {
+            $assignments[] = [
+                'user_sso_id' => (string) $ssoUserId,
+                'local_qualification_ids' => array_keys($qualificationIds),
+            ];
+        }
+
+        return [
+            'payload' => [
+                'app_slug' => (string) config('sso.app_slug'),
+                'qualifications' => $qualifications,
+                'assignments' => $assignments,
+            ],
+            'skipped_users' => count($skipped),
+        ];
+    }
+
+    /**
+     * Link local rows to the SSO ids the import assigned them. A local row
+     * already linked to a different SSO id, or an SSO id another local row of
+     * the company already holds (two local spellings SSO matched to one
+     * qualification), is reported and left alone rather than overwritten.
+     */
+    public function applyImportMapping(int $localCompanyId, array $mapping): array
+    {
+        $pairs = [];
+        foreach ($mapping as $localId => $ssoId) {
+            if ((int) $localId > 0 && (int) $ssoId > 0) {
+                $pairs[(int) $localId] = (int) $ssoId;
+            }
+        }
+        ksort($pairs);
+
+        $now = now()->utc()->format('Y-m-d H:i:s');
+        $applied = 0;
+        $collisions = [];
+
+        foreach ($pairs as $localId => $ssoId) {
+            $row = $this->scoped($localCompanyId)->where('id', $localId)->first();
+
+            $reason = match (true) {
+                $row === null => 'local_row_missing',
+                $row->{self::SSO_ID_COLUMN} !== null && (int) $row->{self::SSO_ID_COLUMN} !== $ssoId => 'local_row_linked_to_another_sso_id',
+                $this->scoped($localCompanyId)->where(self::SSO_ID_COLUMN, $ssoId)->where('id', '!=', $localId)->exists() => 'sso_id_held_by_another_local_row',
+                default => null,
+            };
+
+            if ($reason !== null) {
+                $collisions[] = ['local_id' => $localId, 'sso_id' => $ssoId, 'reason' => $reason];
+
+                continue;
+            }
+
+            $this->scoped($localCompanyId)
+                ->where('id', $localId)
+                ->update([self::SSO_ID_COLUMN => $ssoId, self::SSO_UPDATED_AT_COLUMN => $now]);
+            $applied++;
+        }
+
+        return ['applied' => $applied, 'collisions' => $collisions];
     }
 
     /**

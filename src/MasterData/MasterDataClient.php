@@ -4,13 +4,15 @@ declare(strict_types=1);
 
 namespace Unified\SsoClient\MasterData;
 
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Unified\SsoClient\MasterData\Exceptions\MasterDataSyncException;
 
 /**
- * Reads full master-data snapshots from SSO's internal API:
- * GET {sso.base_url}/api/internal/companies/{ssoCompanyId}/{entity},
- * authenticated with CORE_APP_API_KEY as a bearer token.
+ * Talks to SSO's master-data internal API, authenticated with
+ * CORE_APP_API_KEY as a bearer token:
+ * - GET  /api/internal/companies/{ssoCompanyId}/{entity}         full snapshot
+ * - POST /api/internal/companies/{ssoCompanyId}/{entity}/import  one-time upward seed
  */
 class MasterDataClient
 {
@@ -22,6 +24,27 @@ class MasterDataClient
      */
     public function fetch(string $entity, int|string $ssoCompanyId): array
     {
+        return $this->send('get', $entity, $ssoCompanyId, '');
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     *
+     * @throws MasterDataSyncException
+     */
+    public function import(string $entity, int|string $ssoCompanyId, array $payload): array
+    {
+        return $this->send('post', $entity, $ssoCompanyId, '/import', $payload);
+    }
+
+    /**
+     * @param  'get'|'post'  $method
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private function send(string $method, string $entity, int|string $ssoCompanyId, string $suffix, array $payload = []): array
+    {
         $baseUrl = rtrim((string) config('sso.base_url'), '/');
         $apiKey = (string) (config('app.core_api_key') ?: config('security.token'));
 
@@ -29,25 +52,27 @@ class MasterDataClient
             throw new MasterDataSyncException('SSO_BASE_URL or CORE_APP_API_KEY is not configured.');
         }
 
-        $url = $baseUrl.'/api/internal/companies/'.rawurlencode((string) $ssoCompanyId).'/'.rawurlencode($entity);
+        $url = $baseUrl.'/api/internal/companies/'.rawurlencode((string) $ssoCompanyId).'/'.rawurlencode($entity).$suffix;
 
         try {
-            $response = Http::withToken($apiKey)
+            $request = Http::withToken($apiKey)
                 ->acceptJson()
-                ->timeout((int) config('sso.timeout', 10))
-                ->get($url);
+                ->timeout((int) config('sso.timeout', 10));
+
+            /** @var Response $response */
+            $response = $method === 'post' ? $request->post($url, $payload) : $request->get($url);
         } catch (\Throwable $e) {
             throw new MasterDataSyncException("Could not reach SSO for {$entity}: {$e->getMessage()}", 0, $e);
         }
 
         if (! $response->successful()) {
-            throw new MasterDataSyncException("SSO returned HTTP {$response->status()} for {$entity} of company {$ssoCompanyId}.");
+            throw new MasterDataSyncException("SSO returned HTTP {$response->status()} for {$entity}{$suffix} of company {$ssoCompanyId}.");
         }
 
         $body = $response->json();
 
         if (! is_array($body)) {
-            throw new MasterDataSyncException("SSO returned a non-JSON body for {$entity} of company {$ssoCompanyId}.");
+            throw new MasterDataSyncException("SSO returned a non-JSON body for {$entity}{$suffix} of company {$ssoCompanyId}.");
         }
 
         return $body;

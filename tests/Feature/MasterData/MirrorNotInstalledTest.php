@@ -27,6 +27,13 @@ class MirrorNotInstalledTest extends MasterDataTestCase
             ->assertFailed();
     }
 
+    public function test_push_refuses_until_the_mirror_migration_runs(): void
+    {
+        $this->artisan('sso:push-master-data', ['entity' => 'qualifications'])
+            ->expectsOutputToContain('vendor:publish --tag=sso-master-data')
+            ->assertFailed();
+    }
+
     public function test_the_published_migration_is_safe_to_run_twice(): void
     {
         $this->runPublishedMirrorMigration();

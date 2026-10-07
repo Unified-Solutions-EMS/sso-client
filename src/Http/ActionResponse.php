@@ -60,10 +60,16 @@ final readonly class ActionResponse
     }
 
     /**
+     * Any 4xx/5xx; ok() is the only 2xx path.
+     *
      * @param  array<string, mixed>  $body
      */
     public static function error(int $status, array $body): self
     {
+        if ($status < 400 || $status > 599) {
+            throw new InvalidArgumentException("ActionResponse::error() needs a 4xx or 5xx status, got {$status}");
+        }
+
         return new self($status, $body);
     }
 

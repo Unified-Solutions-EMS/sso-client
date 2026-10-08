@@ -2,10 +2,12 @@
 
 namespace Unified\SsoClient;
 
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
+use Unified\SsoClient\MasterData\MasterDataRegistry;
 use Unified\SsoClient\Metrics\Contracts\MetricContextResolver;
 use Unified\SsoClient\Metrics\Metrics;
 use Unified\SsoClient\Metrics\Resolvers\EloquentMetricContextResolver;
@@ -43,7 +45,11 @@ class SsoServiceProvider extends ServiceProvider
     public function boot(): void
     {
         if ($this->app->runningInConsole()) {
-            $this->commands([Console\PurgeFakeUsersCommand::class]);
+            $this->commands([
+                Console\PurgeFakeUsersCommand::class,
+                MasterData\Console\ResyncMasterDataCommand::class,
+                MasterData\Console\PushMasterDataCommand::class,
+            ]);
         }
 
         $this->publishes([
@@ -58,11 +64,21 @@ class SsoServiceProvider extends ServiceProvider
             __DIR__.'/../config/security.php' => config_path('security.php'),
         ], 'security-config');
 
+        // Master-data mirror migrations are opt-in per app, so they are
+        // published rather than loaded.
+        $this->publishesMigrations([
+            __DIR__.'/../database/master-data' => database_path('migrations'),
+        ], 'sso-master-data');
+
         // Auto-record failed logins / lockouts / password resets as
         // security events in every consuming app.
         if (config('security.listen_auth_events', true)) {
             Event::subscribe(RecordAuthenticationSecurityEvents::class);
         }
+
+        $this->callAfterResolving(Schedule::class, function (Schedule $schedule): void {
+            $this->scheduleMasterDataResync($schedule);
+        });
 
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
 
@@ -94,6 +110,28 @@ class SsoServiceProvider extends ServiceProvider
         if (method_exists($kernel, 'appendMiddlewareToGroup')) {
             $kernel->appendMiddlewareToGroup('web', Middleware\EnforceSsoSessionActions::class);
             $kernel->appendMiddlewareToGroup('web', Middleware\PurgeLegacyApexCookies::class);
+        }
+    }
+
+    /**
+     * Nightly healer per enabled master-data entity. Webhooks dropped because
+     * the user or company did not exist locally yet are otherwise only healed
+     * by that user's next login, and scheduled crew may never log in.
+     */
+    protected function scheduleMasterDataResync(Schedule $schedule): void
+    {
+        if (! config('sso.master_data.schedule_resync', true)) {
+            return;
+        }
+
+        $registry = $this->app->make(MasterDataRegistry::class);
+
+        foreach ($registry->entities() as $entity) {
+            if ($registry->enabled($entity)) {
+                $schedule->command('sso:resync-master-data', [$entity])
+                    ->dailyAt('03:15')
+                    ->withoutOverlapping();
+            }
         }
     }
 }

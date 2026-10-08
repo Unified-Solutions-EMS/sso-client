@@ -241,6 +241,83 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   `Schema::hasColumn()` so apps that haven't adopted the column ignore it. Apps must NOT ship their
   own timezone selector.
 - **Migrations** — `sso_session_actions` table and `users.staff_roles` column, loaded from the package.
+- **Master data mirrors** (`src/MasterData/`) — SSO is canonical for shared master data; apps hold
+  a read-only mirror per entity, opted into with `config('sso.master_data.<entity>')` (env
+  `SSO_MASTER_DATA_QUALIFICATIONS` for the first one). Pieces: `Contracts\EntityMirror` (one class
+  per entity: table, SSO id column, webhook apply, resync, link-by-name), `MasterDataRegistry`
+  (known entities + opt-in check; mirrors resolve through the container so an app can bind a
+  subclass), `MasterDataWebhookHandler` (the webhook controller's `match` sends `qualification.*`
+  and `user.qualifications_changed` here; a disabled entity, an unmigrated mirror, or an unknown
+  company is a 200 ack), `MasterDataClient` (`GET {SSO_BASE_URL}/api/internal/companies/{id}/{entity}`,
+  bearer `CORE_APP_API_KEY`), `sso:resync-master-data {entity} {--company=} {--link-by-name}` and the
+  one-time upward seed `sso:push-master-data {entity} {--company=} {--dry-run}` (mirrors that
+  implement `Contracts\SeedsSso`).
+  Every mirror write is query-builder SQL pinned to the local company resolved from the
+  authoritative SSO company id (§4a); rows SSO deleted or dropped are deactivated, never deleted.
+  **Qualifications** (first entity) mirror into the app's existing `qualifications` +
+  `company_user_qualifications` tables. Events: `qualification.created|updated` (upsert),
+  `qualification.deleted` (`is_active=false`), `user.qualifications_changed` (the user's full set
+  in that company). The payload's `updated_at` is stored (UTC) in `sso_updated_at`; a
+  `qualification.created|updated` delivery older than the stored value is ignored and acked
+  `"status": "stale"` (SSO queues deliveries, so they can arrive out of order). A resync always wins.
+  SSO gives no ordering guarantee across events either: a `user.qualifications_changed` naming an
+  SSO id the mirror lacks pulls the company's catalog once from the internal endpoint, inserts the
+  missing rows, then applies the assignment (if SSO is unreachable, unknown ids are skipped and
+  logged; the next resync heals). `applies_to` is a hint for readers, not a delivery filter: SSO
+  sends every qualification event to every app that has the entity enabled, and the mirror stores
+  them all; `HasMirroredQualifications` / `QualificationCatalog` apply the filter when reading.
+  A `user.qualifications_changed` for a user this app has not provisioned yet is acked `skipped`;
+  the nightly resync (below) heals it for people who never log in.
+  `/api/user` `companies[].qualifications: [{id, name}]` (also on the roster endpoint
+  `sso:sync-users` reads) is mirrored on login by `SsoUserSynchronizer` (no-op when the key is
+  absent). That payload carries only ACTIVE qualifications, while webhooks and the internal
+  endpoint carry the full set, so the login sync only adds/removes assignments to active rows and
+  never touches assignments to inactive ones; a login cannot undo a webhook. Assignment replacement only
+  touches confirmed SSO-linked rows, so unlinked pre-cutover rows keep their assignments.
+  **Name adoption is non-destructive.** An SSO row with no linked local row adopts a single unlinked
+  local row of the same name (case-insensitive) instead of inserting a duplicate. In the webhook
+  and login paths that only sets `sso_qualification_id` and `sso_link_pending=true`: the local
+  name, description, `applies_to` and `is_active` are kept, later deliveries for the row
+  (update/delete) are acked `pending` and skipped, and assignments to it are never removed (only
+  added). SSO's set for an adopted row does not yet include this app's holders, so replacing from
+  it would delete them (the PR #17 review reproduced exactly that for the second app to cut over).
+  The push mapping, `--link-by-name` and a full resync confirm the link (`sso_link_pending=false`);
+  only a resync overwrites the local fields. Read side: `MasterData\Qualifications\HasMirroredQualifications` on the User model
+  (`companyQualifications()`, `companyQualificationNames()`, `companyQualificationIds()`,
+  `hasQualificationInCompany()`) and `QualificationCatalog::usableForCompany()` for pickers; both
+  return only active rows whose `applies_to` is empty or contains `sso.app_slug`.
+  Resync fetches and the push import use `sso.master_data.timeout` (`SSO_MASTER_DATA_TIMEOUT`,
+  default 120 s, not the 10 s login timeout); a timeout prints a clear message and changes nothing
+  locally. With `sso.master_data.schedule_resync` (default true) the package schedules
+  `sso:resync-master-data <entity>` daily at 03:15 (`withoutOverlapping`) for every enabled entity.
+  **Per-app cutover order** (the second and later apps lose data if the mirror is enabled before
+  the push; see "Name adoption" above):
+  1. `php artisan vendor:publish --tag=sso-master-data` and `php artisan migrate` (adds
+     `sso_qualification_id`, `applies_to`, `is_active`, `sso_updated_at`, `sso_link_pending`,
+     skipping any column already present). Leave `SSO_MASTER_DATA_QUALIFICATIONS` unset/false.
+  2. `php artisan sso:push-master-data qualifications --dry-run`, then without `--dry-run`. The
+     push requires only the migration and is meant to run with the entity still disabled. It seeds
+     SSO with the app's local catalog + assignments via
+     `POST /api/internal/companies/{id}/qualifications/import` and links each local row to the SSO
+     id in the response `mapping` (`{local_id: sso_id}` or `{local_id: {sso_id, updated_at}}`;
+     `sso_updated_at` is taken from SSO, never the app clock, so the import's own webhooks are not
+     stale). It prints SSO's created / matched / assignments_added / conflicts (name, both
+     descriptions, and whether SSO cut the incoming description to 500 characters; the summary
+     counts those as truncated_descriptions) / unknown_users, plus local users skipped for having no `sso_id` and any mapping
+     it refused to apply (a row already linked elsewhere, or two local spellings SSO folded into
+     one row). Names longer than SSO's 255-character limit are sent cut, with a warning (the local name is
+     unchanged). Rerunning creates nothing new in SSO and re-applies the same mapping.
+  3. Review the conflicts in SSO `/system`, **and resolve every `unknown_users` and skipped local
+     user** (no `sso_id`, or not a member of the company in SSO) before step 5: the full resync
+     treats SSO as authoritative and clears the linked assignments of every local user SSO does not
+     list, so those users' assignments are lost locally and SSO never had them.
+  4. Set `SSO_MASTER_DATA_QUALIFICATIONS=true`. Webhooks, logins and the nightly resync start.
+  5. `php artisan sso:resync-master-data qualifications` (full) pulls the catalog + assignments and
+     confirms any pending links. Idempotent; rerun any time as the healer. (`--link-by-name`
+     remains for an app whose rows were never pushed: it links by name without creating, merging
+     or deleting.)
+  6. Switch the app's qualifications editor to SSO (delete the local settings panel) and read
+     through `HasMirroredQualifications`.
 
 ## Release discipline
 

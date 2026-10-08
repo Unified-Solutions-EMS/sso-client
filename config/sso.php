@@ -255,6 +255,32 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Master Data Mirrors
+    |--------------------------------------------------------------------------
+    |
+    | SSO is canonical for shared master data. Each entity listed here is a
+    | read-only local mirror kept fresh by SSO webhooks, the /api/user login
+    | payload and `sso:resync-master-data`. Opt in per entity, and only after
+    | publishing and running the entity's mirror migration
+    | (`php artisan vendor:publish --tag=sso-master-data`). While an entity is
+    | false its webhooks are acknowledged and ignored.
+    |
+    */
+    'master_data' => [
+        'qualifications' => env('SSO_MASTER_DATA_QUALIFICATIONS', false),
+
+        // Daily `sso:resync-master-data <entity>` for every enabled entity,
+        // so assignments dropped by early-arriving webhooks (user not yet
+        // provisioned) heal without waiting for that user to log in.
+        'schedule_resync' => env('SSO_MASTER_DATA_SCHEDULE_RESYNC', true),
+
+        // Seconds for the resync fetch and the push import. SSO's import fans
+        // out per user synchronously, far beyond the 10 s login timeout.
+        'timeout' => env('SSO_MASTER_DATA_TIMEOUT', 120),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Routes
     |--------------------------------------------------------------------------
     |

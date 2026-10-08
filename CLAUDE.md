@@ -222,6 +222,21 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
 - **Dashboard + action endpoints** — `POST /api/sso/dashboard` (`config('sso.dashboard_provider')`
   implementing `DashboardDataProvider`) and `POST /api/sso/actions/{action}`
   (`config('sso.action_handlers')` map to `SsoActionHandler`), both HMAC-verified.
+  Action handlers return `array|ActionResponse`. A plain array is a 200, as it always was. To answer
+  with another status, either put an integer `http_status` (200-599) in the array (the controller
+  uses it as the status and strips the key from the body) or return
+  `Unified\SsoClient\Http\ActionResponse` — `ok(array)`, `notFound($message)` (404),
+  `tooManyRequests($message, ?$retryAfterSeconds)` (429, sets `Retry-After`),
+  `notImplemented($message)` (501, e.g. a missing third-party key), `error($status, $body)` (4xx/5xx
+  only; `ok()` is the only 2xx path). Prefer `ActionResponse` in new handlers. Apps must not bind their
+  own controller over `SsoActionController` to get statuses (CAD's `CadSsoActionController` existed
+  only because this was missing).
+  Every response a handler produced, whatever its status, carries `X-SSO-Action-Handled: 1`. The
+  controller's own "unknown action" 404 and "handler class missing" 501 do not. Callers (SSO) must read
+  a 404/501 WITHOUT that header as "this app doesn't offer the action" and WITH it as the handler's
+  answer (e.g. "no such run", "not configured"). A handler that throws gets a generic
+  `{"error": "Action failed"}` 500 (no header); the log records the action name, `sso_company_id` /
+  `company_id` when present, and the exception, never the payload (it can carry PHI).
 - **Session actions** — `EnforceSsoSessionActions` is auto-appended to the `web` group in every app,
   so impersonation/forced-logout land on the next request without per-app wiring.
 - **Legacy cookie scrub** — `Middleware\PurgeLegacyApexCookies` (`sso.purge-legacy-cookies`), also

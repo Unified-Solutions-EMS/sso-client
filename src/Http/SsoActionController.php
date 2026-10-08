@@ -14,6 +14,13 @@ class SsoActionController extends Controller
     use VerifiesSsoWebhookSignature;
 
     /**
+     * Set on every response a handler produced, so SSO can tell a handler's
+     * 404/501 ("no such run", "not configured") from the controller's own
+     * "this app has no such action" 404/501.
+     */
+    public const HANDLED_HEADER = 'X-SSO-Action-Handled';
+
+    /**
      * Handle an HMAC-signed action request from SSO.
      */
     public function __invoke(Request $request, string $action): JsonResponse
@@ -34,6 +41,8 @@ class SsoActionController extends Controller
             return response()->json(['error' => "Handler not found for action: {$action}"], 501);
         }
 
+        $payload = $request->json()->all();
+
         try {
             $handler = app($handlerClass);
 
@@ -41,16 +50,19 @@ class SsoActionController extends Controller
                 return response()->json(['error' => 'Invalid action handler'], 500);
             }
 
-            $result = $handler->handle($request->json()->all());
-
-            return response()->json($result);
+            return ActionResponse::from($handler->handle($payload))
+                ->toResponse()
+                ->header(self::HANDLED_HEADER, '1');
         } catch (\Throwable $e) {
-            Log::error("SSO action [{$action}] failed", [
-                'error' => $e->getMessage(),
-                'payload' => $request->json()->all(),
-            ]);
+            // Never log the payload itself: action payloads can carry PHI.
+            Log::error("SSO action [{$action}] failed", array_filter([
+                'action' => $action,
+                'sso_company_id' => $payload['sso_company_id'] ?? null,
+                'company_id' => $payload['company_id'] ?? null,
+                'exception' => $e,
+            ], fn (mixed $value): bool => is_scalar($value) || $value instanceof \Throwable));
 
-            return response()->json(['error' => $e->getMessage()], 500);
+            return response()->json(['error' => 'Action failed'], 500);
         }
     }
 }

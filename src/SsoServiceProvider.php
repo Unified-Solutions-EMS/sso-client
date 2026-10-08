@@ -73,6 +73,7 @@ class SsoServiceProvider extends ServiceProvider
         ], 'sso-views');
 
         $this->loadRoutesFrom(__DIR__.'/../routes/sso.php');
+        $this->loadRoutesFrom(__DIR__.'/../routes/settings.php');
 
         $router = $this->app->make('router');
         $router->aliasMiddleware('sso.session', Middleware\EnsureSsoSessionIsFresh::class);

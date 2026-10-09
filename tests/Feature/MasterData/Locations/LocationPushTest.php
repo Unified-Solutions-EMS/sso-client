@@ -36,7 +36,8 @@ class LocationPushTest extends LocationsTestCase
         Http::fake(['sso.test/api/internal/companies/70/locations/import' => Http::response([
             'created' => 1, 'matched' => 1, 'filled' => [['local_id' => (string) $one, 'name' => 'Station 1', 'fields' => ['division_id']]], 'conflicts' => [],
             'unresolved_divisions' => [['local_id' => (string) $two, 'name' => 'Long name', 'division_sso_id' => null, 'division_local_id' => (string) $unpushed, 'reason' => 'unknown_division']],
-            'refused' => [['local_id' => (string) $two, 'name' => 'Long name', 'fields' => ['address' => 'Not saved yet: add the city, state and ZIP code.']]],
+            'partial' => [['local_id' => (string) $two, 'name' => 'Long name', 'fields' => ['address' => 'Not saved yet: add the city, state and ZIP code.']]],
+            'refused' => [['local_id' => (string) $two, 'name' => 'Long name', 'fields' => ['phones.new#0' => 'Enter a 10 digit phone number.']]],
             'invalid' => [],
             'mapping' => [
                 (string) $one => ['sso_id' => 801, 'updated_at' => '2026-10-09T12:00:00+00:00'],
@@ -46,9 +47,10 @@ class LocationPushTest extends LocationsTestCase
 
         $this->artisan('sso:push-master-data', ['entity' => 'locations', '--company' => '70'])
             ->expectsOutputToContain("name of local row {$two} is longer than SSO allows and is sent cut to its first 100 characters")
-            ->expectsOutputToContain('created=1 matched=1 assignments_added=0 conflicts=0 truncated_descriptions=0 unknown_users=0 skipped_local_users_without_sso_id=0 linked=2 link_collisions=0 invalid=0 filled=1 unresolved_divisions=1 refused=1')
+            ->expectsOutputToContain('created=1 matched=1 assignments_added=0 conflicts=0 truncated_descriptions=0 unknown_users=0 skipped_local_users_without_sso_id=0 linked=2 link_collisions=0 invalid=0 filled=1 partial=1 unresolved_divisions=1 refused=1')
             ->expectsTable(['Local id', 'Name', 'Local division', 'Reason'], [[(string) $two, 'Long name', (string) $unpushed, 'unknown_division']])
-            ->expectsTable(['Local id', 'Name', 'Not saved in SSO', 'Because'], [[(string) $two, 'Long name', 'address', 'Not saved yet: add the city, state and ZIP code.']])
+            ->expectsTable(['Local id', 'Name', 'Why', 'Cut from'], [[(string) $two, 'Long name', 'Not saved yet: add the city, state and ZIP code.', '']])
+            ->expectsTable(['Local id', 'Name', 'Not saved in SSO', 'Because'], [[(string) $two, 'Long name', 'phones.new#0', 'Enter a 10 digit phone number.']])
             ->assertSuccessful();
 
         Http::assertSent(function (Request $request) use ($one, $two, $north, $unpushed): bool {

@@ -62,6 +62,15 @@ class LocationWebhookTest extends LocationsTestCase
         ])])->assertJson(['result' => 'unchanged']);
     }
 
+    public function test_an_incomplete_address_gives_crew_its_free_text_back(): void
+    {
+        $this->postWebhook('location.created', ['company' => ['id' => 70], 'location' => $this->locationRecord(801, 'Rescue Training Grounds', [
+            'address' => ['street' => 'Behind the airport hangars', 'city_gnis' => null, 'city_name' => null, 'state' => null, 'state_name' => null, 'zip' => null, 'county' => null, 'county_name' => null, 'incomplete' => true],
+        ])])->assertJson(['result' => 'created']);
+
+        $this->assertSame('Behind the airport hangars', $this->mirrored($this->companyId, 801)->address);
+    }
+
     public function test_deactivated_turns_the_row_off_and_keeps_it_and_its_children(): void
     {
         $this->postWebhook('location.created', ['company' => ['id' => 70], 'location' => $this->locationRecord(801, 'Station 1')]);

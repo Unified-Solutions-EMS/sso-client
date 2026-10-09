@@ -407,10 +407,12 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     country}, latitude, longitude, phones: [{id, number (E.164), type}], is_active, sort_order,
     updated_at}]}` (whole list, not paged); `POST .../locations/import` `{app_slug, locations:
     [{local_id, name, is_active, division_local_id?, division_sso_id?, number?, location_type?,
-    address?, latitude?, longitude?, phones?}]}` -> `{created, matched, filled, conflicts,
+    address?, latitude?, longitude?, phones?}]}` -> `{created, matched, filled, partial, conflicts,
     unresolved_divisions, refused, invalid, mapping}`. SSO matches by number then name, never
-    overwrites, fills only empty fields on a match, records the seeding app. The push prints
-    `filled`, `unresolved_divisions` and `refused` counts plus tables for the last two.
+    overwrites, fills only empty fields on a match, records the seeding app. An address SSO cannot
+    file but that has words (Crew's free text) is kept as the street with `address.incomplete: true`
+    and reported in `partial`, so the first resync gives the app its text back. The push prints
+    `filled`, `partial`, `unresolved_divisions` and `refused` counts plus tables for the last three.
   - Events `location.created|updated|deactivated`, full row, all upsert (deactivated carries
     `is_active: false`); stale and pending guards as for every catalog. Never deleted: Crew's resources
     and shift templates, CAD units and CloudPCR scenes point at these rows.

@@ -122,6 +122,7 @@ class PushMasterDataCommand extends MasterDataCommand
         $this->assignmentConflictTable($response['assignment_conflicts'] ?? null);
         $this->invalidTable($response['invalid'] ?? null);
         $this->unresolvedDivisionTable($response['unresolved_divisions'] ?? null);
+        $this->partialTable($response['partial'] ?? null);
         $this->refusedTable($response['refused'] ?? null);
 
         if ($result['collisions'] !== []) {
@@ -145,7 +146,7 @@ class PushMasterDataCommand extends MasterDataCommand
     {
         $extra = '';
 
-        foreach (['assignment_conflicts', 'invalid', 'filled', 'unresolved_divisions', 'refused'] as $key) {
+        foreach (['assignment_conflicts', 'invalid', 'filled', 'partial', 'unresolved_divisions', 'refused'] as $key) {
             if (is_array($response[$key] ?? null)) {
                 $extra .= sprintf(' %s=%d', $key, count($response[$key]));
             }
@@ -220,6 +221,27 @@ class PushMasterDataCommand extends MasterDataCommand
             (string) (is_array($row) ? ($row['name'] ?? '') : ''),
             (string) (is_array($row) ? ($row['division_local_id'] ?? $row['division_sso_id'] ?? '') : ''),
             (string) (is_array($row) ? ($row['reason'] ?? '') : ''),
+        ], array_values($rows)));
+    }
+
+    /**
+     * Locations whose address SSO kept only as text (no city, state or ZIP
+     * it could file). The text is safe; the agency finishes the address in
+     * SSO's Settings, where the location shows "Address needs a city, state
+     * and ZIP".
+     */
+    private function partialTable(mixed $rows): void
+    {
+        if (! is_array($rows) || $rows === []) {
+            return;
+        }
+
+        $this->warn('SSO kept these addresses as text only. Finish them in Settings > Locations:');
+        $this->table(['Local id', 'Name', 'Why', 'Cut from'], array_map(fn (mixed $row): array => [
+            (string) (is_array($row) ? ($row['local_id'] ?? '') : ''),
+            (string) (is_array($row) ? ($row['name'] ?? '') : ''),
+            (string) (is_array($row) ? ($row['fields']['address'] ?? '') : ''),
+            (string) (is_array($row) ? ($row['original'] ?? '') : ''),
         ], array_values($rows)));
     }
 

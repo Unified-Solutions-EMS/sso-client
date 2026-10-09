@@ -258,11 +258,14 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
 - **Migrations** — `sso_session_actions` table and `users.staff_roles` column, loaded from the package.
 - **Master data mirrors** (`src/MasterData/`) — SSO is canonical for shared master data; apps hold
   a read-only mirror per entity, opted into with `config('sso.master_data.<entity>')` (env
-  `SSO_MASTER_DATA_QUALIFICATIONS` for the first one). Pieces: `Contracts\EntityMirror` (one class
-  per entity: table, SSO id column, webhook apply, resync, link-by-name), `MasterDataRegistry`
+  `SSO_MASTER_DATA_QUALIFICATIONS`, `SSO_MASTER_DATA_DIVISIONS`, both default false). Pieces:
+  `Contracts\EntityMirror` (one class per entity: table, SSO id column, publish tag, webhook apply,
+  resync, link-by-name), `CatalogMirror` (the shared base: linking, name adoption, `sso_link_pending`,
+  the `sso_updated_at` stale guard, deactivate-never-delete, link-by-name, the push mapping; each
+  entity adds its columns and its assignment rules), `MasterDataRegistry`
   (known entities + opt-in check; mirrors resolve through the container so an app can bind a
-  subclass), `MasterDataWebhookHandler` (the webhook controller's `match` sends `qualification.*`
-  and `user.qualifications_changed` here; a disabled entity, an unmigrated mirror, or an unknown
+  subclass), `MasterDataWebhookHandler` (the webhook controller's `match` sends `qualification.*`,
+  `user.qualifications_changed`, `division.*` and `user.division_changed` here; a disabled entity, an unmigrated mirror, or an unknown
   company is a 200 ack), `MasterDataClient` (`GET {SSO_BASE_URL}/api/internal/companies/{id}/{entity}`,
   bearer `CORE_APP_API_KEY`), `sso:resync-master-data {entity} {--company=} {--link-by-name}` and the
   one-time upward seed `sso:push-master-data {entity} {--company=} {--dry-run}` (mirrors that
@@ -333,6 +336,46 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      or deleting.)
   6. Switch the app's qualifications editor to SSO (delete the local settings panel) and read
      through `HasMirroredQualifications`.
+
+  **Divisions** (second entity, `MasterData\Divisions\DivisionMirror`, branch
+  `feature/divisions-mirror`; SSO side on `feature/divisions-sync`). A division is an agency list
+  row; whatever an agency already calls a division in Crew or HR is imported as-is (James,
+  2026-10-09: platoon-style names such as "Alpha Shift" included, no review gate). Local storage:
+  a `divisions` table (`company_id`, `name`, plus `sso_division_id`, `code`, `is_active`,
+  `sort_order`, `sso_updated_at`, `sso_link_pending`) and **one division per person per company**
+  in `company_user.division_id`. The migration (`vendor:publish --tag=sso-master-data-divisions`)
+  extends Crew's existing table and pivot column and creates both for an app that has none (HR);
+  existing rows start active. An app whose table/column names differ binds a `DivisionMirror`
+  subclass overriding `table()`, `assignmentTable()` or `assignmentColumn()`.
+  - SSO contract (the qualifications shapes): `GET /api/internal/companies/{id}/divisions` ->
+    `{company: {id, division_label}, divisions: [{id, name, code, is_active, sort_order, updated_at}],
+    assignments: [{user_id, division_id}]}` (whole list, turned-off rows included, not paged);
+    `POST .../divisions/import` `{app_slug, divisions: [{local_id, name, code?, is_active?}],
+    assignments: [{user_sso_id, local_division_id}]}` -> `{created, matched, assignments_added,
+    conflicts: [{name, reason}], assignment_conflicts: [{user_sso_id, sso_division_id,
+    incoming_division_id}], unknown_users, invalid: [{local_id, name, message}], mapping: {local_id:
+    {sso_id, updated_at}}}`. Names are capped at 100 in SSO; the push cuts longer local names and
+    warns (the local name is unchanged until a resync).
+  - Events: `division.created|updated|deactivated` (full row; all three upsert, deactivated carries
+    `is_active: false`; SSO never deletes divisions) and `user.division_changed`
+    `{company: {id}, user: {id}, division_id: int|null}`. `/api/user` and the roster endpoint carry
+    `companies[].division: {id, name} | null`, sent whether or not the division is turned on (the
+    same value the webhook and snapshot carry), so the login sync simply applies it.
+  - **Never deleted.** Crew's `locations`/`resources` cascade-delete with their division, so SSO
+    removing or a resync dropping a row only sets `is_active = false`; people stay recorded in it.
+  - **Assignment writes only replace a confirmed linked division (or none).** A person whose local
+    division is unlinked (pre-cutover) or pending keeps it (`kept_unconfirmed`) until the push
+    mapping or a resync confirms the link, so the second app to cut over cannot lose anyone.
+    `assignment_conflicts` on the push are people SSO already places in a different division; SSO
+    keeps its value and the resync applies it locally, so settle those in SSO before step 4.
+  - Read side: `MasterData\Divisions\HasMirroredDivision` on the User model (`companyDivision()`,
+    `companyDivisionId()`, `companyDivisionName()`, `isInDivision()`) and
+    `DivisionCatalog::usableForCompany()` (active rows, SSO order) for pickers.
+  - Cutover order is the qualifications one with the entity swapped: publish the
+    `sso-master-data-divisions` migration and migrate; `sso:push-master-data divisions --dry-run`,
+    then for real (flag still off); settle conflicts / unknown users / skipped users; set
+    `SSO_MASTER_DATA_DIVISIONS=true`; `sso:resync-master-data divisions`; move the app's division
+    editor to SSO's Settings > Divisions page and filter pickers by `is_active`.
 
 ## Release discipline
 

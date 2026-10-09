@@ -32,6 +32,11 @@ interface EntityMirror
     public function ssoIdColumn(): string;
 
     /**
+     * The `vendor:publish --tag=` that publishes this entity's mirror migration.
+     */
+    public function publishTag(): string;
+
+    /**
      * Whether the app has run this entity's mirror migration. Webhooks and
      * login syncs are skipped (and logged) until it has.
      */

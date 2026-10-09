@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Unified\SsoClient\MasterData\Console;
 
 use Illuminate\Support\Facades\DB;
+use Unified\SsoClient\MasterData\CatalogMirror;
 use Unified\SsoClient\MasterData\Contracts\SeedsSso;
 use Unified\SsoClient\MasterData\Exceptions\MasterDataSyncException;
 use Unified\SsoClient\MasterData\LocalTenantResolver;
@@ -75,7 +76,8 @@ class PushMasterDataCommand extends MasterDataCommand
         $label = "Company {$ssoCompanyId} (local {$localCompanyId})";
 
         foreach ($truncatedNames as $truncated) {
-            $this->warn("{$label}: name of local row {$truncated['local_id']} is longer than SSO allows and is sent cut to its first 255 characters: \"{$truncated['name']}\"");
+            $limit = $mirror instanceof CatalogMirror ? $mirror->maxNameLength() : 255;
+            $this->warn("{$label}: name of local row {$truncated['local_id']} is longer than SSO allows and is sent cut to its first {$limit} characters: \"{$truncated['name']}\"");
         }
 
         if ($this->option('dry-run')) {
@@ -119,6 +121,8 @@ class PushMasterDataCommand extends MasterDataCommand
         $this->conflictTable(array_values(array_filter($conflicts, 'is_array')));
         $this->assignmentConflictTable($response['assignment_conflicts'] ?? null);
         $this->invalidTable($response['invalid'] ?? null);
+        $this->unresolvedDivisionTable($response['unresolved_divisions'] ?? null);
+        $this->refusedTable($response['refused'] ?? null);
 
         if ($result['collisions'] !== []) {
             $this->table(['Local id', 'SSO id', 'Not linked because'], array_map(fn (array $collision): array => [
@@ -131,7 +135,9 @@ class PushMasterDataCommand extends MasterDataCommand
 
     /**
      * Counts only some entities report (divisions: a person SSO already
-     * places elsewhere, rows SSO refused to create).
+     * places elsewhere, rows SSO refused to create; locations: matched rows
+     * whose empty fields SSO filled from this app, division references it
+     * could not map, rows with fields it did not accept).
      *
      * @param  array<string, mixed>  $response
      */
@@ -139,7 +145,7 @@ class PushMasterDataCommand extends MasterDataCommand
     {
         $extra = '';
 
-        foreach (['assignment_conflicts', 'invalid'] as $key) {
+        foreach (['assignment_conflicts', 'invalid', 'filled', 'unresolved_divisions', 'refused'] as $key) {
             if (is_array($response[$key] ?? null)) {
                 $extra .= sprintf(' %s=%d', $key, count($response[$key]));
             }
@@ -195,6 +201,46 @@ class PushMasterDataCommand extends MasterDataCommand
             (string) (is_array($conflict) ? ($conflict['sso_division_id'] ?? '') : ''),
             (string) (is_array($conflict) ? ($conflict['incoming_division_id'] ?? '') : ''),
         ], array_values($conflicts)));
+    }
+
+    /**
+     * Locations whose division SSO could not map (this app's divisions were
+     * not pushed, or the division is turned off in SSO). They were linked
+     * without a division; push divisions first and rerun, or set it in SSO.
+     */
+    private function unresolvedDivisionTable(mixed $rows): void
+    {
+        if (! is_array($rows) || $rows === []) {
+            return;
+        }
+
+        $this->warn('SSO could not place these in a division. Push divisions first and rerun, or set the division in SSO:');
+        $this->table(['Local id', 'Name', 'Local division', 'Reason'], array_map(fn (mixed $row): array => [
+            (string) (is_array($row) ? ($row['local_id'] ?? '') : ''),
+            (string) (is_array($row) ? ($row['name'] ?? '') : ''),
+            (string) (is_array($row) ? ($row['division_local_id'] ?? $row['division_sso_id'] ?? '') : ''),
+            (string) (is_array($row) ? ($row['reason'] ?? '') : ''),
+        ], array_values($rows)));
+    }
+
+    /**
+     * Rows SSO created without some of their fields (an address missing its
+     * ZIP code, a phone it could not read). Fill those in SSO's Settings.
+     */
+    private function refusedTable(mixed $rows): void
+    {
+        if (! is_array($rows) || $rows === []) {
+            return;
+        }
+
+        $lines = [];
+        foreach ($rows as $row) {
+            foreach ((array) (is_array($row) ? ($row['fields'] ?? []) : []) as $field => $message) {
+                $lines[] = [(string) ($row['local_id'] ?? ''), (string) ($row['name'] ?? ''), (string) $field, (string) $message];
+            }
+        }
+
+        $this->table(['Local id', 'Name', 'Not saved in SSO', 'Because'], $lines);
     }
 
     private function invalidTable(mixed $invalid): void

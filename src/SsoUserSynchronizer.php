@@ -10,6 +10,7 @@ use Illuminate\Support\Str;
 use Unified\SsoClient\Concerns\PrunesStaleCompanyMemberships;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
 use Unified\SsoClient\Exceptions\CompanyLinkCollisionException;
+use Unified\SsoClient\MasterData\Divisions\DivisionMirror;
 use Unified\SsoClient\MasterData\MasterDataRegistry;
 use Unified\SsoClient\MasterData\Qualifications\QualificationMirror;
 
@@ -31,6 +32,11 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
      * process for the same reason as the timezone column check.
      */
     private static ?bool $qualificationMirrorInstalled = null;
+
+    /**
+     * Whether the divisions mirror migration has run, memoized likewise.
+     */
+    private static ?bool $divisionMirrorInstalled = null;
 
     /**
      * Synchronize the SSO user payload into local database records.
@@ -79,6 +85,7 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
             $this->attachUserToCompanies($user, $localCompanies);
             $this->syncRolesForCompanies($user, $companies, $localCompanies);
             $this->syncMirroredQualifications($user, $companies, $localCompanies);
+            $this->syncMirroredDivisions($user, $companies, $localCompanies);
             $this->pruneStaleCompanyMemberships(
                 $user,
                 array_values(array_map(static fn ($company) => $company->id, $localCompanies)),
@@ -549,10 +556,67 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
         }
     }
 
+    /**
+     * Mirror the user's division in each company from `companies[].division`
+     * ({id, name} or null). SSO sends it whether or not the division is still
+     * turned on, the same value its webhooks and internal endpoint carry, so a
+     * login and a webhook never disagree. Only a confirmed SSO-linked division
+     * (or none) is ever replaced; see DivisionMirror.
+     *
+     * No-op unless the app opted in (`sso.master_data.divisions`) and ran the
+     * mirror migration, and per company when the payload has no `division`
+     * key (an SSO that predates the field). A failure is reported and rolled
+     * back to a savepoint; it never fails the login.
+     *
+     * @param  array<int, array<string, mixed>>  $companies
+     * @param  array<int|string, object>  $localCompanies
+     */
+    protected function syncMirroredDivisions($user, array $companies, array $localCompanies): void
+    {
+        $withDivision = array_filter(
+            $companies,
+            static fn ($companyData): bool => is_array($companyData)
+                && array_key_exists('division', $companyData)
+                && ($companyData['division'] === null || is_array($companyData['division']))
+                && isset($companyData['id'], $localCompanies[$companyData['id']]),
+        );
+
+        if ($withDivision === []) {
+            return;
+        }
+
+        $registry = app(MasterDataRegistry::class);
+
+        if (! $registry->enabled('divisions')) {
+            return;
+        }
+
+        $mirror = $registry->mirror('divisions');
+
+        if (! $mirror instanceof DivisionMirror || ! (self::$divisionMirrorInstalled ??= $mirror->isInstalled())) {
+            return;
+        }
+
+        try {
+            DB::transaction(function () use ($mirror, $user, $withDivision, $localCompanies): void {
+                foreach ($withDivision as $companyData) {
+                    $mirror->syncFromLoginPayload((int) $localCompanies[$companyData['id']]->id, (int) $user->id, $companyData['division']);
+                }
+            });
+        } catch (\Throwable $e) {
+            Log::warning('SSO sync: divisions mirror failed, login continues', [
+                'user_id' => $user->id,
+                'error' => $e->getMessage(),
+            ]);
+            report($e);
+        }
+    }
+
     public static function flushSchemaCache(): void
     {
         self::$timezoneColumnSupport = [];
         self::$qualificationMirrorInstalled = null;
+        self::$divisionMirrorInstalled = null;
     }
 
     /**

@@ -268,6 +268,7 @@ return [
     */
     'master_data' => [
         'qualifications' => env('SSO_MASTER_DATA_QUALIFICATIONS', false),
+        'divisions' => env('SSO_MASTER_DATA_DIVISIONS', false),
 
         // Daily `sso:resync-master-data <entity>` for every enabled entity,
         // so assignments dropped by early-arriving webhooks (user not yet

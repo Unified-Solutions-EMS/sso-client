@@ -114,16 +114,11 @@ class PushMasterDataCommand extends MasterDataCommand
             $skipped,
             $result['applied'],
             count($result['collisions']),
-        ));
+        ).$this->extraCounts($response));
 
-        if ($conflicts !== []) {
-            $this->table(['Conflict', 'Local description', 'SSO description', 'Truncated'], array_map(fn ($conflict): array => [
-                (string) ($conflict['name'] ?? ''),
-                (string) ($conflict['local_description'] ?? ''),
-                (string) ($conflict['sso_description'] ?? ''),
-                ($conflict['truncated'] ?? false) ? 'yes' : 'no',
-            ], array_values(array_filter($conflicts, 'is_array'))));
-        }
+        $this->conflictTable(array_values(array_filter($conflicts, 'is_array')));
+        $this->assignmentConflictTable($response['assignment_conflicts'] ?? null);
+        $this->invalidTable($response['invalid'] ?? null);
 
         if ($result['collisions'] !== []) {
             $this->table(['Local id', 'SSO id', 'Not linked because'], array_map(fn (array $collision): array => [
@@ -132,5 +127,86 @@ class PushMasterDataCommand extends MasterDataCommand
                 $collision['reason'],
             ], $result['collisions']));
         }
+    }
+
+    /**
+     * Counts only some entities report (divisions: a person SSO already
+     * places elsewhere, rows SSO refused to create).
+     *
+     * @param  array<string, mixed>  $response
+     */
+    private function extraCounts(array $response): string
+    {
+        $extra = '';
+
+        foreach (['assignment_conflicts', 'invalid'] as $key) {
+            if (is_array($response[$key] ?? null)) {
+                $extra .= sprintf(' %s=%d', $key, count($response[$key]));
+            }
+        }
+
+        return $extra;
+    }
+
+    /**
+     * Qualification conflicts compare descriptions; other entities name a
+     * reason (divisions: `turned_off_in_sso`, the agency turned the matched
+     * row off in SSO while this app still uses it).
+     *
+     * @param  list<array<string, mixed>>  $conflicts
+     */
+    private function conflictTable(array $conflicts): void
+    {
+        if ($conflicts === []) {
+            return;
+        }
+
+        if (! array_key_exists('local_description', $conflicts[0])) {
+            $this->table(['Conflict', 'Reason'], array_map(fn (array $conflict): array => [
+                (string) ($conflict['name'] ?? ''),
+                (string) ($conflict['reason'] ?? ''),
+            ], $conflicts));
+
+            return;
+        }
+
+        $this->table(['Conflict', 'Local description', 'SSO description', 'Truncated'], array_map(fn (array $conflict): array => [
+            (string) ($conflict['name'] ?? ''),
+            (string) ($conflict['local_description'] ?? ''),
+            (string) ($conflict['sso_description'] ?? ''),
+            ($conflict['truncated'] ?? false) ? 'yes' : 'no',
+        ], $conflicts));
+    }
+
+    /**
+     * People SSO already places in a different single-valued entry (a
+     * division). SSO kept its value; after the mirror is enabled the resync
+     * applies it here too, so settle these in SSO before enabling.
+     */
+    private function assignmentConflictTable(mixed $conflicts): void
+    {
+        if (! is_array($conflicts) || $conflicts === []) {
+            return;
+        }
+
+        $this->warn('SSO already has a different value for these people and kept it. Settle them in SSO before enabling the mirror:');
+        $this->table(['SSO user', 'SSO has', 'This app had'], array_map(fn (mixed $conflict): array => [
+            (string) (is_array($conflict) ? ($conflict['user_sso_id'] ?? '') : ''),
+            (string) (is_array($conflict) ? ($conflict['sso_division_id'] ?? '') : ''),
+            (string) (is_array($conflict) ? ($conflict['incoming_division_id'] ?? '') : ''),
+        ], array_values($conflicts)));
+    }
+
+    private function invalidTable(mixed $invalid): void
+    {
+        if (! is_array($invalid) || $invalid === []) {
+            return;
+        }
+
+        $this->table(['Local id', 'Name', 'Not created in SSO because'], array_map(fn (mixed $row): array => [
+            (string) (is_array($row) ? ($row['local_id'] ?? '') : ''),
+            (string) (is_array($row) ? ($row['name'] ?? '') : ''),
+            (string) (is_array($row) ? ($row['message'] ?? '') : ''),
+        ], array_values($invalid)));
     }
 }

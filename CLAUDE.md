@@ -258,14 +258,14 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
 - **Migrations** — `sso_session_actions` table and `users.staff_roles` column, loaded from the package.
 - **Master data mirrors** (`src/MasterData/`) — SSO is canonical for shared master data; apps hold
   a read-only mirror per entity, opted into with `config('sso.master_data.<entity>')` (env
-  `SSO_MASTER_DATA_QUALIFICATIONS`, `SSO_MASTER_DATA_DIVISIONS`, `SSO_MASTER_DATA_LOCATIONS`, all default false). Pieces:
+  `SSO_MASTER_DATA_QUALIFICATIONS`, `SSO_MASTER_DATA_DIVISIONS`, `SSO_MASTER_DATA_LOCATIONS`, `SSO_MASTER_DATA_VEHICLES`, all default false). Pieces:
   `Contracts\EntityMirror` (one class per entity: table, SSO id column, publish tag, webhook apply,
   resync, link-by-name), `CatalogMirror` (the shared base: linking, name adoption, `sso_link_pending`,
   the `sso_updated_at` stale guard, deactivate-never-delete, link-by-name, the push mapping; each
   entity adds its columns and its assignment rules), `MasterDataRegistry`
   (known entities + opt-in check; mirrors resolve through the container so an app can bind a
   subclass), `MasterDataWebhookHandler` (the webhook controller's `match` sends `qualification.*`,
-  `user.qualifications_changed`, `division.*`, `user.division_changed` and `location.*` here; a disabled entity, an unmigrated mirror, or an unknown
+  `user.qualifications_changed`, `division.*`, `user.division_changed`, `location.*` and `vehicle.*` here; a disabled entity, an unmigrated mirror, or an unknown
   company is a 200 ack), `MasterDataClient` (`GET {SSO_BASE_URL}/api/internal/companies/{id}/{entity}`,
   bearer `CORE_APP_API_KEY`), `sso:resync-master-data {entity} {--company=} {--link-by-name}` and the
   one-time upward seed `sso:push-master-data {entity} {--company=} {--dry-run}` (mirrors that
@@ -427,6 +427,51 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     `unresolved_divisions` in SSO Settings > Locations; `SSO_MASTER_DATA_LOCATIONS=true`;
     `sso:resync-master-data locations`; make the app's location editor read-only with an "Edit in
     Settings" link and filter pickers by `is_active`.
+
+  **Vehicles** (fourth entity, `MasterData\Vehicles\VehicleMirror`, branch `feature/vehicles-mirror`;
+  SSO side on `feature/vehicles`). NEMSIS dVehicle; Fleet (`vehicles`) and CloudPCR (`dem_vehicles`)
+  are the first consumers. Same projection idea as locations: `Vehicles\VehicleProjection` names the
+  table and the unit number / VIN / call sign / home location / division columns, maps an SSO row to
+  columns (`toColumns()`; columns the app owns alone, like Fleet's mileage and notes, never appear) and
+  back for the push (`pushColumns()`, `toImport()`), and lists child tables (`childTables()`: a
+  `Vehicles\VehicleChildTable` each for `crew_levels` and `yearly_usage`). The package binds
+  `StandardVehicleProjection` (a `vehicles` table with the contract's column names, read and written
+  only where the column exists, no children; the migration creates the full table for an app with
+  none). `tests/Stubs/DemVehicleProjection.php` is the CloudPCR template (dvehicle_01 unit, 02 VIN,
+  03 call sign, 04 type, 09 cost, 10 year, `export_vehicle_number` / `export_call_sign`, children
+  `dem_vehicle_cert_levels` dvehicle_05..08 and `dem_vehicle_years` dvehicle_11..13);
+  `tests/Stubs/FleetVehicleProjection.php` the Fleet one (standard + free-text `category`).
+  - **Child rows are updated in place**, keyed by SSO's stable child id in `sso_crew_level_id` /
+    `sso_yearly_usage_id` (added by the migration). Never delete-and-recreate: CloudPCR derives NEMSIS
+    group UUIDs from the local child row id. A linked child is deleted only when SSO stops listing its
+    id; an unlinked local child is adopted by level / year when exactly one fits, otherwise kept and
+    counted as `unlinked_children` on the resync. A row whose only change is a child reports `updated`.
+  - Adoption and `--link-by-name` go VIN first, then unit number, then call sign (adoption only),
+    normalized like SSO (trim, uppercase, no spaces or hyphens). A unit number or call sign candidate
+    whose VIN differs from SSO's is never adopted (a replacement rig that kept the unit number).
+  - `home_location_id` / `division_id` are translated through the locations and divisions mirrors'
+    links (null clears; an id not linked here leaves the local value). The push sends
+    `home_location_sso_id` / `division_sso_id` when the local row's link is confirmed, otherwise
+    `*_local_id`; push **divisions and locations before vehicles**.
+  - SSO contract: `GET /api/internal/companies/{id}/vehicles` -> `{company, vehicles: [row]}` (row:
+    `id, uuid, unit_number, call_sign, export_unit_number, export_call_sign, reported_*, vin,
+    vehicle_type(_name), model_year, initial_cost, make, model, color, license_plate(_state)(_name),
+    fuel_type(_name), status(_name), home_location_id(_name), division_id(_name), crew_levels: [{id,
+    uuid, level, on_911_ambulance, on_911_non_transport, on_non_911_transport}], yearly_usage: [{id,
+    uuid, year, hours, distance, distance_unit}], is_active, sort_order, updated_at`);
+    `POST .../vehicles/import` `{app_slug, vehicles: [{local_id, unit_number, ..., crew_levels:
+    [{local_id, ...}], yearly_usage: [{local_id, ...}]}]}` -> `{created, matched, filled, conflicts,
+    unresolved_locations, unresolved_divisions, partial (with kept), refused, invalid, mapping:
+    {local_id: {sso_id, updated_at, crew_levels: {child_local_id: sso_child_id}, yearly_usage: {...}}}}`.
+    SSO matches VIN, then unit number, then call sign; never overwrites a match. Unit numbers are cut
+    at 25 on push. Events `vehicle.created|updated|deactivated`, full row, all upsert.
+  - Cutover: bind the projection (unless the standard one fits); publish `sso-master-data-vehicles` and
+    migrate; push divisions and locations first; `sso:push-master-data vehicles --dry-run`, then for
+    real (flag off); settle `conflicts` (a `unit_number_differs` means the resync will write SSO's unit
+    number, so set the export override in SSO first if the state must keep seeing the old one),
+    `unresolved_*`, `partial` and `refused` in SSO Settings > Vehicles; `SSO_MASTER_DATA_VEHICLES=true`;
+    `sso:resync-master-data vehicles`; make the app's vehicle editor read-only. Read side:
+    `VehicleCatalog::usableForCompany()`. Fleet is on Vapor (staging is live): James deploys it.
 
 ## Release discipline
 

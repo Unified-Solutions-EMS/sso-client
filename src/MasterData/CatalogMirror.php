@@ -592,4 +592,25 @@ abstract class CatalogMirror implements EntityMirror
     {
         return mb_strtolower(trim($name));
     }
+
+    /**
+     * Stored and incoming values are equal for the mirror: numbers by value
+     * ("44.324700" equals 44.3247), booleans against 0/1, the rest as text.
+     */
+    protected static function sameValue(mixed $stored, mixed $value): bool
+    {
+        if ($stored === null || $value === null) {
+            return $stored === null && $value === null;
+        }
+
+        if (is_bool($value)) {
+            return (bool) $stored === $value;
+        }
+
+        if (is_numeric($stored) && is_numeric($value)) {
+            return abs((float) $stored - (float) $value) < 0.0000005;
+        }
+
+        return (string) $stored === (string) $value;
+    }
 }

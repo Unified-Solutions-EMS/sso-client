@@ -10,6 +10,7 @@ use Unified\SsoClient\MasterData\Divisions\DivisionMirror;
 use Unified\SsoClient\MasterData\Exceptions\MasterDataSyncException;
 use Unified\SsoClient\MasterData\Locations\LocationMirror;
 use Unified\SsoClient\MasterData\Qualifications\QualificationMirror;
+use Unified\SsoClient\MasterData\Vehicles\VehicleMirror;
 
 /**
  * The master-data entities the package knows how to mirror, and which of them
@@ -27,6 +28,7 @@ class MasterDataRegistry
         'qualifications' => QualificationMirror::class,
         'divisions' => DivisionMirror::class,
         'locations' => LocationMirror::class,
+        'vehicles' => VehicleMirror::class,
     ];
 
     public function __construct(private readonly Container $container) {}

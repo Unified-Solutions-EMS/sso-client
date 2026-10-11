@@ -262,7 +262,7 @@ class LocationMirror extends CatalogMirror implements SeedsSso
             $stored = $row->{$column} ?? null;
             $stored = $column === self::SSO_UPDATED_AT_COLUMN ? $this->normalizeTimestamp($stored) : $stored;
 
-            if (! self::same($stored, $value)) {
+            if (! self::sameValue($stored, $value)) {
                 return false;
             }
         }
@@ -377,26 +377,5 @@ class LocationMirror extends CatalogMirror implements SeedsSso
         $number = mb_strtolower(trim((string) $number));
 
         return $number === '' ? null : $number;
-    }
-
-    /**
-     * Stored and incoming values are equal for the mirror: numbers by value
-     * ("44.324700" equals 44.3247), booleans against 0/1, the rest as text.
-     */
-    private static function same(mixed $stored, mixed $value): bool
-    {
-        if ($stored === null || $value === null) {
-            return $stored === null && $value === null;
-        }
-
-        if (is_bool($value)) {
-            return (bool) $stored === $value;
-        }
-
-        if (is_numeric($stored) && is_numeric($value)) {
-            return abs((float) $stored - (float) $value) < 0.0000005;
-        }
-
-        return (string) $stored === (string) $value;
     }
 }

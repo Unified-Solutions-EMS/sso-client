@@ -33,7 +33,14 @@ use Unified\SsoClient\MasterData\MasterDataClient;
  *   (each row upserted, nothing turned off);
  * - the push (SeedsSso): the app's rows go up once, before the flag is on;
  *   SSO matches by its own link, then code, then name + ZIP, never
- *   overwrites a match, and answers with the mapping that links them here.
+ *   overwrites a match, fills only its empty fields, and answers with the
+ *   mapping that links them here;
+ * - this app's own kept values: what the push sent that SSO's rules refused
+ *   (a bad NPI, an address with no ZIP) comes back in every row as
+ *   `pending: {field: {app_slug: value}}` until the agency fixes or
+ *   dismisses it. withOwnPending() puts this app's value back over SSO's
+ *   before the row is written, so a resync or delivery never blanks what
+ *   the app sent. Another app's kept values are never applied here.
  */
 class FacilityMirror extends CatalogMirror implements SeedsSso
 {
@@ -41,6 +48,11 @@ class FacilityMirror extends CatalogMirror implements SeedsSso
 
     /** SSO's facility name limit (dFacility.02); longer local names are cut on push. */
     public const MAX_NAME_LENGTH = 100;
+
+    /** Fields SSO can keep a refused value for, as named in `pending`. */
+    public const PENDING_FIELDS = ['type', 'location_code', 'designations', 'npis', 'fax', 'address', 'gps', 'phones'];
+
+    private const ADDRESS_KEYS = ['suite', 'street', 'street2', 'city_gnis', 'city_name', 'state', 'zip', 'county', 'country'];
 
     public function __construct(
         LocalTenantResolver $tenants,
@@ -123,6 +135,7 @@ class FacilityMirror extends CatalogMirror implements SeedsSso
      */
     public function upsert(int $localCompanyId, array $record, bool $delivery = false): string
     {
+        $record = self::withOwnPending($record, (string) config('sso.app_slug'));
         $result = parent::upsert($localCompanyId, $record, $delivery);
 
         if ($result === 'created' || $result === 'updated' || (! $delivery && in_array($result, ['linked', 'unchanged'], true))) {
@@ -134,6 +147,41 @@ class FacilityMirror extends CatalogMirror implements SeedsSso
         }
 
         return $result;
+    }
+
+    /**
+     * The SSO row with this app's kept values in place of SSO's: the field
+     * SSO could not store reads as what this app sent, and refused phones
+     * are added after SSO's. Rows with nothing kept for the app are
+     * returned unchanged.
+     *
+     * @param  array<string, mixed>  $record
+     * @return array<string, mixed>
+     */
+    public static function withOwnPending(array $record, string $appSlug): array
+    {
+        $pending = $record['pending'] ?? null;
+
+        if (! is_array($pending) || $appSlug === '') {
+            return $record;
+        }
+
+        foreach (self::PENDING_FIELDS as $field) {
+            if (! is_array($pending[$field] ?? null) || ! array_key_exists($appSlug, $pending[$field])) {
+                continue;
+            }
+
+            $value = $pending[$field][$appSlug];
+
+            match ($field) {
+                'address' => $record['address'] = array_replace(array_fill_keys(self::ADDRESS_KEYS, null), array_intersect_key(is_array($value) ? $value : [], array_flip(self::ADDRESS_KEYS))),
+                'gps' => [$record['latitude'], $record['longitude']] = [is_array($value) ? ($value['latitude'] ?? null) : null, is_array($value) ? ($value['longitude'] ?? null) : null],
+                'phones' => $record['phones'] = [...array_values((array) ($record['phones'] ?? [])), ...array_values(array_filter((array) $value, 'is_array'))],
+                default => $record[$field] = $value,
+            };
+        }
+
+        return $record;
     }
 
     public function resync(int $localCompanyId, array $snapshot): array

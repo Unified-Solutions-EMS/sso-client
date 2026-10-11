@@ -501,12 +501,17 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   - SSO contract: `GET /api/internal/companies/{id}/facilities` -> `{company, facilities: [{id, type, name,
     location_code, registry: {state, code, synced_at}|null, designations, npis, address: {suite, street,
     street2, city_gnis, city_name, state(_name), zip, county(_name), country}, latitude, longitude, fax, phones:
-    [{id, number, type}], is_active, sort_order, updated_at}]}`; `POST .../facilities/import` `{app_slug,
-    facilities: [{local_id, name ≤100, type?, location_code?, designations?, npis?, fax?, address?, latitude?,
-    longitude?, phones?, is_active?}]}` (500 max) -> `{created, matched, conflicts (turned_off_in_sso |
-    code_differs), refused, invalid, mapping}`. SSO matches by this app's earlier `list_links`, then code, then
-    name + ZIP; never overwrites a match. Events `facility.created|updated|deactivated` (full row) and
-    `facility.batch_updated` `{facilities: [...]}` (state-list adds, up to 200, applied like a resync page).
+    [{id, number, type}], pending: {field: {app_slug: value}}, is_active, sort_order, updated_at}]}`;
+    `POST .../facilities/import` `{app_slug, facilities: [{local_id, name ≤100, type?, location_code?,
+    designations?, npis?, fax?, address?, latitude?, longitude?, phones?, is_active?}]}` (500 max) -> `{created,
+    matched, filled, conflicts (turned_off_in_sso | code_differs), partial [{local_id, name, fields, kept}],
+    refused, invalid, mapping}`. SSO matches by this app's earlier `list_links`, then code, then name + ZIP;
+    never overwrites a match but fills its empty fields (`filled`). A value SSO's rules refuse is kept on the
+    row per field and per app and reported in `partial`; every row then carries it in `pending` (`gps` =
+    `{latitude, longitude}`, `phones` = the refused phones) until the agency fixes or dismisses it, and
+    `FacilityMirror::withOwnPending()` writes this app's own kept value over SSO's empty one, so a resync or
+    delivery never blanks what the app sent (another app's kept values are never applied). Events
+    `facility.created|updated|deactivated` (full row) and `facility.batch_updated` `{facilities: [...]}` (state-list adds, up to 200, applied like a resync page).
   - Read side: `FacilityCatalog::usableForCompany()` (active rows, SSO order, through the projection's scope).
 
   **Medications and procedures** (sixth and seventh, `MasterData\Medications\MedicationMirror` and

@@ -152,5 +152,6 @@ class VehicleSecondAppCutoverTest extends VehiclesTestCase
         $this->assertSame([901, 902, 903], DB::table('vehicles')->orderBy('id')->pluck('sso_vehicle_id')->map(fn ($id): int => (int) $id)->all());
         $this->assertSame([$fleetM1, $fleetE2], DB::table('vehicles')->whereIn('sso_vehicle_id', [901, 902])->orderBy('id')->pluck('id')->map(fn ($id): int => (int) $id)->all());
         $this->assertSame([48211, 'Pump test due'], [(int) DB::table('vehicles')->find($fleetM1)->mileage, DB::table('vehicles')->find($fleetE2)->notes]);
+        $this->assertSame(['Ambulance', 'Engine'], [DB::table('vehicles')->find($fleetM1)->category, DB::table('vehicles')->find($fleetE2)->category], 'category is push-only');
     }
 }

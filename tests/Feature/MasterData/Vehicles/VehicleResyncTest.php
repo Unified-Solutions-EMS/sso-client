@@ -41,14 +41,14 @@ class VehicleResyncTest extends VehiclesTestCase
             ->assertSuccessful();
 
         $confirmed = DB::table('vehicles')->find($pending);
-        $this->assertSame(['M-1', '1FDUF4HT5LDA12345', 'AB1234', 'Ambulance', 'diesel', 'in_service', false], [
-            $confirmed->unit_number, $confirmed->vin, $confirmed->license_plate, $confirmed->category, $confirmed->fuel_type, $confirmed->status, (bool) $confirmed->sso_link_pending,
+        $this->assertSame(['M-1', '1FDUF4HT5LDA12345', 'AB1234', 'diesel', 'in_service', false], [
+            $confirmed->unit_number, $confirmed->vin, $confirmed->license_plate, $confirmed->fuel_type, $confirmed->status, (bool) $confirmed->sso_link_pending,
         ]);
-        $this->assertSame([48211, 'Brakes done 09/26'], [(int) $confirmed->mileage, $confirmed->notes], 'Fleet\'s own columns are never touched');
+        $this->assertSame([48211, 'Brakes done 09/26', 'Rig'], [(int) $confirmed->mileage, $confirmed->notes, $confirmed->category], 'Fleet\'s own columns are never touched');
 
         $off = DB::table('vehicles')->find($dropped);
         $this->assertSame([false, 210000], [(bool) $off->is_active, (int) $off->mileage]);
-        $this->assertSame('Fire Apparatus', $this->mirrored($this->companyId, 902)->category);
+        $this->assertNull($this->mirrored($this->companyId, 902)->category, 'SSO\'s type name is never written into category');
         $this->assertFalse((bool) $this->mirrored($this->companyId, 903)->is_active);
         $this->assertNull(DB::table('vehicles')->find($fleetOnly)->sso_vehicle_id, 'an unlinked local row is left alone');
         $this->assertSame(5, DB::table('vehicles')->count());
@@ -56,6 +56,27 @@ class VehicleResyncTest extends VehiclesTestCase
         $this->artisan('sso:resync-master-data', ['entity' => 'vehicles'])
             ->expectsOutputToContain('created=0 updated=0 linked=0 unchanged=3 deactivated=0')
             ->assertSuccessful();
+    }
+
+    public function test_category_is_push_only_and_never_written_by_a_resync_or_webhook(): void
+    {
+        $linked = $this->localVehicle($this->companyId, 'M-1', ['sso_vehicle_id' => 901, 'category' => 'Rig']);
+        $record = $this->vehicleRecord(901, 'M-1', ['vehicle_type' => '1404005', 'vehicle_type_name' => 'Fire Apparatus', 'make' => 'Pierce']);
+
+        Http::fake(['sso.test/api/internal/companies/70/vehicles' => Http::response($this->snapshot(70, [$record]))]);
+
+        $this->artisan('sso:resync-master-data', ['entity' => 'vehicles'])
+            ->expectsOutputToContain('created=0 updated=1')
+            ->assertSuccessful();
+
+        $row = DB::table('vehicles')->find($linked);
+        $this->assertSame(['Pierce', 'Rig'], [$row->make, $row->category]);
+
+        $this->deliver('vehicle.updated', 70, array_replace($record, ['vehicle_type_name' => 'Ambulance', 'make' => 'Ford', 'updated_at' => '2026-10-11T13:00:00+00:00']))
+            ->assertJson(['result' => 'updated']);
+
+        $row = DB::table('vehicles')->find($linked);
+        $this->assertSame(['Ford', 'Rig'], [$row->make, $row->category]);
     }
 
     public function test_link_by_name_links_by_vin_first_then_unit_number(): void

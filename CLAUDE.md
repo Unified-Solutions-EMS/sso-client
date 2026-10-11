@@ -440,7 +440,9 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   none). `tests/Stubs/DemVehicleProjection.php` is the CloudPCR template (dvehicle_01 unit, 02 VIN,
   03 call sign, 04 type, 09 cost, 10 year, `export_vehicle_number` / `export_call_sign`, children
   `dem_vehicle_cert_levels` dvehicle_05..08 and `dem_vehicle_years` dvehicle_11..13);
-  `tests/Stubs/FleetVehicleProjection.php` the Fleet one (standard + free-text `category`).
+  `tests/Stubs/FleetVehicleProjection.php` the Fleet one (standard + free-text `category`, a Fleet
+  extension field that is push-only: SSO uses it to suggest a NEMSIS type at import, and nothing from
+  SSO is ever written into it). `distance_unit` is left to the real CloudPCR projection.
   - **Child rows are updated in place**, keyed by SSO's stable child id in `sso_crew_level_id` /
     `sso_yearly_usage_id` (added by the migration). Never delete-and-recreate: CloudPCR derives NEMSIS
     group UUIDs from the local child row id. A linked child is deleted only when SSO stops listing its

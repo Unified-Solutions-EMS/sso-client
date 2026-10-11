@@ -9,17 +9,12 @@ use Unified\SsoClient\MasterData\Vehicles\StandardVehicleProjection;
  * category, make, model, model_year, color, fuel_type, status)` plus
  * columns Fleet owns alone (mileage, notes) that the mirror never reads or
  * writes. The standard projection already covers every column Fleet shares
- * with the contract; Fleet only adds its free-text `category`, which SSO
- * uses to suggest a vehicle type on the push and which carries SSO's type
- * name back down.
+ * with the contract; Fleet only adds its free-text `category`, a Fleet
+ * extension field that is push-only: SSO uses it to suggest a vehicle type
+ * at import, and nothing from SSO is ever written back into it.
  */
 class FleetVehicleProjection extends StandardVehicleProjection
 {
-    public function toColumns(array $vehicle): array
-    {
-        return parent::toColumns($vehicle) + ['category' => $vehicle['vehicle_type_name'] ?? null];
-    }
-
     public function pushColumns(): array
     {
         return [...parent::pushColumns(), 'category'];

@@ -14,6 +14,7 @@ use Unified\SsoClient\MasterData\Exceptions\MasterDataSyncException;
  * CORE_APP_API_KEY as a bearer token:
  * - GET  /api/internal/companies/{ssoCompanyId}/{entity}         full snapshot
  * - POST /api/internal/companies/{ssoCompanyId}/{entity}/import  one-time upward seed
+ * - GET  /api/internal/companies/{ssoCompanyId}/{entity}/reviews/{id}  a code list's cutover review
  */
 class MasterDataClient
 {
@@ -37,6 +38,19 @@ class MasterDataClient
     public function import(string $entity, int|string $ssoCompanyId, array $payload): array
     {
         return $this->send('post', $entity, $ssoCompanyId, '/import', $payload);
+    }
+
+    /**
+     * The state of a code list's cutover review (`{id, status, completed_at,
+     * mapping: {app_slug: [{local_id, sso_id|null}]}}`).
+     *
+     * @return array<string, mixed>
+     *
+     * @throws MasterDataSyncException
+     */
+    public function review(string $entity, int|string $ssoCompanyId, int $reviewId): array
+    {
+        return $this->send('get', $entity, $ssoCompanyId, '/reviews/'.$reviewId);
     }
 
     /**

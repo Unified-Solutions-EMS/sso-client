@@ -5,10 +5,14 @@ declare(strict_types=1);
 namespace Unified\SsoClient\MasterData;
 
 use Illuminate\Contracts\Container\Container;
+use Unified\SsoClient\MasterData\Contracts\ContinuesPush;
 use Unified\SsoClient\MasterData\Contracts\EntityMirror;
 use Unified\SsoClient\MasterData\Divisions\DivisionMirror;
 use Unified\SsoClient\MasterData\Exceptions\MasterDataSyncException;
+use Unified\SsoClient\MasterData\Facilities\FacilityMirror;
 use Unified\SsoClient\MasterData\Locations\LocationMirror;
+use Unified\SsoClient\MasterData\Medications\MedicationMirror;
+use Unified\SsoClient\MasterData\Procedures\ProcedureMirror;
 use Unified\SsoClient\MasterData\Qualifications\QualificationMirror;
 use Unified\SsoClient\MasterData\Vehicles\VehicleMirror;
 
@@ -29,6 +33,9 @@ class MasterDataRegistry
         'divisions' => DivisionMirror::class,
         'locations' => LocationMirror::class,
         'vehicles' => VehicleMirror::class,
+        'facilities' => FacilityMirror::class,
+        'medications' => MedicationMirror::class,
+        'procedures' => ProcedureMirror::class,
     ];
 
     public function __construct(private readonly Container $container) {}
@@ -58,6 +65,17 @@ class MasterDataRegistry
         }
 
         return $this->container->make(self::ENTITIES[$entity]);
+    }
+
+    /**
+     * Whether the event finishes a push (ContinuesPush) and so is applied
+     * while the entity is still turned off.
+     */
+    public function continuesPush(string $entity, string $event): bool
+    {
+        $class = self::ENTITIES[$entity] ?? null;
+
+        return $class !== null && is_subclass_of($class, ContinuesPush::class) && in_array($event, $class::pushEvents(), true);
     }
 
     public function entityForEvent(string $event): ?string

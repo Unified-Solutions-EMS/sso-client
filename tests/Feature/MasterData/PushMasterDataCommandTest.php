@@ -248,4 +248,34 @@ class PushMasterDataCommandTest extends MasterDataTestCase
         Http::assertSent(fn (Request $request): bool => $request['qualifications'][0]['name'] === str_repeat('Ä', 255));
         $this->assertSame($long, DB::table('qualifications')->where('id', $longId)->value('name'), 'the local name is not changed');
     }
+
+    public function test_the_batch_option_sends_smaller_chunks(): void
+    {
+        $companyId = $this->company(70);
+        $medic = $this->localQualification($companyId, 'Paramedic');
+        $driver = $this->localQualification($companyId, 'Driver');
+        $this->fakeImport([(string) $medic => 501, (string) $driver => 502]);
+
+        $this->artisan('sso:push-master-data', ['entity' => 'qualifications', '--company' => '70', '--batch' => '1'])
+            ->assertSuccessful();
+
+        Http::assertSentCount(2);
+        Http::assertSent(fn (Request $request): bool => array_column($request['qualifications'], 'local_id') === [$medic]);
+        Http::assertSent(fn (Request $request): bool => array_column($request['qualifications'], 'local_id') === [$driver]);
+    }
+
+    public function test_a_batch_outside_one_to_the_entity_limit_is_refused_and_nothing_is_sent(): void
+    {
+        $companyId = $this->company(70);
+        $this->localQualification($companyId, 'Paramedic');
+        Http::fake();
+
+        foreach (['0', '1001', 'abc', '-5'] as $batch) {
+            $this->artisan('sso:push-master-data', ['entity' => 'qualifications', '--company' => '70', '--batch' => $batch])
+                ->expectsOutputToContain('--batch must be a whole number from 1 to 1000.')
+                ->assertFailed();
+        }
+
+        Http::assertNothingSent();
+    }
 }

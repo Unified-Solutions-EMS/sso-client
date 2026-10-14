@@ -35,7 +35,8 @@ class PushMasterDataCommand extends MasterDataCommand
         {entity : Master-data entity to seed into SSO, e.g. qualifications}
         {--company= : Only this SSO company id}
         {--dry-run : Build and summarize the payload without sending it}
-        {--review= : Medications or procedures: link the rows of this finished SSO review instead of pushing}';
+        {--review= : Medications or procedures: link the rows of this finished SSO review instead of pushing}
+        {--batch= : Rows per import request, from 1 up to the entity\'s own limit (default: that limit)}';
 
     protected $description = 'Seed SSO with this app\'s local master data and link the local rows to SSO';
 
@@ -55,6 +56,12 @@ class PushMasterDataCommand extends MasterDataCommand
         if (! $mirror instanceof SeedsSso) {
             $this->error("The {$entity} mirror does not support seeding SSO.");
 
+            return self::FAILURE;
+        }
+
+        $batchSize = $this->batchSize($mirror);
+
+        if ($batchSize === null) {
             return self::FAILURE;
         }
 
@@ -78,7 +85,7 @@ class PushMasterDataCommand extends MasterDataCommand
             try {
                 $review !== null && $review !== '' && $mirror instanceof CodeListMirror
                     ? $this->applyReview($mirror, $client, $entity, $localCompanyId, $ssoCompanyId, (int) $review)
-                    : $this->pushCompany($mirror, $client, $entity, $localCompanyId, $ssoCompanyId);
+                    : $this->pushCompany($mirror, $client, $entity, $localCompanyId, $ssoCompanyId, $batchSize);
             } catch (\Throwable $e) {
                 $failed++;
                 $this->error("Company {$ssoCompanyId}: {$e->getMessage()}");
@@ -89,7 +96,30 @@ class PushMasterDataCommand extends MasterDataCommand
         return $this->summarize(count($companies), $failed);
     }
 
-    private function pushCompany(SeedsSso $mirror, MasterDataClient $client, string $entity, int $localCompanyId, int|string $ssoCompanyId): void
+    /**
+     * Rows per import request: `--batch` when given (smaller chunks keep each
+     * request well inside SSO's time limit), else the entity's own cap.
+     * Null after printing why the option is refused.
+     */
+    private function batchSize(SeedsSso $mirror): ?int
+    {
+        $limit = $mirror->importBatchSize();
+        $option = $this->option('batch');
+
+        if ($option === null || $option === '') {
+            return $limit;
+        }
+
+        if (! ctype_digit((string) $option) || (int) $option < 1 || (int) $option > $limit) {
+            $this->error("--batch must be a whole number from 1 to {$limit}.");
+
+            return null;
+        }
+
+        return (int) $option;
+    }
+
+    private function pushCompany(SeedsSso $mirror, MasterDataClient $client, string $entity, int $localCompanyId, int|string $ssoCompanyId, int $batchSize): void
     {
         ['payload' => $payload, 'skipped_users' => $skipped, 'truncated_names' => $truncatedNames] = $mirror->buildImportPayload($localCompanyId);
         $label = "Company {$ssoCompanyId} (local {$localCompanyId})";
@@ -112,7 +142,7 @@ class PushMasterDataCommand extends MasterDataCommand
             return;
         }
 
-        $response = (new ImportBatcher($client))->import($entity, $ssoCompanyId, $payload, $mirror->importBatchSize());
+        $response = (new ImportBatcher($client))->import($entity, $ssoCompanyId, $payload, $batchSize);
         $mapping = $response['mapping'] ?? null;
 
         if (! is_array($mapping)) {

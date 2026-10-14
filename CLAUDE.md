@@ -326,8 +326,10 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   mirror lists in `Contracts\ContinuesPush::pushEvents()` (the code lists' `review_completed`) is applied while the entity is
   still off, because it finishes the push), `MasterDataClient` (`GET {SSO_BASE_URL}/api/internal/companies/{id}/{entity}`,
   bearer `CORE_APP_API_KEY`), `sso:resync-master-data {entity} {--company=} {--link-by-name}` and the
-  one-time upward seed `sso:push-master-data {entity} {--company=} {--dry-run} {--review=}` (mirrors that
-  implement `Contracts\SeedsSso`; `--review=ID --company=X` links a finished code-list review instead of pushing).
+  one-time upward seed `sso:push-master-data {entity} {--company=} {--dry-run} {--review=} {--batch=}` (mirrors that
+  implement `Contracts\SeedsSso`; `--review=ID --company=X` links a finished code-list review instead of pushing;
+  `--batch=N` sends N rows per import request instead of the entity's `importBatchSize()`, 1 up to that cap, for an
+  SSO import that runs close to its 30 s limit).
   Every mirror write is query-builder SQL pinned to the local company resolved from the
   authoritative SSO company id (§4a); rows SSO deleted or dropped are deactivated, never deleted.
   **Child rows SSO removes are never hard-deleted unless the table says so** (`Support\ChildRowPolicy`).

@@ -84,6 +84,16 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   so SSO can ship new events before any app handles them (pinned by `SsoWebhookUnknownEventTest`; the
   retired `personnel.*` names and `person.created` stay unknown, `person.updated|deactivated` go to the
   personnel mirror).
+  **`device.revoked`** `{company:{id}, user:{id}, device:{id}}` ends the named user's sessions in this
+  app: on the database session driver it deletes that user's `sessions` rows (which carry the OAuth
+  tokens), and on every driver it queues a `force_logout` session action so a request already past the
+  session read is bounced through SSO logout. Other users' sessions are untouched, an unknown device or
+  user is still a 200, and storage errors are logged, never thrown. Apps need no code. The device-lock
+  middleware and handshake on `feature/device-authorization` are separate and not on main.
+  **`company.modules_updated` is acknowledged silently on purpose.** It falls through to the unknown-event
+  200 ack in every app: enabled modules reach the local company through the login sync
+  (`SsoUserSynchronizer`) and `company.updated`, so there is nothing to act on, and SSO needs the 200 to
+  record the delivery. Do not add a handler without adding the missing sync first.
   **`trial.purge_data` is verified before it destroys anything.** The handler asks SSO's
   authoritative `GET /api/internal/companies/trials` (CORE_APP_API_KEY) whether the company is a
   current trial or in the response's `purge_pending` id list (the conversion flow flips

@@ -148,4 +148,32 @@ class LocationWebhookTest extends LocationsTestCase
             ->assertJson(['status' => 'ignored']);
         $this->assertSame('Station 1', $this->mirrored($this->companyId, 801)->name);
     }
+
+    /**
+     * SSO sends an app's push of its locations as one location.batch_updated
+     * per 200 rows (2026-10-14: one location.created per row per app flooded
+     * the outbox). Each row is applied like a delivery; nothing is turned off.
+     */
+    public function test_the_import_batch_upserts_every_row_and_turns_nothing_off(): void
+    {
+        $this->postWebhook('location.created', ['company' => ['id' => 70], 'location' => $this->locationRecord(800, 'Headquarters')]);
+
+        $this->postWebhook('location.batch_updated', [
+            'company' => ['id' => 70, 'division_label' => 'division'],
+            'ids' => [801, 802, 800],
+            'locations' => [
+                $this->locationRecord(801, 'Station 1 Saranac Lake', ['division_id' => 501]),
+                $this->locationRecord(802, 'Station 2', ['is_active' => false]),
+                $this->locationRecord(800, 'Old name', ['updated_at' => '2026-10-09T08:00:00+00:00']),
+            ],
+            'updated_at' => '2026-10-14T12:00:00+00:00',
+        ])->assertOk()->assertJson(['status' => 'ok', 'counts' => ['created' => 2, 'stale' => 1]]);
+
+        $this->assertSame($this->north, (int) $this->mirrored($this->companyId, 801)->division_id);
+        $this->assertSame('(518) 555-0142', $this->mirrored($this->companyId, 801)->phone_number);
+        $this->assertFalse((bool) $this->mirrored($this->companyId, 802)->is_active);
+        $this->assertSame('Headquarters', $this->mirrored($this->companyId, 800)->name, 'an older row in a batch is stale');
+        $this->assertTrue((bool) $this->mirrored($this->companyId, 800)->is_active, 'a row the batch does not list is left alone');
+        Http::assertNothingSent();
+    }
 }

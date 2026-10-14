@@ -58,6 +58,7 @@ class DivisionMirror extends CatalogMirror implements SeedsSso
             'division.created',
             'division.updated',
             'division.deactivated',
+            'division.batch_updated',
             'user.division_changed',
         ];
     }
@@ -110,6 +111,7 @@ class DivisionMirror extends CatalogMirror implements SeedsSso
     {
         return match ($event) {
             'division.created', 'division.updated', 'division.deactivated' => $this->applyUpsertWebhook($event, $localCompanyId, (array) ($payload['division'] ?? [])),
+            'division.batch_updated' => $this->applyBatch($localCompanyId, (array) ($payload['divisions'] ?? [])),
             'user.division_changed' => $this->applyAssignmentWebhook($localCompanyId, $payload),
             default => ['status' => 'ignored', 'reason' => 'unknown_event'],
         };

@@ -139,4 +139,33 @@ class VehicleChildRowsTest extends VehiclesTestCase
         $this->assertSame(21, (int) DB::table('dem_vehicle_years')->find($year)->sso_yearly_usage_id);
         $this->assertNull(DB::table('dem_vehicle_cert_levels')->find($foreignLevel)->sso_crew_level_id, 'a child of another vehicle is never linked');
     }
+
+    /**
+     * An app's push of its vehicles reaches the other apps as one
+     * vehicle.batch_updated per 200 rows; each row and its crew levels and
+     * yearly usage are applied exactly like a vehicle.created delivery.
+     */
+    public function test_the_import_batch_writes_each_vehicle_with_its_child_rows(): void
+    {
+        Http::fake();
+
+        $this->postWebhook('vehicle.batch_updated', [
+            'company' => ['id' => 70, 'division_label' => 'division'],
+            'ids' => [901, 902],
+            'vehicles' => [
+                $this->vehicleRecord(901, 'M-1', ['crew_levels' => [$this->crewLevel(11, '9917005', 2)], 'yearly_usage' => [$this->yearlyUsage(21, 2025, 1200, 31000.5)]]),
+                $this->vehicleRecord(902, 'M-2', ['crew_levels' => [$this->crewLevel(12, '9917007', 1), $this->crewLevel(13, '9917001', 1)]]),
+                ['id' => 903, 'unit_number' => ''],
+            ],
+            'updated_at' => '2026-10-14T12:00:00+00:00',
+        ])->assertOk()->assertJson(['status' => 'ok', 'counts' => ['created' => 2]]);
+
+        $first = $this->mirrored($this->companyId, 901);
+        $second = $this->mirrored($this->companyId, 902);
+        $this->assertSame([[11, '9917005', 2]], array_map(fn (array $level): array => [(int) DB::table('dem_vehicle_cert_levels')->where('id', $level[0])->value('sso_crew_level_id'), $level[1], $level[2]], $this->levels((int) $first->id)));
+        $this->assertSame(['9917007', '9917001'], array_column($this->levels((int) $second->id), 1));
+        $this->assertSame(1200, (int) DB::table('dem_vehicle_years')->where('dem_vehicle_id', $first->id)->value('dvehicle_12'));
+        $this->assertNull($this->mirrored($this->companyId, 903), 'a row without a unit number is skipped');
+        Http::assertNothingSent();
+    }
 }

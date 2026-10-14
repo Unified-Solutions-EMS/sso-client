@@ -433,7 +433,8 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     {sso_id, updated_at}}}`. Names are capped at 100 in SSO; the push cuts longer local names and
     warns (the local name is unchanged until a resync).
   - Events: `division.created|updated|deactivated` (full row; all three upsert, deactivated carries
-    `is_active: false`; SSO never deletes divisions) and `user.division_changed`
+    `is_active: false`; SSO never deletes divisions), `division.batch_updated` `{ids, divisions: [...]}` (an app's
+    push, up to 200 rows, applied like a resync page, nothing turned off) and `user.division_changed`
     `{company: {id}, user: {id}, division_id: int|null}`. `/api/user` and the roster endpoint carry
     `companies[].division: {id, name} | null`, sent whether or not the division is turned on (the
     same value the webhook and snapshot carry), so the login sync simply applies it.
@@ -490,7 +491,9 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     and reported in `partial`, so the first resync gives the app its text back. The push prints
     `filled`, `partial`, `unresolved_divisions` and `refused` counts plus tables for the last three.
   - Events `location.created|updated|deactivated`, full row, all upsert (deactivated carries
-    `is_active: false`); stale and pending guards as for every catalog. Never deleted: Crew's resources
+    `is_active: false`); stale and pending guards as for every catalog. An app's push reaches the other apps
+    as `location.batch_updated` `{ids, locations: [...]}` (up to 200 rows, applied like a resync page, nothing
+    turned off). Never deleted: Crew's resources
     and shift templates, CAD units and CloudPCR scenes point at these rows.
   - **Division translation** goes through the divisions mirror's links (`sso_division_id`): SSO's
     `division_id` becomes the local division id; `null` clears it; an id this app has not linked yet
@@ -543,7 +546,9 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     unresolved_locations, unresolved_divisions, partial (with kept), refused, invalid, mapping:
     {local_id: {sso_id, updated_at, crew_levels: {child_local_id: sso_child_id}, yearly_usage: {...}}}}`.
     SSO matches VIN, then unit number, then call sign; never overwrites a match. Unit numbers are cut
-    at 25 on push. Events `vehicle.created|updated|deactivated`, full row, all upsert.
+    at 25 on push. Events `vehicle.created|updated|deactivated`, full row, all upsert; an app's push reaches the
+    other apps as `vehicle.batch_updated` `{ids, vehicles: [...]}` (up to 200 rows, child rows included, applied
+    like a resync page, nothing turned off).
   - Cutover: bind the projection (unless the standard one fits); publish `sso-master-data-vehicles` and
     migrate; push divisions and locations first; `sso:push-master-data vehicles --dry-run`, then for
     real (flag off); settle `conflicts` (a `unit_number_differs` means the resync will write SSO's unit
@@ -588,7 +593,8 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     `{latitude, longitude}`, `phones` = the refused phones) until the agency fixes or dismisses it, and
     `FacilityMirror::withOwnPending()` writes this app's own kept value over SSO's empty one, so a resync or
     delivery never blanks what the app sent (another app's kept values are never applied). Events
-    `facility.created|updated|deactivated` (full row) and `facility.batch_updated` `{facilities: [...]}` (state-list adds, up to 200, applied like a resync page).
+    `facility.created|updated|deactivated` (full row) and `facility.batch_updated` `{ids, facilities: [...]}` (state-list adds and an app's push, up to 200, applied like a resync page).
+    Every list's batch goes through `CatalogMirror::applyBatch()` (the code lists add their projection on top).
   - Read side: `FacilityCatalog::usableForCompany()` (active rows, SSO order, through the projection's scope).
 
   **Medications and procedures** (sixth and seventh, `MasterData\Medications\MedicationMirror` and

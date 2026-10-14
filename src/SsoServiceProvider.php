@@ -7,6 +7,8 @@ use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
+use Unified\SsoClient\MasterData\Contacts\ContactProjection;
+use Unified\SsoClient\MasterData\Contacts\StandardContactProjection;
 use Unified\SsoClient\MasterData\Facilities\FacilityProjection;
 use Unified\SsoClient\MasterData\Facilities\StandardFacilityProjection;
 use Unified\SsoClient\MasterData\Locations\LocationProjection;
@@ -52,6 +54,10 @@ class SsoServiceProvider extends ServiceProvider
         // Facilities mirror: a `facilities` table with the contract's column
         // names unless the app binds its own (CloudPCR's dem_facility_entries).
         $this->app->bindIf(FacilityProjection::class, StandardFacilityProjection::class);
+
+        // Agency contacts land in the package's sso_agency_contacts table
+        // unless the app binds its own projection (CloudPCR's dem_contacts).
+        $this->app->bindIf(ContactProjection::class, StandardContactProjection::class);
 
         // Medications / procedures mirrors: the package's own flat tables;
         // the app binds a projection to carry the list into its structure
@@ -105,6 +111,12 @@ class SsoServiceProvider extends ServiceProvider
             __DIR__.'/../config/security.php' => config_path('security.php'),
         ], 'security-config');
 
+        // The local copy of SSO's agency information on `companies`. Opt-in
+        // like the mirrors: never loaded automatically.
+        $this->publishesMigrations([
+            __DIR__.'/../database/company/2026_10_14_000000_add_sso_profile_to_companies_table.php' => database_path('migrations/2026_10_14_000000_add_sso_profile_to_companies_table.php'),
+        ], 'sso-company-profile');
+
         // Master-data mirror migrations are opt-in per app and per entity, so
         // they are published rather than loaded, one tag each.
         $this->publishesMigrations([
@@ -140,6 +152,10 @@ class SsoServiceProvider extends ServiceProvider
             __DIR__.'/../database/master-data/2026_10_13_000000_create_or_extend_personnel_mirror.php' => database_path('migrations/2026_10_13_000000_create_or_extend_personnel_mirror.php'),
             __DIR__.'/../database/master-data/2026_10_13_200000_add_sso_removed_at_to_mirror_child_tables.php' => database_path('migrations/2026_10_13_200000_add_sso_removed_at_to_mirror_child_tables.php'),
         ], 'sso-master-data-personnel');
+
+        $this->publishesMigrations([
+            __DIR__.'/../database/master-data/2026_10_14_100000_create_or_extend_agency_contacts_mirror.php' => database_path('migrations/2026_10_14_100000_create_or_extend_agency_contacts_mirror.php'),
+        ], 'sso-master-data-agency-contacts');
 
         // Auto-record failed logins / lockouts / password resets as
         // security events in every consuming app.

@@ -78,7 +78,7 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   never merged automatically.
 - **Webhook / provisioning endpoint** — `POST /api/sso/provision` (`SsoWebhookController`), HMAC-verified
   in the controller, no CSRF/auth middleware. Handles `user.created/updated/deleted`,
-  `company.updated/activated`, `user.role.changed`, `user.app_role.changed`, `user.staff_role.changed`,
+  `company.updated/activated`, `agency_profile.updated`, `user.role.changed`, `user.app_role.changed`, `user.staff_role.changed`,
   `impersonation.started/ended`, `user.logged_out`, `trial.seed_data`, `trial.purge_data`,
   `cad.migrate_data`. Unknown events ack `{"status":"ok","action":"ignored"}` with a 200 rather than 500,
   so SSO can ship new events before any app handles them (pinned by `SsoWebhookUnknownEventTest`; the
@@ -717,6 +717,62 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     HR the same; settle `conflicts` / `partial` / `unmatched` in SSO; `SSO_MASTER_DATA_PERSONNEL=true` in
     CloudPCR; `sso:resync-master-data personnel`; DEM golden diff empty; then HR; then switch the editors to
     `writeThrough()`.
+
+  **Agency contacts** (ninth entity, `MasterData\Contacts\ContactMirror`, UNI-954; SSO side
+  `/system#agency-contacts`). The agency's director, medical director, billing contact and the rest (NEMSIS
+  dContact). **The entity key is `agency_contacts` everywhere**: the flag `sso.master_data.agency_contacts`
+  (`SSO_MASTER_DATA_AGENCY_CONTACTS`), the command argument, the SSO path
+  `/api/internal/companies/{id}/agency_contacts` (the registry key, `entity()`, the URL segment and the list
+  key of the snapshot / batch / import bodies must be one string; `MasterDataClient` and the push command
+  both build the path from it), and the publish tag `sso-master-data-agency-contacts`.
+  - `Contacts\ContactProjection` names the table, the display-name column, the type / last-name / first-name
+    columns adoption compares, the company scope, `toColumns($company, $contact)` (side-effect free: adoption
+    and `--link-by-name` call it to compare), `pushColumns()` and `toImport()`. The package binds
+    `StandardContactProjection`, the package-owned `sso_agency_contacts` table (phones / emails /
+    md_board_certifications as JSON text, address as `address_*`) that the migration creates. CloudPCR will
+    bind its own onto `dem_contacts`; `ContactMirror::TYPES` maps the platform types to dContact.01.
+  - Adoption: same type + last name + first name (ignoring case), exactly one unlinked candidate, pending
+    until confirmed; **never by name alone or across types** (one person can be director and billing contact
+    as two rows). `--link-by-name` uses the same key. CatalogMirror keys on `name`: a record without one gets
+    "First Last" (`ContactMirror::withName()`).
+  - SSO contract: `GET .../agency_contacts` -> `{company, agency_contacts: [<AgencyContact::toContractArray()>]}`
+    with `{id, type, is_primary, last_name, first_name, middle_name, title, phones: [{type, number}], emails:
+    [{type, address}], address: {street, street2, city_gnis, city_name, state, zip, county, country} (flat
+    `address_*` also read), website, md_degree, md_board_certifications, md_compensation, md_board_certified,
+    sso_user_id, is_active, sort_order, updated_at, name?}`; events `agency_contact.created|updated|deactivated`
+    `{company: {id, division_label}, agency_contact, updated_at}` (all upsert; deactivated carries
+    `is_active: false`) and `agency_contact.batch_updated` `{company, ids, agency_contacts: [...]}`; `POST
+    .../agency_contacts/import` `{app_slug, agency_contacts: [{local_id, is_active, type, last_name, first_name,
+    ...the same fields}]}` -> `{created, matched, conflicts, invalid, mapping}`.
+  - Not trial-seeded, so not in `TrialMirrorCleaner::ENTITIES`. Read side: `ContactCatalog::activeForCompany()`
+    (active rows, SSO order then name), `ofType()`, `primaryForCompany()`, and `HasMirroredAgencyContacts` on
+    the Company model (`agencyContacts()`, `primaryAgencyContact()`, `agencyContactsOfType()`).
+  - Cutover: bind the projection (unless the standard table fits); publish and migrate; push (flag off) if the
+    app has contacts; settle conflicts in SSO; set the flag; `sso:resync-master-data agency_contacts`; make the
+    app's editor read-only with an "Edit in Settings" link (`{SSO_BASE_URL}/system#agency-contacts`).
+
+- **Agency information on the company row** (UNI-954; SSO `/system#agency`). Not a list mirror: one
+  profile per company, copied into `companies.sso_profile` (JSON, SSO's flat keys: `state`, `state_agency_id`,
+  `agency_number`, `npi`, `tax_id`, `address_*`, `mailing_*`, `phone`, `fax`, `email`, `website`, the
+  organization codes) + `companies.sso_profile_updated_at` (SSO's timestamp, UTC). The agency name stays
+  `companies.name`. Opt-in: `vendor:publish --tag=sso-company-profile` and migrate (adds the two columns when
+  missing; never auto-loaded); apps without the columns are skipped silently (`Agency\ProfileColumns`,
+  memoized, flushed by `SsoUserSynchronizer::flushSchemaCache()`).
+  - Login: `/api/user` `companies[].profile` (compact: `state, state_agency_id, agency_number, npi, address
+    {street, street2, city_name, state, zip}, phone, fax, email, website`; null when none) is flattened
+    (`address.street` -> `address_street`) and **merged** over the stored copy on both the update and the
+    create branch of `resolveCompanies()`, so the fields only the webhook carries survive a sign-in. A
+    `companies[].profile_updated_at` (or `profile.updated_at`) older than the stored one is ignored; without
+    one the stored timestamp is kept.
+  - Webhook `agency_profile.updated` `{company: {id, division_label}, agency_profile: {...full record,
+    updated_at}, updated_at}` **replaces** the copy (stale guard on `agency_profile.updated_at`, then the
+    top-level one). Never creates a company; every outcome is a 200 (`result`: `stored`, `unchanged`, `stale`,
+    `unsupported`, `company_not_found`).
+  - `Concerns\SyncsCompanyProfile` does both writes (array when the model casts `sso_profile`, JSON text
+    otherwise). Read side: `Concerns\HasSsoProfile` on the Company model (`ssoProfile()`,
+    `ssoProfileValue($key)`, `agencyProfile()` -> `Agency\AgencyProfile` with `state()`, `stateAgencyId()`,
+    `agencyNumber()`, `npi()`, `phone()`, `fax()`, `email()`, `website()`, `physicalAddress()`,
+    `mailingAddress()`; `ssoProfileUpdatedAt()`). Apps must not edit these fields locally.
 
 ## Release discipline
 

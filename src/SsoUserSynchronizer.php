@@ -3,12 +3,15 @@
 namespace Unified\SsoClient;
 
 use Illuminate\Contracts\Auth\Authenticatable;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use Unified\SsoClient\Agency\ProfileColumns;
 use Unified\SsoClient\Concerns\PrunesStaleCompanyMemberships;
+use Unified\SsoClient\Concerns\SyncsCompanyProfile;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
 use Unified\SsoClient\Exceptions\CompanyLinkCollisionException;
 use Unified\SsoClient\MasterData\Divisions\DivisionMirror;
@@ -20,6 +23,7 @@ use Unified\SsoClient\MasterData\Qualifications\QualificationMirror;
 class SsoUserSynchronizer implements SsoUserSynchronizerContract
 {
     use PrunesStaleCompanyMemberships;
+    use SyncsCompanyProfile;
 
     /**
      * Cache of whether a company table carries a `timezone` column, keyed by
@@ -300,6 +304,8 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
                 if ($updates !== []) {
                     $company->forceFill($updates)->save();
                 }
+
+                $this->applyLoginProfile($company, $companyData);
             } else {
                 $company = $companyModel::create(array_merge([
                     'name' => $companyName,
@@ -307,6 +313,8 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
                     'sso_company_id' => $ssoCompanyId,
                     'core_tenant_id' => $legacyTenantId,
                 ], $syncsTimezone && $timezone ? ['timezone' => $timezone] : []));
+
+                $this->applyLoginProfile($company, $companyData);
 
                 // Keep the lookup maps current so a later payload entry that
                 // matches the same row reuses it instead of inserting twice.
@@ -325,6 +333,18 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
         }
 
         return $resolved;
+    }
+
+    /**
+     * `companies[].profile`: SSO's compact agency information (state, state
+     * agency id, agency number, NPI, address, phone, fax, email, website;
+     * null when the agency has none), merged over the stored copy.
+     *
+     * @param  array<string, mixed>  $companyData
+     */
+    protected function applyLoginProfile(Model $company, array $companyData): void
+    {
+        $this->applyCompanyProfile($company, $companyData['profile'] ?? null, updatedAt: $companyData['profile_updated_at'] ?? null);
     }
 
     /**
@@ -624,6 +644,7 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
     public static function flushSchemaCache(): void
     {
         self::$timezoneColumnSupport = [];
+        ProfileColumns::flush();
         self::$qualificationMirrorInstalled = null;
         self::$divisionMirrorInstalled = null;
         self::$personnelMirrorInstalled = null;

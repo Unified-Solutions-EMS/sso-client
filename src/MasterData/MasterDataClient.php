@@ -7,6 +7,8 @@ namespace Unified\SsoClient\MasterData;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
+use Unified\SsoClient\MasterData\Contracts\EntityMirror;
+use Unified\SsoClient\MasterData\Contracts\FetchesSnapshot;
 use Unified\SsoClient\MasterData\Exceptions\MasterDataSyncException;
 
 /**
@@ -15,6 +17,8 @@ use Unified\SsoClient\MasterData\Exceptions\MasterDataSyncException;
  * - GET  /api/internal/companies/{ssoCompanyId}/{entity}         full snapshot
  * - POST /api/internal/companies/{ssoCompanyId}/{entity}/import  one-time upward seed
  * - GET  /api/internal/companies/{ssoCompanyId}/{entity}/reviews/{id}  a code list's cutover review
+ * - GET / PATCH /api/internal/companies/{ssoCompanyId}/personnel[/{ssoUserId}]  paged personnel
+ *   snapshots, one person, and the write-through (get() / patch())
  */
 class MasterDataClient
 {
@@ -27,6 +31,47 @@ class MasterDataClient
     public function fetch(string $entity, int|string $ssoCompanyId): array
     {
         return $this->send('get', $entity, $ssoCompanyId, '');
+    }
+
+    /**
+     * The snapshot a resync reads: the mirror's own when it pages
+     * (FetchesSnapshot), otherwise the plain fetch().
+     *
+     * @return array<string, mixed>
+     *
+     * @throws MasterDataSyncException
+     */
+    public function snapshot(EntityMirror $mirror, int|string $ssoCompanyId): array
+    {
+        return $mirror instanceof FetchesSnapshot
+            ? $mirror->fetchSnapshot($ssoCompanyId)
+            : $this->fetch($mirror->entity(), $ssoCompanyId);
+    }
+
+    /**
+     * Any GET under the entity's path, with a query string and, for calls
+     * made while a user waits (a login pull), a shorter timeout than the
+     * master-data one.
+     *
+     * @param  array<string, scalar|null>  $query
+     * @return array<string, mixed>
+     *
+     * @throws MasterDataSyncException
+     */
+    public function get(string $entity, int|string $ssoCompanyId, string $suffix = '', array $query = [], ?int $timeout = null): array
+    {
+        return $this->send('get', $entity, $ssoCompanyId, $suffix, [], $query, $timeout);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     *
+     * @throws MasterDataSyncException
+     */
+    public function patch(string $entity, int|string $ssoCompanyId, string $suffix, array $payload, ?int $timeout = null): array
+    {
+        return $this->send('patch', $entity, $ssoCompanyId, $suffix, $payload, [], $timeout);
     }
 
     /**
@@ -54,11 +99,12 @@ class MasterDataClient
     }
 
     /**
-     * @param  'get'|'post'  $method
+     * @param  'get'|'post'|'patch'  $method
      * @param  array<string, mixed>  $payload
+     * @param  array<string, scalar|null>  $query
      * @return array<string, mixed>
      */
-    private function send(string $method, string $entity, int|string $ssoCompanyId, string $suffix, array $payload = []): array
+    private function send(string $method, string $entity, int|string $ssoCompanyId, string $suffix, array $payload = [], array $query = [], ?int $timeout = null): array
     {
         $baseUrl = rtrim((string) config('sso.base_url'), '/');
         $apiKey = (string) (config('app.core_api_key') ?: config('security.token'));
@@ -69,7 +115,8 @@ class MasterDataClient
 
         $url = $baseUrl.'/api/internal/companies/'.rawurlencode((string) $ssoCompanyId).'/'.rawurlencode($entity).$suffix;
 
-        $timeout = (int) config('sso.master_data.timeout', 120);
+        $timeout ??= (int) config('sso.master_data.timeout', 120);
+        $query = array_filter($query, fn (mixed $value): bool => $value !== null && $value !== '');
 
         try {
             $request = Http::withToken($apiKey)
@@ -77,7 +124,11 @@ class MasterDataClient
                 ->timeout($timeout);
 
             /** @var Response $response */
-            $response = $method === 'post' ? $request->post($url, $payload) : $request->get($url);
+            $response = match ($method) {
+                'post' => $request->post($url, $payload),
+                'patch' => $request->patch($url, $payload),
+                default => $request->get($url, $query),
+            };
         } catch (ConnectionException $e) {
             if (str_contains($e->getMessage(), 'cURL error 28') || stripos($e->getMessage(), 'timed out') !== false) {
                 throw new MasterDataSyncException(

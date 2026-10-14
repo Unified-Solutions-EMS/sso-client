@@ -143,6 +143,7 @@ class PushMasterDataCommand extends MasterDataCommand
         $this->unresolvedDivisionTable($response['unresolved_divisions'] ?? null);
         $this->partialTable($response['partial'] ?? null);
         $this->refusedTable($response['refused'] ?? null);
+        $this->unmatchedTable($response['unmatched'] ?? null);
         $this->reviewNotice($entity, $ssoCompanyId, $response);
 
         if ($result['collisions'] !== []) {
@@ -167,7 +168,7 @@ class PushMasterDataCommand extends MasterDataCommand
     {
         $extra = '';
 
-        foreach (['assignment_conflicts', 'invalid', 'filled', 'partial', 'unresolved_locations', 'unresolved_divisions', 'refused', 'in_review'] as $key) {
+        foreach (['assignment_conflicts', 'invalid', 'filled', 'partial', 'unresolved_locations', 'unresolved_divisions', 'refused', 'in_review', 'unmatched'] as $key) {
             if (is_array($response[$key] ?? null)) {
                 $extra .= sprintf(' %s=%d', $key, count($response[$key]));
             }
@@ -189,6 +190,12 @@ class PushMasterDataCommand extends MasterDataCommand
             return;
         }
 
+        if (array_key_exists('field', $conflicts[0])) {
+            $this->fieldConflictTable($conflicts);
+
+            return;
+        }
+
         if (! array_key_exists('local_description', $conflicts[0])) {
             $this->table(['Conflict', 'Reason'], array_map(fn (array $conflict): array => [
                 (string) ($conflict['name'] ?? ''),
@@ -204,6 +211,50 @@ class PushMasterDataCommand extends MasterDataCommand
             (string) ($conflict['sso_description'] ?? ''),
             ($conflict['truncated'] ?? false) ? 'yes' : 'no',
         ], $conflicts));
+    }
+
+    /**
+     * Personnel: fields where this app's value differs from the one SSO
+     * already had. SSO kept its own; after the flag is on the resync writes
+     * SSO's value here, so settle them in SSO first if this app was right.
+     *
+     * @param  list<array<string, mixed>>  $conflicts
+     */
+    private function fieldConflictTable(array $conflicts): void
+    {
+        $this->warn('SSO already had a different value for these and kept it. Settle them in SSO before enabling the mirror:');
+        $this->table(['Local id', 'Name', 'Field', 'This app had', 'SSO kept'], array_map(fn (array $conflict): array => [
+            (string) ($conflict['local_id'] ?? ''),
+            (string) ($conflict['name'] ?? ''),
+            (string) ($conflict['field'] ?? ''),
+            self::cell($conflict['local_value'] ?? null),
+            self::cell($conflict['sso_value'] ?? null),
+        ], $conflicts));
+    }
+
+    /**
+     * Personnel rows SSO could not tie to one of the agency's people (no
+     * sign-in user, an email no member has, more than one match). They wait
+     * in SSO's import review; nothing was created for them and they stay
+     * local-only (the resync never touches them).
+     */
+    private function unmatchedTable(mixed $rows): void
+    {
+        if (! is_array($rows) || $rows === []) {
+            return;
+        }
+
+        $this->warn('SSO could not match these people to a member of the agency. They wait in SSO\'s import review:');
+        $this->table(['Local id', 'Name', 'Why'], array_map(fn (mixed $row): array => [
+            (string) (is_array($row) ? ($row['local_id'] ?? '') : ''),
+            (string) (is_array($row) ? ($row['name'] ?? '') : ''),
+            (string) (is_array($row) ? ($row['reason'] ?? '') : ''),
+        ], array_values($rows)));
+    }
+
+    private static function cell(mixed $value): string
+    {
+        return is_scalar($value) || $value === null ? (string) $value : (string) json_encode($value);
     }
 
     /**

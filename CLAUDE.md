@@ -81,8 +81,9 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   `company.updated/activated`, `user.role.changed`, `user.app_role.changed`, `user.staff_role.changed`,
   `impersonation.started/ended`, `user.logged_out`, `trial.seed_data`, `trial.purge_data`,
   `cad.migrate_data`. Unknown events ack `{"status":"ok","action":"ignored"}` with a 200 rather than 500,
-  so SSO can ship new events (e.g. the `personnel.*` -> `person.*` rename, which has no mirror here yet)
-  before any app handles them (pinned by `SsoWebhookUnknownEventTest`).
+  so SSO can ship new events before any app handles them (pinned by `SsoWebhookUnknownEventTest`; the
+  retired `personnel.*` names and `person.created` stay unknown, `person.updated|deactivated` go to the
+  personnel mirror).
   **`trial.purge_data` is verified before it destroys anything.** The handler asks SSO's
   authoritative `GET /api/internal/companies/trials` (CORE_APP_API_KEY) whether the company is a
   current trial or in the response's `purge_pending` id list (the conversion flow flips
@@ -297,7 +298,8 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
 - **Master data mirrors** (`src/MasterData/`) — SSO is canonical for shared master data; apps hold
   a read-only mirror per entity, opted into with `config('sso.master_data.<entity>')` (env
   `SSO_MASTER_DATA_QUALIFICATIONS`, `SSO_MASTER_DATA_DIVISIONS`, `SSO_MASTER_DATA_LOCATIONS`, `SSO_MASTER_DATA_VEHICLES`,
-  `SSO_MASTER_DATA_FACILITIES`, `SSO_MASTER_DATA_MEDICATIONS`, `SSO_MASTER_DATA_PROCEDURES`, all default false).
+  `SSO_MASTER_DATA_FACILITIES`, `SSO_MASTER_DATA_MEDICATIONS`, `SSO_MASTER_DATA_PROCEDURES`,
+  `SSO_MASTER_DATA_PERSONNEL`, all default false).
   `mergeConfigFrom()` is shallow, so an app whose own `config/sso.php` defines `master_data` replaces the
   package's whole array. That is safe: every reader defaults per key (`MasterDataRegistry::enabled()` reads
   `config("sso.master_data.{$entity}", false)`, `schedule_resync` defaults true, `timeout` 120), so an app may
@@ -309,8 +311,8 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   entity adds its columns and its assignment rules), `MasterDataRegistry`
   (known entities + opt-in check; mirrors resolve through the container so an app can bind a
   subclass), `MasterDataWebhookHandler` (the webhook controller's `match` sends `qualification.*`,
-  `user.qualifications_changed`, `division.*`, `user.division_changed`, `location.*`, `vehicle.*`, `facility.*`, `medication.*`
-  and `procedure.*` here; a disabled entity, an unmigrated mirror, or an unknown company is a 200 ack, except that an event a
+  `user.qualifications_changed`, `division.*`, `user.division_changed`, `location.*`, `vehicle.*`, `facility.*`, `medication.*`,
+  `procedure.*` and `person.updated|deactivated` here; a disabled entity, an unmigrated mirror, or an unknown company is a 200 ack, except that an event a
   mirror lists in `Contracts\ContinuesPush::pushEvents()` (the code lists' `review_completed`) is applied while the entity is
   still off, because it finishes the push), `MasterDataClient` (`GET {SSO_BASE_URL}/api/internal/companies/{id}/{entity}`,
   bearer `CORE_APP_API_KEY`), `sso:resync-master-data {entity} {--company=} {--link-by-name}` and the
@@ -601,6 +603,67 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     for the agency to finish the review; set the flag; `sso:resync-master-data <entity>`; make the app's
     editor read-only with an "Edit in Settings" link (`{SSO_BASE_URL}/system#facilities`, `#medications`,
     `#procedures`).
+
+  **Personnel** (eighth entity, `MasterData\Personnel\PersonnelMirror`, branch `feature/personnel-mirror`;
+  design `/Sites/docs/design/personnel-design.md` §3b/§3c/§3e). NEMSIS dPersonnel, one record per person per
+  company; CloudPCR (`dem_personnel` + children) and HR (`personnel_profiles` + children) are the consumers.
+  SSO is the editor; apps mirror. Not a name-keyed catalog: the mirror implements `EntityMirror`,
+  `SeedsSso` and `Contracts\FetchesSnapshot` itself (no `CatalogMirror`), keyed by SSO user id + company.
+  - **The contract apps implement is `Personnel\PersonnelProjection`** (the design's
+    `PersonnelMirrorWriter`): `table()` (one row per person per company, `id` + `company_id`),
+    `activeColumn()`, `userColumn()` (local users.id or null), `emailColumn()` (match key or null),
+    `toColumns($company, $snapshot)` (leave out columns whose snapshot section is absent; JSON as text),
+    `written($company, $rowId, $snapshot)` (idempotent extras: CloudPCR's sign-in contact rows, HR's
+    `users.name`), `pushColumns()` / `toImport($company, $row)` (snapshot-shaped `user` / `profile` /
+    `membership`) and `childTables()`: a `Personnel\PersonnelChildTable` (`table`, `parentColumn`,
+    `keyColumns`, `toColumns`, `pushColumns`, `toImport`; `toImport` returning `[]` keeps a row out of the
+    push, e.g. HR's driver's licences) each for `licenses`, `practice_levels`, `phones`, `emails`,
+    `immunizations`. Before calling it the mirror adds `user.local_id` and, when the divisions mirror can
+    translate it, `membership.local_division_id` (absent = leave the local value). The package binds
+    `StandardPersonnelProjection` (package-owned `sso_personnel` read model, licences and practice levels as
+    JSON text, no children). Templates: `tests/Stubs/DemPersonnelProjection.php` (CloudPCR, incl. the
+    `_nv = 7701003` rule for blank nillable recommended elements, D12) and `tests/Stubs/HrPersonnelProjection.php`.
+  - The mirror owns: link `sso_user_id` (unique per company), `sso_updated_at` stale guard,
+    `sso_link_pending`, the active column (`membership.is_member && is_active`), the user column (never
+    taken from another local row that holds the user), division translation, and **child rows reconciled in
+    place by SSO child ids** (`sso_license_id`, `sso_practice_level_id`, `sso_phone_id`, `sso_email_id`,
+    `sso_immunization_id`; sort_order from SSO's order where the table has it). A linked child is deleted only
+    when SSO stops listing it; an unlinked local child is adopted by `keyColumns` when exactly one fits,
+    otherwise kept (`unlinked_children`). A child list SSO leaves out is not touched.
+  - **Adoption:** local user link first (users.sso_id), then email (case-insensitive), exactly one unlinked
+    candidate each, **never by name**; two candidates = `ambiguous` (nothing linked or created). A delivery
+    only links + pending; a resync or the push mapping confirms. No local row: created for an active member
+    (`user_not_found` while `userColumn()` is set and the user is not provisioned yet; `not_member` for
+    someone who left). **Never deleted:** `person.deactivated`, an inactive membership in the snapshot, or a
+    complete resync that no longer lists a confirmed person turns the active column off. Local people SSO
+    never knew (CloudPCR's name-only crew stubs, D3) are never touched (`unlinked_local`).
+  - **Per-field partial values:** the snapshot's `pending` `{path: {app_slug: value}}` (paths under
+    `user.`, `profile.`, `membership.`) puts this app's kept value over SSO's EMPTY value
+    (`PersonnelMirror::withOwnPending()`); SSO's own value wins once it has one; other apps' are never applied.
+  - Events: `person.updated` `{company, personnel: <PersonnelSnapshot>, updated_at}` (upsert),
+    `person.deactivated` `{company, user: {id}, updated_at}`. Resync walks `GET .../personnel?cursor=`
+    (`{company, data, next_cursor}`, 200 a page); a page failing or a cursor not advancing throws and
+    changes nothing, and only a complete set turns anyone off.
+  - **Login staleness hint:** `/api/user` `companies[].personnel_updated_at` newer than the mirror's
+    `sso_updated_at` (or no row yet) queues `Personnel\Jobs\PullPersonnelRecord` after the login commits
+    (`GET .../personnel/{ssoUserId}`, login timeout, applied as a delivery). One pull per hint per 5 min
+    (`Cache::add`, fails open); every failure is logged, never fails the login. A pending row never pulls.
+  - **Write-through:** `PersonnelMirror::writeThrough($company, $ssoCompanyId, $ssoUserId, $patch,
+    $actorSsoUserId)` PATCHes `.../personnel/{ssoUserId}` `{patch, source: app_slug, actor_sso_user_id}`
+    (SSO's flat keys: `hire_date`, `licenses.{id|new}`, `address`, ...) and applies the answered snapshot at
+    once; returns SSO's per-key `results`.
+  - Push: `POST .../personnel/import` `{app_slug, personnel: [{local_id, user_sso_id?, is_active, user?,
+    profile?, membership? (practice_levels with local_id), phones?, emails?, immunizations?, licenses?}]}` ->
+    `{matched, filled, conflicts: [{local_id, name, field, local_value, sso_value}], partial: [{local_id,
+    name, fields, kept}], unmatched: [{local_id, name, reason}], invalid, mapping: {local_id: {sso_id
+    (SSO user id), updated_at, licenses|practice_levels|phones|emails|immunizations: {child_local_id:
+    sso_child_id}}}}`. Every local row is sent; rows SSO cannot match wait in SSO's review.
+    **Not on SSO main yet** (nor `personnel_updated_at`, nor snapshot `pending`): see the PR for the spec.
+  - Cutover per company (design §3d): bind the projection; publish `sso-master-data-personnel` and migrate;
+    push divisions first; CloudPCR `sso:push-master-data personnel --dry-run`, then for real (flag off);
+    HR the same; settle `conflicts` / `partial` / `unmatched` in SSO; `SSO_MASTER_DATA_PERSONNEL=true` in
+    CloudPCR; `sso:resync-master-data personnel`; DEM golden diff empty; then HR; then switch the editors to
+    `writeThrough()`.
 
 ## Release discipline
 

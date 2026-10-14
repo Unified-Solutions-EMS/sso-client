@@ -14,6 +14,8 @@ use Unified\SsoClient\MasterData\Locations\TextAddressLocationProjection;
 use Unified\SsoClient\MasterData\MasterDataRegistry;
 use Unified\SsoClient\MasterData\Medications\MedicationProjection;
 use Unified\SsoClient\MasterData\Medications\MirrorOnlyMedicationProjection;
+use Unified\SsoClient\MasterData\Personnel\PersonnelProjection;
+use Unified\SsoClient\MasterData\Personnel\StandardPersonnelProjection;
 use Unified\SsoClient\MasterData\Procedures\MirrorOnlyProcedureProjection;
 use Unified\SsoClient\MasterData\Procedures\ProcedureProjection;
 use Unified\SsoClient\MasterData\Vehicles\StandardVehicleProjection;
@@ -56,6 +58,11 @@ class SsoServiceProvider extends ServiceProvider
         // (CloudPCR's configuration groups) and back for the push.
         $this->app->bindIf(MedicationProjection::class, MirrorOnlyMedicationProjection::class);
         $this->app->bindIf(ProcedureProjection::class, MirrorOnlyProcedureProjection::class);
+
+        // Personnel lands in the package's sso_personnel read model unless the
+        // app binds its own projection (CloudPCR's dem_personnel, HR's
+        // personnel_profiles).
+        $this->app->bindIf(PersonnelProjection::class, StandardPersonnelProjection::class);
 
         // Trial purge: what happens to a mirrored sample row SSO deleted.
         // Apps bind their own policy to veto deletes the database cannot see.
@@ -127,6 +134,10 @@ class SsoServiceProvider extends ServiceProvider
         $this->publishesMigrations([
             __DIR__.'/../database/master-data/2026_10_11_120000_create_procedures_mirror.php' => database_path('migrations/2026_10_11_120000_create_procedures_mirror.php'),
         ], 'sso-master-data-procedures');
+
+        $this->publishesMigrations([
+            __DIR__.'/../database/master-data/2026_10_13_000000_create_or_extend_personnel_mirror.php' => database_path('migrations/2026_10_13_000000_create_or_extend_personnel_mirror.php'),
+        ], 'sso-master-data-personnel');
 
         // Auto-record failed logins / lockouts / password resets as
         // security events in every consuming app.

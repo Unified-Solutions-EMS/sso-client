@@ -285,6 +285,11 @@ return [
         // per-state, per-level configuration groups).
         'medications' => env('SSO_MASTER_DATA_MEDICATIONS', false),
         'procedures' => env('SSO_MASTER_DATA_PROCEDURES', false),
+        // Personnel (NEMSIS dPersonnel, one record per person per company).
+        // Bind a PersonnelProjection first unless the package's sso_personnel
+        // read model is enough (CloudPCR: dem_personnel; HR: personnel_profiles),
+        // and push before turning this on.
+        'personnel' => env('SSO_MASTER_DATA_PERSONNEL', false),
 
         // Daily `sso:resync-master-data <entity>` for every enabled entity,
         // so assignments dropped by early-arriving webhooks (user not yet

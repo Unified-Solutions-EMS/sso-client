@@ -46,7 +46,7 @@ class ResyncMasterDataCommand extends MasterDataCommand
 
         foreach ($companies as $localCompanyId => $ssoCompanyId) {
             try {
-                $snapshot = $client->fetch($entity, $ssoCompanyId);
+                $snapshot = $client->snapshot($mirror, $ssoCompanyId);
 
                 $this->option('link-by-name')
                     ? $this->linkByName($mirror, $localCompanyId, $ssoCompanyId, $snapshot)

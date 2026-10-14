@@ -69,7 +69,7 @@ class TrialMasterDataSync
 
         foreach ($this->mirrors() as $entity => $mirror) {
             try {
-                $snapshot = $this->client->fetch($entity, $ssoCompanyId);
+                $snapshot = $this->client->snapshot($mirror, $ssoCompanyId);
                 DB::transaction(fn (): array => $mirror->resync($localCompanyId, $snapshot));
             } catch (\Throwable $e) {
                 throw new TrialMasterDataNotReadyException("Could not resync {$entity} for company {$ssoCompanyId}: {$e->getMessage()}", 0, $e);

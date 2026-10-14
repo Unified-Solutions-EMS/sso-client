@@ -12,6 +12,7 @@ use Unified\SsoClient\MasterData\Exceptions\MasterDataSyncException;
 use Unified\SsoClient\MasterData\Facilities\FacilityMirror;
 use Unified\SsoClient\MasterData\Locations\LocationMirror;
 use Unified\SsoClient\MasterData\Medications\MedicationMirror;
+use Unified\SsoClient\MasterData\Personnel\PersonnelMirror;
 use Unified\SsoClient\MasterData\Procedures\ProcedureMirror;
 use Unified\SsoClient\MasterData\Qualifications\QualificationMirror;
 use Unified\SsoClient\MasterData\Vehicles\VehicleMirror;
@@ -36,6 +37,7 @@ class MasterDataRegistry
         'facilities' => FacilityMirror::class,
         'medications' => MedicationMirror::class,
         'procedures' => ProcedureMirror::class,
+        'personnel' => PersonnelMirror::class,
     ];
 
     public function __construct(private readonly Container $container) {}

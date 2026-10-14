@@ -7,6 +7,8 @@ use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
+use Unified\SsoClient\MasterData\Locations\LocationProjection;
+use Unified\SsoClient\MasterData\Locations\TextAddressLocationProjection;
 use Unified\SsoClient\MasterData\MasterDataRegistry;
 use Unified\SsoClient\Metrics\Contracts\MetricContextResolver;
 use Unified\SsoClient\Metrics\Metrics;
@@ -26,6 +28,10 @@ class SsoServiceProvider extends ServiceProvider
         $this->app->singleton(SsoSessionState::class);
 
         $this->app->bindIf(SsoUserSynchronizerContract::class, SsoUserSynchronizer::class);
+
+        // Locations mirror: Crew-Scheduling's `locations` shape unless the app
+        // binds its own projection (CloudPCR's dem_locations).
+        $this->app->bindIf(LocationProjection::class, TextAddressLocationProjection::class);
 
         // Metrics — apps can override by binding their own
         // MetricContextResolver implementation in AppServiceProvider.
@@ -73,6 +79,10 @@ class SsoServiceProvider extends ServiceProvider
         $this->publishesMigrations([
             __DIR__.'/../database/master-data/2026_10_09_000000_create_or_extend_divisions_mirror.php' => database_path('migrations/2026_10_09_000000_create_or_extend_divisions_mirror.php'),
         ], 'sso-master-data-divisions');
+
+        $this->publishesMigrations([
+            __DIR__.'/../database/master-data/2026_10_09_100000_create_or_extend_locations_mirror.php' => database_path('migrations/2026_10_09_100000_create_or_extend_locations_mirror.php'),
+        ], 'sso-master-data-locations');
 
         // Auto-record failed logins / lockouts / password resets as
         // security events in every consuming app.

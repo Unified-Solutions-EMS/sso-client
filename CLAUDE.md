@@ -258,14 +258,14 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
 - **Migrations** — `sso_session_actions` table and `users.staff_roles` column, loaded from the package.
 - **Master data mirrors** (`src/MasterData/`) — SSO is canonical for shared master data; apps hold
   a read-only mirror per entity, opted into with `config('sso.master_data.<entity>')` (env
-  `SSO_MASTER_DATA_QUALIFICATIONS`, `SSO_MASTER_DATA_DIVISIONS`, both default false). Pieces:
+  `SSO_MASTER_DATA_QUALIFICATIONS`, `SSO_MASTER_DATA_DIVISIONS`, `SSO_MASTER_DATA_LOCATIONS`, all default false). Pieces:
   `Contracts\EntityMirror` (one class per entity: table, SSO id column, publish tag, webhook apply,
   resync, link-by-name), `CatalogMirror` (the shared base: linking, name adoption, `sso_link_pending`,
   the `sso_updated_at` stale guard, deactivate-never-delete, link-by-name, the push mapping; each
   entity adds its columns and its assignment rules), `MasterDataRegistry`
   (known entities + opt-in check; mirrors resolve through the container so an app can bind a
   subclass), `MasterDataWebhookHandler` (the webhook controller's `match` sends `qualification.*`,
-  `user.qualifications_changed`, `division.*` and `user.division_changed` here; a disabled entity, an unmigrated mirror, or an unknown
+  `user.qualifications_changed`, `division.*`, `user.division_changed` and `location.*` here; a disabled entity, an unmigrated mirror, or an unknown
   company is a 200 ack), `MasterDataClient` (`GET {SSO_BASE_URL}/api/internal/companies/{id}/{entity}`,
   bearer `CORE_APP_API_KEY`), `sso:resync-master-data {entity} {--company=} {--link-by-name}` and the
   one-time upward seed `sso:push-master-data {entity} {--company=} {--dry-run}` (mirrors that
@@ -376,6 +376,57 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     then for real (flag still off); settle conflicts / unknown users / skipped users; set
     `SSO_MASTER_DATA_DIVISIONS=true`; `sso:resync-master-data divisions`; move the app's division
     editor to SSO's Settings > Divisions page and filter pickers by `is_active`.
+
+  **Locations** (third entity, formerly "stations"; `MasterData\Locations\LocationMirror`, branch
+  `feature/locations-mirror`; SSO side on `feature/locations-sync`). James 2026-10-09: the platform
+  word is Locations (Crew, CloudPCR and CAD already said it); "Station" is only a location type now.
+  An agency's own places: stations, headquarters, staging posts. **No person assignment.**
+  - **Shape is a projection, not an assumption.** `Locations\LocationProjection` says which table,
+    name / number / division columns, how an SSO record lands on the row (`toColumns()`), what lives
+    outside it (`written()`, e.g. phones in a child table; must be idempotent, it also runs for every
+    row on a full resync) and what the push sends (`pushColumns()`, `toImport()`). The package binds
+    `TextAddressLocationProjection` (Crew's `locations`: `name`, `phone_number`, one free-text Google
+    address, `division_id`; `UsAddress` formats SSO's address as one line and splits a line back into
+    fields for the push). An app with another shape binds its own in `AppServiceProvider::register()`
+    BEFORE running the migration; `tests/Stubs/DemLocationProjection.php` is the CloudPCR-shaped
+    template (`dem_locations`: dlocation_01 type, 02 name, 03 number, 04 GPS "lat,lng", 06/06b
+    street, 07 city GNIS + `mailing_city`, 08 state FIPS, 09 ZIP, 10 county FIPS, 11 country;
+    phones in `dem_location_phones`; `deleted_at` forced null because SSO's off switch is `is_active`).
+  - `CatalogMirror` gained `nameColumn()`, `activeColumn()`, `attributesFor($company, $record)` and
+    `findAdoptableFor($company, $record)` hooks (defaults keep qualifications and divisions as they
+    were). Locations adopt an unlinked local row by **number first** (when the projection has a number
+    column and exactly one row has it), then by name; `--link-by-name` links by number first too.
+  - Migration (`vendor:publish --tag=sso-master-data-locations`) adds `sso_location_id`, `is_active`
+    (existing rows start on), `sort_order`, `sso_updated_at`, `sso_link_pending` to the projection's
+    table, each skipped when present, unique `(company_id, sso_location_id)`; creates a minimal table
+    only for an app with none. It changes no existing column: Crew must make `locations.division_id`
+    nullable with restrict-on-delete itself (design PR 6) before enabling.
+  - SSO contract: `GET /api/internal/companies/{id}/locations` -> `{company: {id, division_label},
+    locations: [{id, name, number, location_type, location_type_name, division_id, division_name,
+    address: {street, street2, city_gnis, city_name, state, state_name, zip, county, county_name,
+    country}, latitude, longitude, phones: [{id, number (E.164), type}], is_active, sort_order,
+    updated_at}]}` (whole list, not paged); `POST .../locations/import` `{app_slug, locations:
+    [{local_id, name, is_active, division_local_id?, division_sso_id?, number?, location_type?,
+    address?, latitude?, longitude?, phones?}]}` -> `{created, matched, filled, partial, conflicts,
+    unresolved_divisions, refused, invalid, mapping}`. SSO matches by number then name, never
+    overwrites, fills only empty fields on a match, records the seeding app. An address SSO cannot
+    file but that has words (Crew's free text) is kept as the street with `address.incomplete: true`
+    and reported in `partial`, so the first resync gives the app its text back. The push prints
+    `filled`, `partial`, `unresolved_divisions` and `refused` counts plus tables for the last three.
+  - Events `location.created|updated|deactivated`, full row, all upsert (deactivated carries
+    `is_active: false`); stale and pending guards as for every catalog. Never deleted: Crew's resources
+    and shift templates, CAD units and CloudPCR scenes point at these rows.
+  - **Division translation** goes through the divisions mirror's links (`sso_division_id`): SSO's
+    `division_id` becomes the local division id; `null` clears it; an id this app has not linked yet
+    leaves the local value alone (new rows get none). The push sends `division_local_id` always and
+    `division_sso_id` when the local division's link is confirmed; SSO also maps local ids through the
+    links its divisions import recorded. So push **divisions before locations**.
+  - Read side: `LocationCatalog::usableForCompany()` (active rows, SSO order).
+  - Cutover: bind the projection (if not Crew-shaped); publish `sso-master-data-locations` and migrate;
+    `sso:push-master-data locations --dry-run`, then for real (flag off); fix `refused` /
+    `unresolved_divisions` in SSO Settings > Locations; `SSO_MASTER_DATA_LOCATIONS=true`;
+    `sso:resync-master-data locations`; make the app's location editor read-only with an "Edit in
+    Settings" link and filter pickers by `is_active`.
 
 ## Release discipline
 

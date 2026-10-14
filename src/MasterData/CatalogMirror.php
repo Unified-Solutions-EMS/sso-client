@@ -65,6 +65,19 @@ abstract class CatalogMirror implements EntityMirror
     abstract protected function attributes(array $record): array;
 
     /**
+     * attributes() for a record of one local company. A mirror whose
+     * columns depend on the company (a location's division is translated
+     * through that company's division links) overrides this.
+     *
+     * @param  array<string, mixed>  $record
+     * @return array<string, mixed>
+     */
+    protected function attributesFor(int $localCompanyId, array $record): array
+    {
+        return $this->attributes($record);
+    }
+
+    /**
      * The local columns for a set of attributes. A null `sso_updated_at`
      * (the login payload carries none) keeps the stored one.
      *
@@ -79,6 +92,24 @@ abstract class CatalogMirror implements EntityMirror
      * @param  array<string, mixed>  $attributes
      */
     abstract protected function matches(object $row, array $attributes): bool;
+
+    /**
+     * The local column holding the row's name. SSO records always say
+     * `name`; an app whose table names it differently (CloudPCR's
+     * dem_locations.dlocation_02) overrides this.
+     */
+    public function nameColumn(): string
+    {
+        return 'name';
+    }
+
+    /**
+     * The local on/off column the mirror turns off instead of deleting.
+     */
+    public function activeColumn(): string
+    {
+        return 'is_active';
+    }
 
     public function publishTag(): string
     {
@@ -112,7 +143,7 @@ abstract class CatalogMirror implements EntityMirror
             throw new InvalidArgumentException("A {$this->recordKey()} record needs an id and a name.");
         }
 
-        $attributes = ['name' => $name] + $this->attributes($record);
+        $attributes = ['name' => $name] + $this->attributesFor($localCompanyId, $record);
 
         $row = $this->findLinked($localCompanyId, $ssoId);
 
@@ -127,7 +158,7 @@ abstract class CatalogMirror implements EntityMirror
         }
 
         if ($row === null) {
-            $candidate = $this->findAdoptable($localCompanyId, $name);
+            $candidate = $this->findAdoptableFor($localCompanyId, $record);
 
             if ($candidate === null) {
                 $this->insert($localCompanyId, $ssoId, $attributes);
@@ -176,10 +207,10 @@ abstract class CatalogMirror implements EntityMirror
             return 'pending';
         }
 
-        if ((bool) $row->is_active) {
+        if ((bool) $row->{$this->activeColumn()}) {
             $this->scoped($localCompanyId)
                 ->where('id', $row->id)
-                ->update(['is_active' => false, 'updated_at' => now()]);
+                ->update([$this->activeColumn() => false, 'updated_at' => now()]);
         }
 
         return 'deactivated';
@@ -235,8 +266,8 @@ abstract class CatalogMirror implements EntityMirror
         }
 
         $localByName = [];
-        foreach ($this->scoped($localCompanyId)->whereNull($this->ssoIdColumn())->orderBy('id')->get(['id', 'name']) as $row) {
-            $localByName[$this->normalizeName((string) $row->name)][] = ['id' => (int) $row->id, 'name' => (string) $row->name];
+        foreach ($this->scoped($localCompanyId)->whereNull($this->ssoIdColumn())->orderBy('id')->get(['id', $this->nameColumn()]) as $row) {
+            $localByName[$this->normalizeName((string) $row->{$this->nameColumn()})][] = ['id' => (int) $row->id, 'name' => (string) $row->{$this->nameColumn()}];
         }
 
         $result = ['linked' => [], 'ambiguous' => [], 'unmatched_local' => [], 'unmatched_sso' => []];
@@ -346,7 +377,7 @@ abstract class CatalogMirror implements EntityMirror
         $map = [];
         $rows = $this->scoped($localCompanyId)
             ->whereNotNull($this->ssoIdColumn())
-            ->when($activeOnly, fn (Builder $query) => $query->where('is_active', true))
+            ->when($activeOnly, fn (Builder $query) => $query->where($this->activeColumn(), true))
             ->when($confirmedOnly, fn (Builder $query) => $query->where(self::LINK_PENDING_COLUMN, false))
             ->get(['id', $this->ssoIdColumn()]);
 
@@ -377,8 +408,8 @@ abstract class CatalogMirror implements EntityMirror
         $counts['deactivated'] = $this->scoped($localCompanyId)
             ->whereNotNull($this->ssoIdColumn())
             ->when($seen !== [], fn ($query) => $query->whereNotIn($this->ssoIdColumn(), $seen))
-            ->where('is_active', true)
-            ->update(['is_active' => false, 'updated_at' => now()]);
+            ->where($this->activeColumn(), true)
+            ->update([$this->activeColumn() => false, 'updated_at' => now()]);
 
         return $counts;
     }
@@ -471,7 +502,7 @@ abstract class CatalogMirror implements EntityMirror
         $rows = [];
         $truncated = [];
 
-        foreach ($this->scoped($localCompanyId)->orderBy('id')->get(['id', 'name', ...$columns]) as $row) {
+        foreach ($this->scoped($localCompanyId)->orderBy('id')->get(['id', $this->nameColumn().' as name', ...$columns]) as $row) {
             $name = (string) $row->name;
 
             if (mb_strlen($name) > $this->maxNameLength()) {
@@ -495,6 +526,17 @@ abstract class CatalogMirror implements EntityMirror
         return $this->scoped($localCompanyId)->where($this->ssoIdColumn(), $ssoId)->first();
     }
 
+    /**
+     * The unlinked local row an SSO record with no linked row adopts, if
+     * exactly one fits. By name here; locations try the number first.
+     *
+     * @param  array<string, mixed>  $record
+     */
+    protected function findAdoptableFor(int $localCompanyId, array $record): ?object
+    {
+        return $this->findAdoptable($localCompanyId, trim((string) ($record['name'] ?? '')));
+    }
+
     protected function findAdoptable(int $localCompanyId, string $name): ?object
     {
         $key = $this->normalizeName($name);
@@ -502,7 +544,7 @@ abstract class CatalogMirror implements EntityMirror
         $candidates = $this->scoped($localCompanyId)
             ->whereNull($this->ssoIdColumn())
             ->get()
-            ->filter(fn (object $row): bool => $this->normalizeName((string) $row->name) === $key);
+            ->filter(fn (object $row): bool => $this->normalizeName((string) $row->{$this->nameColumn()}) === $key);
 
         return $candidates->count() === 1 ? $candidates->first() : null;
     }

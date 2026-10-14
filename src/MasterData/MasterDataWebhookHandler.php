@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Routes master-data webhook events (qualification.*, user.qualifications_changed,
- * division.*, user.division_changed) to the matching mirror.
+ * division.*, user.division_changed, location.*) to the matching mirror.
  *
  * Every outcome other than a handler crash is a 200 acknowledgement: an entity
  * the app has not opted into, a mirror migration that has not run yet, or a

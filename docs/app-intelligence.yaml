@@ -55,7 +55,7 @@ capabilities:
       called into each app when they sign in, so the app does not have to ask
       centrally on every request.
     state: live
-    entry_points: [src/SsoUserSynchronizer.php, src/Console/SyncUsersCommand.php]
+    entry_points: [src/SsoUserSynchronizer.php, src/Http/SsoCallbackController.php]
     diagnostic_questions:
       - "Is the agency missing in one app or in all of them?"
       - "Has the user signed into that specific app since the change was made?"
@@ -67,7 +67,9 @@ capabilities:
         the old state. This is expected and is usually the whole answer.
       - >
         A brand new user may not exist inside an app at all until their first
-        sign-in there.
+        sign-in there. A scheduled roster pull (sso:sync-users) exists on the
+        unmerged feature/roster-reconcile branch; until it lands, sign-in is
+        the only sync path.
     related: ["sso:user-management", "sso:company-switching"]
 
   - id: role-sync

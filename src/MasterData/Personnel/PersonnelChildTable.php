@@ -11,9 +11,11 @@ namespace Unified\SsoClient\MasterData\Personnel;
  * `sso_phone_id`, `sso_email_id`, `sso_immunization_id`, added by the
  * mirror migration) and updates it in place: never deleted and re-created,
  * because CloudPCR derives NEMSIS group ids from the local child row id. A
- * linked row is deleted only when SSO no longer lists its child id. A local
- * child SSO never knew is adopted when exactly one unlinked row has the same
- * key, otherwise kept.
+ * linked row whose child SSO removed is unlinked, deactivated or deleted as
+ * the definition's ChildRowPolicy says (implement DeclaresChildRowPolicy;
+ * unlink when it declares nothing). A table that keeps the app's own data
+ * on its rows must not choose delete. A local child SSO never knew is
+ * adopted when exactly one unlinked row has the same key, otherwise kept.
  *
  * Child tables carry no company_id; the mirror pins the parent person row
  * to the company before touching any child row (§4a).

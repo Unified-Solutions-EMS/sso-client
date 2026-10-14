@@ -3,6 +3,7 @@
 namespace Unified\SsoClient\Tests\Stubs;
 
 use Unified\SsoClient\MasterData\Personnel\PersonnelProjection;
+use Unified\SsoClient\MasterData\Support\ChildRowPolicy;
 
 /**
  * CloudPCR's shape, as CloudPcrPersonnelWriter would bind it (design §3c):
@@ -10,7 +11,9 @@ use Unified\SsoClient\MasterData\Personnel\PersonnelProjection;
  * (dpersonnel_01..40, `mailing_city`, `dpersonnel_04b`, soft deletes) and
  * five child tables updated in place: `dem_personnel_certifications`
  * (.22-.27), `dem_personnel_cert_levels` (.38/.39), `dem_personnel_phones`,
- * `dem_personnel_emails`, `dem_personnel_immunizations` (.18/.19).
+ * `dem_personnel_emails`, `dem_personnel_immunizations` (.18/.19). All five
+ * declare `delete`: once the editor is read-only every column is SSO's, and a
+ * licence SSO removed must leave the DEM export.
  *
  * Blank nillable recommended elements get `_nv = 7701003` (Not Recorded,
  * design D12) and lose it when a value arrives; nothing else gets an NV.
@@ -164,23 +167,23 @@ class DemPersonnelProjection implements PersonnelProjection
                 'current_since' => 'dpersonnel_25',
                 'first_issued_on' => 'dpersonnel_26',
                 'expires_on' => 'dpersonnel_27',
-            ], ['dpersonnel_22']),
+            ], ['dpersonnel_22'], onRemoved: ChildRowPolicy::delete()),
             'practice_levels' => new MappedPersonnelChildTable('dem_personnel_cert_levels', 'dem_personnel_id', [
                 'level' => 'dpersonnel_38',
                 'since' => 'dpersonnel_39',
-            ], ['dpersonnel_38']),
+            ], ['dpersonnel_38'], onRemoved: ChildRowPolicy::delete()),
             'phones' => new MappedPersonnelChildTable('dem_personnel_phones', 'dem_personnel_id', [
                 'number' => 'phone_number',
                 'type' => 'phone_type',
-            ], ['phone_number']),
+            ], ['phone_number'], onRemoved: ChildRowPolicy::delete()),
             'emails' => new MappedPersonnelChildTable('dem_personnel_emails', 'dem_personnel_id', [
                 'address' => 'email_address',
                 'type' => 'email_type',
-            ], ['email_address']),
+            ], ['email_address'], onRemoved: ChildRowPolicy::delete()),
             'immunizations' => new MappedPersonnelChildTable('dem_personnel_immunizations', 'dem_personnel_id', [
                 'type' => 'dpersonnel_18',
                 'year' => 'dpersonnel_19',
-            ], ['dpersonnel_18', 'dpersonnel_19']),
+            ], ['dpersonnel_18', 'dpersonnel_19'], onRemoved: ChildRowPolicy::delete()),
         ];
     }
 

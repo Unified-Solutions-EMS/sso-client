@@ -13,6 +13,8 @@ use Unified\SsoClient\MasterData\Contracts\SeedsSso;
 use Unified\SsoClient\MasterData\LocalTenantResolver;
 use Unified\SsoClient\MasterData\MasterDataClient;
 use Unified\SsoClient\MasterData\MasterDataRegistry;
+use Unified\SsoClient\MasterData\Support\ChildRowPolicy;
+use Unified\SsoClient\MasterData\Support\LinkedChildRows;
 
 /**
  * Mirrors SSO's vehicles (an agency list: the units it runs, NEMSIS
@@ -37,7 +39,9 @@ use Unified\SsoClient\MasterData\MasterDataRegistry;
  * - child rows (crew levels, yearly usage) are reconciled IN PLACE by SSO's
  *   stable child id: an edited child keeps its local row id (CloudPCR derives
  *   NEMSIS group UUIDs from it), a new one is inserted, and a linked child is
- *   deleted only when SSO no longer lists its id. A local child SSO never
+ *   handled by the child table's ChildRowPolicy when SSO no longer lists its
+ *   id (unlink unless the table declares deactivate or delete; a row stamped
+ *   `sso_removed_at` is left out of the push). A local child SSO never
  *   knew (pre-cutover, not taken by the push because SSO already had
  *   children) is adopted by level / year when exactly one fits, otherwise
  *   kept and counted as `unlinked_children` on a resync;
@@ -76,12 +80,9 @@ class VehicleMirror extends CatalogMirror implements SeedsSso
      */
     private array $links = [];
 
-    /**
-     * @var array<string, bool>
-     */
-    private array $timestamped = [];
-
     private int $unlinkedChildren = 0;
+
+    private ?LinkedChildRows $childRows = null;
 
     public function __construct(
         LocalTenantResolver $tenants,
@@ -463,7 +464,8 @@ class VehicleMirror extends CatalogMirror implements SeedsSso
 
     /**
      * Updates the vehicle's child rows from SSO's lists in place (see the
-     * class doc). A list SSO left out of the row is not touched.
+     * class doc). A list SSO left out of the row is not touched; a child SSO
+     * removed is handled by the child table's ChildRowPolicy.
      *
      * @param  array<string, mixed>  $record
      * @return bool whether any child row changed
@@ -477,62 +479,34 @@ class VehicleMirror extends CatalogMirror implements SeedsSso
                 continue;
             }
 
-            $ssoColumn = self::CHILD_SSO_ID_COLUMNS[$kind];
-            $rows = DB::table($child->table())->where($child->parentColumn(), $vehicleId)->orderBy('id')->get();
-            $linked = $rows->filter(fn (object $row): bool => $row->{$ssoColumn} !== null)->keyBy(fn (object $row): int => (int) $row->{$ssoColumn});
-            $unlinked = $rows->filter(fn (object $row): bool => $row->{$ssoColumn} === null)->values();
-            $seen = [];
+            $wanted = [];
 
             foreach ($record[$kind] as $ssoChild) {
                 $ssoChildId = is_array($ssoChild) ? (int) ($ssoChild['id'] ?? 0) : 0;
 
-                if ($ssoChildId <= 0) {
-                    continue;
-                }
-
-                $seen[] = $ssoChildId;
-                $columns = $child->toColumns($ssoChild);
-                $row = $linked->get($ssoChildId);
-
-                if ($row === null) {
-                    $key = (string) ($ssoChild[self::CHILD_KEYS[$kind]] ?? '');
-                    $candidates = $unlinked->filter(fn (object $local): bool => $key !== '' && (string) $local->{$child->keyColumn()} === $key);
-
-                    if ($candidates->count() === 1) {
-                        $row = $candidates->first();
-                        $unlinked = $unlinked->reject(fn (object $local): bool => $local->id === $row->id)->values();
-                        $columns[$ssoColumn] = $ssoChildId;
-                    }
-                }
-
-                if ($row === null) {
-                    DB::table($child->table())->insert($columns + [$child->parentColumn() => $vehicleId, $ssoColumn => $ssoChildId] + $this->timestamps($child->table(), created: true));
-                    $changed = true;
-
-                    continue;
-                }
-
-                $diff = array_filter($columns, fn (mixed $value, string $column): bool => ! self::sameValue($row->{$column} ?? null, $value), ARRAY_FILTER_USE_BOTH);
-
-                if ($diff !== []) {
-                    DB::table($child->table())->where('id', $row->id)->update($diff + $this->timestamps($child->table()));
-                    $changed = true;
+                if ($ssoChildId > 0) {
+                    $wanted[] = ['id' => $ssoChildId, 'columns' => $child->toColumns($ssoChild), 'key' => (string) ($ssoChild[self::CHILD_KEYS[$kind]] ?? '')];
                 }
             }
 
-            $dropped = $linked->keys()->diff($seen)->map(fn (int $ssoChildId): int => (int) $linked->get($ssoChildId)->id)->values()->all();
+            $result = $this->childRows()->reconcile(
+                $child->table(),
+                $child->parentColumn(),
+                $vehicleId,
+                self::CHILD_SSO_ID_COLUMNS[$kind],
+                $wanted,
+                fn (object $local): string => (string) $local->{$child->keyColumn()},
+                self::sameValue(...),
+                ChildRowPolicy::for($child),
+            );
+            $changed = $result['changed'] || $changed;
 
-            if ($dropped !== []) {
-                DB::table($child->table())->where($child->parentColumn(), $vehicleId)->whereIn('id', $dropped)->delete();
-                $changed = true;
-            }
-
-            if ($unlinked->isNotEmpty()) {
-                $this->unlinkedChildren += $unlinked->count();
+            if ($result['unlinked'] !== []) {
+                $this->unlinkedChildren += count($result['unlinked']);
                 Log::info('SSO master data: local vehicle child rows SSO does not list were kept', [
                     'table' => $child->table(),
                     'vehicle_id' => $vehicleId,
-                    'child_ids' => $unlinked->pluck('id')->all(),
+                    'child_ids' => $result['unlinked'],
                 ]);
             }
         }
@@ -594,6 +568,7 @@ class VehicleMirror extends CatalogMirror implements SeedsSso
             foreach (array_chunk($vehicleIds, 500) as $chunk) {
                 $rows = DB::table($child->table())
                     ->whereIn($child->parentColumn(), $chunk)
+                    ->when($this->childRows()->hasRemovedMarker($child->table()), fn ($query) => $query->whereNull(ChildRowPolicy::REMOVED_AT_COLUMN))
                     ->orderBy('id')
                     ->get(array_values(array_unique(['id', $child->parentColumn().' as mirror_parent_id', ...$child->pushColumns()])));
 
@@ -682,15 +657,8 @@ class VehicleMirror extends CatalogMirror implements SeedsSso
         return $confirmedOnly ? $map : $this->links[$entity][$localCompanyId] = $map;
     }
 
-    /**
-     * @return array<string, mixed>
-     */
-    private function timestamps(string $table, bool $created = false): array
+    private function childRows(): LinkedChildRows
     {
-        if (! ($this->timestamped[$table] ??= Schema::hasColumn($table, 'updated_at'))) {
-            return [];
-        }
-
-        return $created ? ['created_at' => now(), 'updated_at' => now()] : ['updated_at' => now()];
+        return $this->childRows ??= new LinkedChildRows;
     }
 }

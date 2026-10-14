@@ -121,6 +121,7 @@ class SsoServiceProvider extends ServiceProvider
 
         $this->publishesMigrations([
             __DIR__.'/../database/master-data/2026_10_11_000000_create_or_extend_vehicles_mirror.php' => database_path('migrations/2026_10_11_000000_create_or_extend_vehicles_mirror.php'),
+            __DIR__.'/../database/master-data/2026_10_13_200000_add_sso_removed_at_to_mirror_child_tables.php' => database_path('migrations/2026_10_13_200000_add_sso_removed_at_to_mirror_child_tables.php'),
         ], 'sso-master-data-vehicles');
 
         $this->publishesMigrations([
@@ -137,6 +138,7 @@ class SsoServiceProvider extends ServiceProvider
 
         $this->publishesMigrations([
             __DIR__.'/../database/master-data/2026_10_13_000000_create_or_extend_personnel_mirror.php' => database_path('migrations/2026_10_13_000000_create_or_extend_personnel_mirror.php'),
+            __DIR__.'/../database/master-data/2026_10_13_200000_add_sso_removed_at_to_mirror_child_tables.php' => database_path('migrations/2026_10_13_200000_add_sso_removed_at_to_mirror_child_tables.php'),
         ], 'sso-master-data-personnel');
 
         // Auto-record failed logins / lockouts / password resets as

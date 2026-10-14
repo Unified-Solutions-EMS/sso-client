@@ -10,8 +10,10 @@ namespace Unified\SsoClient\MasterData\Vehicles;
  * child id (`sso_crew_level_id` / `sso_yearly_usage_id`, added by the mirror
  * migration) and updates it in place: a child row is never deleted and
  * re-created, because CloudPCR derives NEMSIS group UUIDs from the local
- * child row id. A linked row is deleted only when SSO no longer lists its
- * child id.
+ * child row id. A linked row whose child SSO removed is unlinked,
+ * deactivated or deleted as the definition's ChildRowPolicy says (implement
+ * DeclaresChildRowPolicy; unlink when it declares nothing). A table that
+ * keeps the app's own data on its rows must not choose delete.
  *
  * Child tables carry no company_id; the mirror pins the parent vehicle to
  * the company before touching any child row (§4a).

@@ -71,6 +71,7 @@ abstract class PersonnelTestCase extends TestCase
     protected function runPublishedMirrorMigration(): void
     {
         (require __DIR__.'/../../../../database/master-data/2026_10_13_000000_create_or_extend_personnel_mirror.php')->up();
+        (require __DIR__.'/../../../../database/master-data/2026_10_13_200000_add_sso_removed_at_to_mirror_child_tables.php')->up();
     }
 
     protected function createDivisions(): void
@@ -200,6 +201,8 @@ abstract class PersonnelTestCase extends TestCase
         }
 
         // HR adds `level` for EMS licences (its table only knew DL/CDL types).
+        // `status` / `approved_by` / `card_front_path` stand in for the
+        // approval history and card images HR keeps on its licence rows.
         Schema::create('personnel_licenses', function (Blueprint $table) {
             $table->id();
             $table->foreignId('personnel_profile_id')->constrained()->cascadeOnDelete();
@@ -209,6 +212,10 @@ abstract class PersonnelTestCase extends TestCase
             $table->string('level')->nullable();
             $table->date('issue_date')->nullable();
             $table->date('expiration_date')->nullable();
+            // HR's own: approval workflow and card images, never written from SSO.
+            $table->string('status', 20)->default('pending');
+            $table->unsignedBigInteger('approved_by')->nullable();
+            $table->string('card_front_path')->nullable();
             $table->unsignedInteger('sort_order')->default(0);
             $table->timestamps();
         });

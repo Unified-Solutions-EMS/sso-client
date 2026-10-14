@@ -80,7 +80,9 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   in the controller, no CSRF/auth middleware. Handles `user.created/updated/deleted`,
   `company.updated/activated`, `user.role.changed`, `user.app_role.changed`, `user.staff_role.changed`,
   `impersonation.started/ended`, `user.logged_out`, `trial.seed_data`, `trial.purge_data`,
-  `cad.migrate_data`. Unknown events ack rather than 500.
+  `cad.migrate_data`. Unknown events ack `{"status":"ok","action":"ignored"}` with a 200 rather than 500,
+  so SSO can ship new events (e.g. the `personnel.*` -> `person.*` rename, which has no mirror here yet)
+  before any app handles them (pinned by `SsoWebhookUnknownEventTest`).
   **`trial.purge_data` is verified before it destroys anything.** The handler asks SSO's
   authoritative `GET /api/internal/companies/trials` (CORE_APP_API_KEY) whether the company is a
   current trial or in the response's `purge_pending` id list (the conversion flow flips
@@ -259,7 +261,12 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
 - **Master data mirrors** (`src/MasterData/`) — SSO is canonical for shared master data; apps hold
   a read-only mirror per entity, opted into with `config('sso.master_data.<entity>')` (env
   `SSO_MASTER_DATA_QUALIFICATIONS`, `SSO_MASTER_DATA_DIVISIONS`, `SSO_MASTER_DATA_LOCATIONS`, `SSO_MASTER_DATA_VEHICLES`,
-  `SSO_MASTER_DATA_FACILITIES`, `SSO_MASTER_DATA_MEDICATIONS`, `SSO_MASTER_DATA_PROCEDURES`, all default false). Pieces:
+  `SSO_MASTER_DATA_FACILITIES`, `SSO_MASTER_DATA_MEDICATIONS`, `SSO_MASTER_DATA_PROCEDURES`, all default false).
+  `mergeConfigFrom()` is shallow, so an app whose own `config/sso.php` defines `master_data` replaces the
+  package's whole array. That is safe: every reader defaults per key (`MasterDataRegistry::enabled()` reads
+  `config("sso.master_data.{$entity}", false)`, `schedule_resync` defaults true, `timeout` 120), so an app may
+  list only the entities it uses and the rest stay off (pinned by `PartialMasterDataConfigTest`). Any new
+  `master_data` key must be read with an explicit default for the same reason. Pieces:
   `Contracts\EntityMirror` (one class per entity: table, SSO id column, publish tag, webhook apply,
   resync, link-by-name), `CatalogMirror` (the shared base: linking, name adoption, `sso_link_pending`,
   the `sso_updated_at` stale guard, deactivate-never-delete, link-by-name, the push mapping; each

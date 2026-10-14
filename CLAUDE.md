@@ -401,7 +401,19 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      descriptions, and whether SSO cut the incoming description to 500 characters; the summary
      counts those as truncated_descriptions) / unknown_users, plus local users skipped for having no `sso_id` and any mapping
      it refused to apply (a row already linked elsewhere, or two local spellings SSO folded into
-     one row). Names longer than SSO's 255-character limit are sent cut, with a warning (the local name is
+     one row). **Applying the mapping never throws on an SSO id two local rows claim**
+     (`Support\MappingLinker`, used by every catalog mirror, personnel and the vehicle / personnel
+     child maps): an agency's duplicates (the same facility code or VIN listed twice) come back
+     from SSO mapped to ONE SSO row, so the first local row by id gets the link and every other row
+     mapped to an SSO id already held is counted in `link_collisions` and printed in a table
+     (local id, name, SSO id, the local id that holds the link, reason) for an operator to merge by
+     hand; duplicates are never deleted or changed. "Held" is asked of the rows the link's unique
+     index spans (`CatalogMirror::linkHolders()`), not the mirror's read scope: CloudPCR's
+     `dem_facility_entries` has no company_id, so its index spans every company while the
+     projection scope sees only the company's non-deleted type groups, and an entry outside that
+     scope holding the id used to abort the push on the unique index (CloudPCR 2026-10-14,
+     "Duplicate entry '6176'"). Each link is written in a savepoint, so a link another process
+     writes between the check and the write is reported the same way. Names longer than SSO's 255-character limit are sent cut, with a warning (the local name is
      unchanged). Rerunning creates nothing new in SSO and re-applies the same mapping.
   3. Review the conflicts in SSO `/system`, **and resolve every `unknown_users` and skipped local
      user** (no `sso_id`, or not a member of the company in SSO) before step 5: the full resync

@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Unified\SsoClient\Concerns\PrunesStaleCompanyMemberships;
+use Unified\SsoClient\Concerns\SyncsCompanyProfile;
 use Unified\SsoClient\Http\Concerns\VerifiesSsoWebhookSignature;
 use Unified\SsoClient\MasterData\MasterDataWebhookHandler;
 use Unified\SsoClient\Models\SsoSessionAction;
@@ -23,6 +24,7 @@ use Unified\SsoClient\TrialPurgeVerifier;
 class SsoWebhookController extends Controller
 {
     use PrunesStaleCompanyMemberships;
+    use SyncsCompanyProfile;
     use VerifiesSsoWebhookSignature;
 
     /**
@@ -55,6 +57,7 @@ class SsoWebhookController extends Controller
                 'user.deleted' => $this->handleUserDeleted($request),
                 'company.updated' => $this->handleCompanyUpdated($request),
                 'company.activated' => $this->handleCompanyActivated($request),
+                'agency_profile.updated' => $this->handleAgencyProfileUpdated($request),
                 'user.company_role_changed' => $this->handleUserRoleChanged($request),
                 'user.app_role_changed' => $this->handleUserAppRoleChanged($request),
                 'user.staff_role_changed' => $this->handleUserStaffRoleChanged($request),
@@ -96,6 +99,10 @@ class SsoWebhookController extends Controller
                 'procedure.deactivated',
                 'procedure.batch_updated',
                 'procedure.review_completed',
+                'agency_contact.created',
+                'agency_contact.updated',
+                'agency_contact.deactivated',
+                'agency_contact.batch_updated',
                 'person.updated',
                 'person.deactivated' => app(MasterDataWebhookHandler::class)->handle($event, $request->all()),
                 default => $this->handleUnknownEvent($event),
@@ -206,6 +213,42 @@ class SsoWebhookController extends Controller
         }
 
         return ['status' => 'ok', 'action' => 'company.updated'];
+    }
+
+    /**
+     * `agency_profile.updated` `{company: {id, division_label}, agency_profile:
+     * {...SSO's full record, updated_at}, updated_at}`: replaces the local copy
+     * in `companies.sso_profile`. A company this app has never seen, an app
+     * without the `sso-company-profile` migration and an older delivery are
+     * all acknowledged with a 200; the next login carries the compact block.
+     *
+     * @return array<string, mixed>
+     */
+    protected function handleAgencyProfileUpdated(Request $request): array
+    {
+        $ssoCompanyId = $request->input('company.id');
+        $profile = $request->input('agency_profile');
+        $company = $this->findCompanyBySsoId(is_int($ssoCompanyId) || is_string($ssoCompanyId) ? $ssoCompanyId : null, null);
+
+        if (! $company) {
+            return ['status' => 'ok', 'action' => 'agency_profile.updated', 'result' => 'company_not_found'];
+        }
+
+        $result = $this->applyCompanyProfile(
+            $company,
+            $profile,
+            replace: true,
+            updatedAt: (is_array($profile) ? ($profile['updated_at'] ?? null) : null) ?? $request->input('updated_at'),
+        );
+
+        if ($result === 'stale') {
+            Log::info('SSO webhook: stale agency_profile.updated ignored', [
+                'company_id' => $company->getKey(),
+                'updated_at' => $request->input('updated_at'),
+            ]);
+        }
+
+        return ['status' => $result === 'stale' ? 'stale' : 'ok', 'action' => 'agency_profile.updated', 'result' => $result];
     }
 
     /**

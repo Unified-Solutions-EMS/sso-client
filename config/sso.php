@@ -290,6 +290,10 @@ return [
         // read model is enough (CloudPCR: dem_personnel; HR: personnel_profiles),
         // and push before turning this on.
         'personnel' => env('SSO_MASTER_DATA_PERSONNEL', false),
+        // Agency contacts (director, medical director, billing contact, ...;
+        // NEMSIS dContact). The package's sso_agency_contacts table unless the
+        // app binds a ContactProjection (CloudPCR: dem_contacts).
+        'agency_contacts' => env('SSO_MASTER_DATA_AGENCY_CONTACTS', false),
 
         // Daily `sso:resync-master-data <entity>` for every enabled entity,
         // so assignments dropped by early-arriving webhooks (user not yet

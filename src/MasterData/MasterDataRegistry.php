@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Unified\SsoClient\MasterData;
 
 use Illuminate\Contracts\Container\Container;
+use Unified\SsoClient\MasterData\Contacts\ContactMirror;
 use Unified\SsoClient\MasterData\Contracts\ContinuesPush;
 use Unified\SsoClient\MasterData\Contracts\EntityMirror;
 use Unified\SsoClient\MasterData\Divisions\DivisionMirror;
@@ -38,6 +39,7 @@ class MasterDataRegistry
         'medications' => MedicationMirror::class,
         'procedures' => ProcedureMirror::class,
         'personnel' => PersonnelMirror::class,
+        'agency_contacts' => ContactMirror::class,
     ];
 
     public function __construct(private readonly Container $container) {}

@@ -28,9 +28,9 @@ use Unified\SsoClient\MasterData\MasterDataClient;
  * - turn off, never delete: SSO turning a facility off, or a resync no
  *   longer listing it, sets the active flag false. CAD incidents, Billing
  *   claims, CloudPCR dispositions and mobile bundles hold facility ids;
- * - the batch event: SSO's "Add from state list" sends
- *   `facility.batch_updated` with up to 200 rows, applied like a resync page
- *   (each row upserted, nothing turned off);
+ * - the batch event: SSO's "Add from state list" and another app's push
+ *   send `facility.batch_updated` with up to 200 rows, applied like a resync
+ *   page (each row upserted, nothing turned off; CatalogMirror::applyBatch);
  * - the push (SeedsSso): the app's rows go up once, before the flag is on;
  *   SSO matches by its own link, then code, then name + ZIP, never
  *   overwrites a match, fills only its empty fields, and answers with the
@@ -317,28 +317,6 @@ class FacilityMirror extends CatalogMirror implements SeedsSso
             && self::normalizeZip($row->{$zipColumn}) === $zip);
 
         return $byNameAndZip->count() === 1 ? $byNameAndZip->first() : null;
-    }
-
-    /**
-     * SSO's "Add from state list" batch: each row upserted like a delivery
-     * (stale and pending guards apply), nothing turned off.
-     *
-     * @param  array<int|string, mixed>  $records
-     * @return array<string, mixed>
-     */
-    private function applyBatch(int $localCompanyId, array $records): array
-    {
-        $counts = ['created' => 0, 'updated' => 0, 'linked' => 0, 'unchanged' => 0, 'stale' => 0, 'pending' => 0];
-
-        foreach ($records as $record) {
-            if (! is_array($record) || (int) ($record['id'] ?? 0) <= 0 || trim((string) ($record['name'] ?? '')) === '') {
-                continue;
-            }
-
-            $counts[$this->upsert($localCompanyId, $record, delivery: true)]++;
-        }
-
-        return ['status' => 'ok', 'counts' => $counts];
     }
 
     /**

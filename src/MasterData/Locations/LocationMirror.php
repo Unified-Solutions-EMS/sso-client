@@ -70,6 +70,7 @@ class LocationMirror extends CatalogMirror implements SeedsSso
             'location.created',
             'location.updated',
             'location.deactivated',
+            'location.batch_updated',
         ];
     }
 
@@ -108,6 +109,7 @@ class LocationMirror extends CatalogMirror implements SeedsSso
     {
         return match ($event) {
             'location.created', 'location.updated', 'location.deactivated' => $this->applyUpsertWebhook($event, $localCompanyId, (array) ($payload['location'] ?? [])),
+            'location.batch_updated' => $this->applyBatch($localCompanyId, (array) ($payload['locations'] ?? [])),
             default => ['status' => 'ignored', 'reason' => 'unknown_event'],
         };
     }

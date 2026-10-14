@@ -445,6 +445,27 @@ abstract class CatalogMirror implements EntityMirror
     }
 
     /**
+     * `{entity}.batch_updated`: SSO sends a bulk change of one list (an app's
+     * push, "Add from state list") as one event per 200 rows instead of an
+     * event per row per app. Each row is upserted like a delivery (the stale
+     * and pending guards apply, child rows follow their parent) and nothing
+     * is turned off, because a batch lists only the rows that changed.
+     *
+     * @param  array<int|string, mixed>  $records
+     * @return array{status: string, counts: array<string, int>}
+     */
+    protected function applyBatch(int $localCompanyId, array $records): array
+    {
+        $counts = ['created' => 0, 'updated' => 0, 'linked' => 0, 'unchanged' => 0, 'stale' => 0, 'pending' => 0];
+
+        foreach ($this->snapshotRecords([$this->entity() => array_values($records)]) as $record) {
+            $counts[$this->upsert($localCompanyId, $record, delivery: true)]++;
+        }
+
+        return ['status' => 'ok', 'counts' => $counts];
+    }
+
+    /**
      * SSO does not order webhook deliveries, so an assignment event can arrive
      * before the catalog event it depends on. Pull the company's catalog once
      * and insert the rows we lack, so the assignment is not dropped until the

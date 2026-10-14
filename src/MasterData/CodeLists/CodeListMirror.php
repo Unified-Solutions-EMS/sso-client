@@ -402,26 +402,21 @@ abstract class CodeListMirror extends CatalogMirror implements ContinuesPush, Se
     }
 
     /**
+     * The shared batch, then the projection once for the whole batch.
+     *
      * @param  array<int|string, mixed>  $records
-     * @return array<string, mixed>
+     * @return array{status: string, counts: array<string, int>}
      */
-    private function applyBatch(int $localCompanyId, array $records): array
+    #[\Override]
+    protected function applyBatch(int $localCompanyId, array $records): array
     {
-        $counts = ['created' => 0, 'updated' => 0, 'linked' => 0, 'unchanged' => 0, 'stale' => 0, 'pending' => 0];
+        $result = parent::applyBatch($localCompanyId, $records);
 
-        foreach ($records as $record) {
-            if (! is_array($record) || (int) ($record['id'] ?? 0) <= 0 || trim((string) ($record['name'] ?? '')) === '') {
-                continue;
-            }
-
-            $counts[$this->upsert($localCompanyId, $record, delivery: true)]++;
-        }
-
-        if ($counts['created'] + $counts['updated'] > 0) {
+        if ($result['counts']['created'] + $result['counts']['updated'] > 0) {
             $this->project($localCompanyId);
         }
 
-        return ['status' => 'ok', 'counts' => $counts];
+        return $result;
     }
 
     /**

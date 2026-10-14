@@ -159,4 +159,21 @@ class DivisionWebhookTest extends DivisionsTestCase
         $this->assertSame('North', DB::table('divisions')->find($theirs)->name);
         $this->assertSame($theirs, $this->divisionOf($userId, $otherCompany));
     }
+
+    /**
+     * An app's push of its divisions reaches the other apps as one
+     * division.batch_updated; each row is applied like a delivery.
+     */
+    public function test_the_import_batch_upserts_every_row(): void
+    {
+        $this->postWebhook('division.batch_updated', [
+            'company' => ['id' => 70, 'division_label' => 'division'],
+            'ids' => [501, 502],
+            'divisions' => [$this->divisionRecord(501, 'North'), $this->divisionRecord(502, 'Retired', ['is_active' => false])],
+            'updated_at' => '2026-10-14T12:00:00+00:00',
+        ])->assertOk()->assertJson(['status' => 'ok', 'counts' => ['created' => 2]]);
+
+        $this->assertSame('North', $this->mirrored($this->companyId, 501)->name);
+        $this->assertFalse((bool) $this->mirrored($this->companyId, 502)->is_active);
+    }
 }

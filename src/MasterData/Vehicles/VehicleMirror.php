@@ -104,6 +104,7 @@ class VehicleMirror extends CatalogMirror implements SeedsSso
             'vehicle.created',
             'vehicle.updated',
             'vehicle.deactivated',
+            'vehicle.batch_updated',
         ];
     }
 
@@ -160,6 +161,7 @@ class VehicleMirror extends CatalogMirror implements SeedsSso
     {
         return match ($event) {
             'vehicle.created', 'vehicle.updated', 'vehicle.deactivated' => $this->applyUpsertWebhook($event, $localCompanyId, (array) ($payload['vehicle'] ?? [])),
+            'vehicle.batch_updated' => $this->applyBatch($localCompanyId, (array) ($payload['vehicles'] ?? [])),
             default => ['status' => 'ignored', 'reason' => 'unknown_event'],
         };
     }

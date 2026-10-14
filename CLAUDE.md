@@ -330,6 +330,24 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   implement `Contracts\SeedsSso`; `--review=ID --company=X` links a finished code-list review instead of pushing).
   Every mirror write is query-builder SQL pinned to the local company resolved from the
   authoritative SSO company id (§4a); rows SSO deleted or dropped are deactivated, never deleted.
+  **Child rows SSO removes are never hard-deleted unless the table says so** (`Support\ChildRowPolicy`).
+  A child-table definition (`PersonnelChildTable`, `VehicleChildTable`) implements
+  `Support\DeclaresChildRowPolicy::onRemoved()` to choose: `unlink()` (clear the SSO child id, stamp
+  `sso_removed_at`, keep the row and everything the app keeps on it), `deactivate($column, $inactive = false,
+  $active = true)` (set the app's own column, stamp `sso_removed_at`, keep the link so SSO listing the child
+  again writes `$active` back over `$inactive`) or `delete()`. A definition that declares nothing is
+  **unlinked**. `delete` is only for a pure mirror table: one the package owns, or an app table whose every
+  column is written from SSO and that holds nothing of the app's own (CloudPCR's dem_* children once its
+  editors are read-only, so a removed licence or crew level leaves the DEM export). **An app mapping SSO
+  children onto its own tables (HR's licence rows carry approval history and card images) must choose
+  `unlink` or `deactivate`.** Rows stamped `sso_removed_at` are left out of the push, so a removed licence
+  HR still shows as pending is not sent back up as new (and removed, and sent again); they are not counted
+  as `unlinked_children` either. SSO listing a child with the same key later adopts the kept row again and
+  clears the stamp. The stamp column comes from
+  `database/master-data/2026_10_13_200000_add_sso_removed_at_to_mirror_child_tables.php`, published with
+  both `sso-master-data-personnel` and `sso-master-data-vehicles` (idempotent; it reads the bound
+  projections' child tables, so bind them first). Without it, unlink still keeps the row but cannot keep
+  it out of the push. The reconcile itself lives in `Support\LinkedChildRows`, shared by both mirrors.
   **Qualifications** (first entity) mirror into the app's existing `qualifications` +
   `company_user_qualifications` tables. Events: `qualification.created|updated` (upsert),
   `qualification.deleted` (`is_active=false`), `user.qualifications_changed` (the user's full set
@@ -503,8 +521,9 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   SSO is ever written into it). `distance_unit` is left to the real CloudPCR projection.
   - **Child rows are updated in place**, keyed by SSO's stable child id in `sso_crew_level_id` /
     `sso_yearly_usage_id` (added by the migration). Never delete-and-recreate: CloudPCR derives NEMSIS
-    group UUIDs from the local child row id. A linked child is deleted only when SSO stops listing its
-    id; an unlinked local child is adopted by level / year when exactly one fits, otherwise kept and
+    group UUIDs from the local child row id. A linked child SSO stops listing is handled by the child
+    table's `ChildRowPolicy` (unlink unless it declares otherwise; the CloudPCR template declares
+    `delete`); an unlinked local child is adopted by level / year when exactly one fits, otherwise kept and
     counted as `unlinked_children` on the resync. A row whose only change is a child reports `updated`.
   - Adoption and `--link-by-name` go VIN first, then unit number, then call sign (adoption only),
     normalized like SSO (trim, uppercase, no spaces or hyphens). A unit number or call sign candidate
@@ -541,7 +560,10 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   type group), gives the owner columns of a new row (`insertColumns()`), maps an SSO row to columns
   (`toColumns($company, $facility)`, which may find-or-create the type group), writes what lives outside the
   row (`written()`: phones, fax, designations / NPIs kept as rows; `Support\ChildRows::sync()` compares and
-  writes in place) and maps back for the push (`pushColumns()`, `toImport()`). The package binds
+  writes in place, by position: extras are deleted by default, which is only right for a pure copy of
+  SSO's list; a table carrying the app's own data passes `onRemoved: ChildRowPolicy::deactivate(...)`, so
+  extras are switched off and stamped and an inactive row is never reused; `unlink` is refused, there is no
+  child id to clear) and maps back for the push (`pushColumns()`, `toImport()`). The package binds
   `StandardFacilityProjection` (a `facilities` table with company_id and the contract's column names,
   `designations` / `npis` as JSON text, written only where the column exists; the migration creates it for an
   app with none). `tests/Stubs/DemFacilityProjection.php` is the CloudPCR template (`dem_facility_entries`
@@ -637,8 +659,9 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     `sso_link_pending`, the active column (`membership.is_member && is_active`), the user column (never
     taken from another local row that holds the user), division translation, and **child rows reconciled in
     place by SSO child ids** (`sso_license_id`, `sso_practice_level_id`, `sso_phone_id`, `sso_email_id`,
-    `sso_immunization_id`; sort_order from SSO's order where the table has it). A linked child is deleted only
-    when SSO stops listing it; an unlinked local child is adopted by `keyColumns` when exactly one fits,
+    `sso_immunization_id`; sort_order from SSO's order where the table has it). A linked child SSO stops
+    listing is unlinked, deactivated or deleted by the child table's `ChildRowPolicy` (the CloudPCR
+    template declares `delete`, the HR template `unlink`); an unlinked local child is adopted by `keyColumns` when exactly one fits,
     otherwise kept (`unlinked_children`). A child list SSO leaves out is not touched.
   - **Adoption:** local user link first (users.sso_id), then email (case-insensitive), exactly one unlinked
     candidate each, **never by name**; two candidates = `ambiguous` (nothing linked or created). A delivery

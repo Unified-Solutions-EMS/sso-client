@@ -2,6 +2,8 @@
 
 namespace Unified\SsoClient\Tests\Stubs;
 
+use Unified\SsoClient\MasterData\Support\ChildRowPolicy;
+use Unified\SsoClient\MasterData\Support\DeclaresChildRowPolicy;
 use Unified\SsoClient\MasterData\Vehicles\VehicleChildTable;
 use Unified\SsoClient\MasterData\Vehicles\VehicleProjection;
 
@@ -13,7 +15,9 @@ use Unified\SsoClient\MasterData\Vehicles\VehicleProjection;
  * two child tables: `dem_vehicle_cert_levels` (dvehicle_05 level, 06/07/08
  * crew counts) and `dem_vehicle_years` (dvehicle_11 year, 12 hours, 13
  * distance). A starting point for the real one, which also owns the `_nv`
- * columns.
+ * columns. Both child tables declare `delete`: every column is SSO's and
+ * nothing of CloudPCR's own lives on the rows, and a crew level SSO removed
+ * must leave the DEM export.
  */
 class DemVehicleProjection implements VehicleProjection
 {
@@ -84,8 +88,13 @@ class DemVehicleProjection implements VehicleProjection
     public function childTables(): array
     {
         return [
-            'crew_levels' => new class implements VehicleChildTable
+            'crew_levels' => new class implements DeclaresChildRowPolicy, VehicleChildTable
             {
+                public function onRemoved(): ChildRowPolicy
+                {
+                    return ChildRowPolicy::delete();
+                }
+
                 public function table(): string
                 {
                     return 'dem_vehicle_cert_levels';
@@ -126,8 +135,13 @@ class DemVehicleProjection implements VehicleProjection
                     ], fn (mixed $value): bool => $value !== null);
                 }
             },
-            'yearly_usage' => new class implements VehicleChildTable
+            'yearly_usage' => new class implements DeclaresChildRowPolicy, VehicleChildTable
             {
+                public function onRemoved(): ChildRowPolicy
+                {
+                    return ChildRowPolicy::delete();
+                }
+
                 public function table(): string
                 {
                     return 'dem_vehicle_years';

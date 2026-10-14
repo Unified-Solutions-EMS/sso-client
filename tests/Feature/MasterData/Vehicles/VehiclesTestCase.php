@@ -71,6 +71,7 @@ abstract class VehiclesTestCase extends TestCase
     protected function runPublishedMirrorMigration(): void
     {
         (require __DIR__.'/../../../../database/master-data/2026_10_11_000000_create_or_extend_vehicles_mirror.php')->up();
+        (require __DIR__.'/../../../../database/master-data/2026_10_13_200000_add_sso_removed_at_to_mirror_child_tables.php')->up();
     }
 
     protected function createCrewReferenceTables(): void

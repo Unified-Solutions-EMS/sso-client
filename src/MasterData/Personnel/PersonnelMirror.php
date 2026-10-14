@@ -19,6 +19,8 @@ use Unified\SsoClient\MasterData\Exceptions\MasterDataSyncException;
 use Unified\SsoClient\MasterData\LocalTenantResolver;
 use Unified\SsoClient\MasterData\MasterDataClient;
 use Unified\SsoClient\MasterData\MasterDataRegistry;
+use Unified\SsoClient\MasterData\Support\ChildRowPolicy;
+use Unified\SsoClient\MasterData\Support\LinkedChildRows;
 
 /**
  * Mirrors SSO's personnel (NEMSIS dPersonnel, one record per person per
@@ -43,6 +45,9 @@ use Unified\SsoClient\MasterData\MasterDataRegistry;
  * - child rows (licences, practice levels, phones, emails, immunizations)
  *   reconciled IN PLACE by SSO's stable child ids; a local child SSO never
  *   knew is adopted by key or kept (`unlinked_children`), never deleted;
+ *   a child SSO removed is unlinked, deactivated or deleted as the child
+ *   table's ChildRowPolicy says (unlink when it says nothing), and a row
+ *   stamped `sso_removed_at` is left out of the push;
  * - per-field partial values: a value this app pushed that SSO could not
  *   store comes back in the snapshot's `pending` ({path: {app_slug:
  *   value}}) and is written over SSO's empty value, so a delivery or a
@@ -121,6 +126,8 @@ class PersonnelMirror implements EntityMirror, FetchesSnapshot, SeedsSso
      * @var array<string, int>
      */
     private array $resyncCounts = [];
+
+    private ?LinkedChildRows $childRows = null;
 
     public function __construct(
         protected readonly LocalTenantResolver $tenants,
@@ -941,7 +948,9 @@ class PersonnelMirror implements EntityMirror, FetchesSnapshot, SeedsSso
 
     /**
      * Updates the person's child rows from SSO's lists in place. A list SSO
-     * left out of the snapshot is not touched.
+     * left out of the snapshot is not touched; a child SSO removed is
+     * handled by the child table's ChildRowPolicy (unlink unless it declares
+     * otherwise).
      *
      * @param  array<string, mixed>  $snapshot
      */
@@ -956,63 +965,36 @@ class PersonnelMirror implements EntityMirror, FetchesSnapshot, SeedsSso
                 continue;
             }
 
-            $ssoColumn = self::CHILD_SSO_ID_COLUMNS[$kind];
             $hasOrder = $this->hasColumn($child->table(), 'sort_order');
-            $rows = DB::table($child->table())->where($child->parentColumn(), $rowId)->orderBy('id')->get();
-            $linked = $rows->filter(fn (object $row): bool => $row->{$ssoColumn} !== null)->keyBy(fn (object $row): int => (int) $row->{$ssoColumn});
-            $unlinked = $rows->filter(fn (object $row): bool => $row->{$ssoColumn} === null)->values();
-            $seen = [];
+            $wanted = [];
 
             foreach (array_values($list) as $index => $ssoChild) {
                 $ssoChildId = is_array($ssoChild) ? (int) ($ssoChild['id'] ?? 0) : 0;
 
-                if ($ssoChildId <= 0) {
-                    continue;
-                }
-
-                $seen[] = $ssoChildId;
-                $columns = $child->toColumns($ssoChild) + ($hasOrder ? ['sort_order' => $index] : []);
-                $row = $linked->get($ssoChildId);
-
-                if ($row === null) {
-                    $key = self::childKey($child, $columns);
-                    $candidates = $unlinked->filter(fn (object $local): bool => $key !== '' && self::childKey($child, (array) $local) === $key);
-
-                    if ($candidates->count() === 1) {
-                        $row = $candidates->first();
-                        $unlinked = $unlinked->reject(fn (object $local): bool => $local->id === $row->id)->values();
-                        $columns[$ssoColumn] = $ssoChildId;
-                    }
-                }
-
-                if ($row === null) {
-                    DB::table($child->table())->insert($columns + [$child->parentColumn() => $rowId, $ssoColumn => $ssoChildId] + $this->timestamps($child->table(), created: true));
-                    $changed = true;
-
-                    continue;
-                }
-
-                $diff = array_filter($columns, fn (mixed $value, string $column): bool => ! self::sameValue($row->{$column} ?? null, $value), ARRAY_FILTER_USE_BOTH);
-
-                if ($diff !== []) {
-                    DB::table($child->table())->where($child->parentColumn(), $rowId)->where('id', $row->id)->update($diff + $this->timestamps($child->table()));
-                    $changed = true;
+                if ($ssoChildId > 0) {
+                    $columns = $child->toColumns($ssoChild) + ($hasOrder ? ['sort_order' => $index] : []);
+                    $wanted[] = ['id' => $ssoChildId, 'columns' => $columns, 'key' => self::childKey($child, $columns)];
                 }
             }
 
-            $dropped = $linked->keys()->diff($seen)->map(fn (int $ssoChildId): int => (int) $linked->get($ssoChildId)->id)->values()->all();
+            $result = $this->childRows()->reconcile(
+                $child->table(),
+                $child->parentColumn(),
+                $rowId,
+                self::CHILD_SSO_ID_COLUMNS[$kind],
+                $wanted,
+                fn (object $local): string => self::childKey($child, (array) $local),
+                self::sameValue(...),
+                ChildRowPolicy::for($child),
+            );
+            $changed = $result['changed'] || $changed;
 
-            if ($dropped !== []) {
-                DB::table($child->table())->where($child->parentColumn(), $rowId)->whereIn('id', $dropped)->delete();
-                $changed = true;
-            }
-
-            if ($unlinked->isNotEmpty()) {
-                $this->resyncCounts['unlinked_children'] = ($this->resyncCounts['unlinked_children'] ?? 0) + $unlinked->count();
+            if ($result['unlinked'] !== []) {
+                $this->resyncCounts['unlinked_children'] = ($this->resyncCounts['unlinked_children'] ?? 0) + count($result['unlinked']);
                 Log::info('SSO master data: local personnel child rows SSO does not list were kept', [
                     'table' => $child->table(),
                     'parent_id' => $rowId,
-                    'child_ids' => $unlinked->pluck('id')->all(),
+                    'child_ids' => $result['unlinked'],
                 ]);
             }
         }
@@ -1074,6 +1056,7 @@ class PersonnelMirror implements EntityMirror, FetchesSnapshot, SeedsSso
             foreach (array_chunk($rowIds, 500) as $chunk) {
                 $rows = DB::table($child->table())
                     ->whereIn($child->parentColumn(), $chunk)
+                    ->when($this->childRows()->hasRemovedMarker($child->table()), fn ($query) => $query->whereNull(ChildRowPolicy::REMOVED_AT_COLUMN))
                     ->orderBy('id')
                     ->get(array_values(array_unique(['id', $child->parentColumn().' as mirror_parent_id', ...$child->pushColumns()])));
 
@@ -1175,6 +1158,11 @@ class PersonnelMirror implements EntityMirror, FetchesSnapshot, SeedsSso
         }
 
         return $created ? ['created_at' => now(), 'updated_at' => now()] : ['updated_at' => now()];
+    }
+
+    private function childRows(): LinkedChildRows
+    {
+        return $this->childRows ??= new LinkedChildRows;
     }
 
     private function hasColumn(string $table, string $column): bool

@@ -3,14 +3,17 @@
 namespace Unified\SsoClient\Tests\Stubs;
 
 use Unified\SsoClient\MasterData\Personnel\PersonnelChildTable;
+use Unified\SsoClient\MasterData\Support\ChildRowPolicy;
+use Unified\SsoClient\MasterData\Support\DeclaresChildRowPolicy;
 
 /**
  * A personnel child table whose columns map one-to-one onto SSO child
  * fields ({sso_field: local_column}), plus fixed columns written on every
  * row (HR's `license_type = 'EMS'`) and a filter for rows the push leaves
- * out. Enough for the CloudPCR and HR templates.
+ * out, and what happens to a row SSO removed (`$onRemoved`, unlink when
+ * null). Enough for the CloudPCR and HR templates.
  */
-class MappedPersonnelChildTable implements PersonnelChildTable
+class MappedPersonnelChildTable implements DeclaresChildRowPolicy, PersonnelChildTable
 {
     /**
      * @param  array<string, string>  $map  SSO field => local column
@@ -23,7 +26,13 @@ class MappedPersonnelChildTable implements PersonnelChildTable
         private readonly array $map,
         private readonly array $keyColumns,
         private readonly array $fixed = [],
+        private readonly ?ChildRowPolicy $onRemoved = null,
     ) {}
+
+    public function onRemoved(): ChildRowPolicy
+    {
+        return $this->onRemoved ?? ChildRowPolicy::unlink();
+    }
 
     public function table(): string
     {

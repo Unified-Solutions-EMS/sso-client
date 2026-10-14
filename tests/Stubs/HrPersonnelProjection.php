@@ -4,6 +4,7 @@ namespace Unified\SsoClient\Tests\Stubs;
 
 use Illuminate\Support\Facades\DB;
 use Unified\SsoClient\MasterData\Personnel\PersonnelProjection;
+use Unified\SsoClient\MasterData\Support\ChildRowPolicy;
 
 /**
  * HR's shape, as HrPersonnelWriter would bind it (design §3e):
@@ -15,6 +16,12 @@ use Unified\SsoClient\MasterData\Personnel\PersonnelProjection;
  * 'EMS'` rows are SSO licences: HR's driver's licences share the table, stay
  * local and are never pushed or touched. HR keeps immunizations in another
  * shape (vaccine names, dates) and does not mirror them.
+ *
+ * Every child table declares `unlink`: the rows are HR's own (a licence row
+ * carries HR's approval status, reviewer and card images), so a child SSO
+ * removed keeps its row, loses its SSO link and is stamped `sso_removed_at`,
+ * which keeps it out of the push. An app mapping SSO children onto its own
+ * tables must choose `unlink` or `deactivate`, never `delete`.
  */
 class HrPersonnelProjection implements PersonnelProjection
 {
@@ -137,19 +144,19 @@ class HrPersonnelProjection implements PersonnelProjection
                 'number' => 'phone_number',
                 'type' => 'phone_type',
                 'is_primary' => 'is_primary',
-            ], ['phone_number']),
+            ], ['phone_number'], onRemoved: ChildRowPolicy::unlink()),
             'emails' => new MappedPersonnelChildTable('personnel_emails', 'personnel_profile_id', [
                 'address' => 'email_address',
                 'type' => 'email_type',
                 'is_primary' => 'is_primary',
-            ], ['email_address']),
+            ], ['email_address'], onRemoved: ChildRowPolicy::unlink()),
             'licenses' => new MappedPersonnelChildTable('personnel_licenses', 'personnel_profile_id', [
                 'state' => 'state',
                 'number' => 'number',
                 'first_issued_on' => 'issue_date',
                 'expires_on' => 'expiration_date',
                 'level' => 'level',
-            ], ['license_type', 'state'], ['license_type' => 'EMS']),
+            ], ['license_type', 'state'], ['license_type' => 'EMS'], ChildRowPolicy::unlink()),
         ];
     }
 }

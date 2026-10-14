@@ -272,6 +272,9 @@ return [
         // Locations (formerly "stations"). Bind a LocationProjection first if
         // the app's table is not Crew-shaped `locations` (CloudPCR: dem_locations).
         'locations' => env('SSO_MASTER_DATA_LOCATIONS', false),
+        // Vehicles. Bind a VehicleProjection first if the app's table is not a
+        // `vehicles` table with the contract's column names (CloudPCR: dem_vehicles).
+        'vehicles' => env('SSO_MASTER_DATA_VEHICLES', false),
 
         // Daily `sso:resync-master-data <entity>` for every enabled entity,
         // so assignments dropped by early-arriving webhooks (user not yet

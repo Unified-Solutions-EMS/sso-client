@@ -70,7 +70,10 @@ class SsoWebhookController extends Controller
                 'user.division_changed',
                 'location.created',
                 'location.updated',
-                'location.deactivated' => app(MasterDataWebhookHandler::class)->handle($event, $request->all()),
+                'location.deactivated',
+                'vehicle.created',
+                'vehicle.updated',
+                'vehicle.deactivated' => app(MasterDataWebhookHandler::class)->handle($event, $request->all()),
                 default => $this->handleUnknownEvent($event),
             };
 

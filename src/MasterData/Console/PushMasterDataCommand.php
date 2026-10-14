@@ -121,6 +121,7 @@ class PushMasterDataCommand extends MasterDataCommand
         $this->conflictTable(array_values(array_filter($conflicts, 'is_array')));
         $this->assignmentConflictTable($response['assignment_conflicts'] ?? null);
         $this->invalidTable($response['invalid'] ?? null);
+        $this->unresolvedLocationTable($response['unresolved_locations'] ?? null);
         $this->unresolvedDivisionTable($response['unresolved_divisions'] ?? null);
         $this->partialTable($response['partial'] ?? null);
         $this->refusedTable($response['refused'] ?? null);
@@ -138,7 +139,8 @@ class PushMasterDataCommand extends MasterDataCommand
      * Counts only some entities report (divisions: a person SSO already
      * places elsewhere, rows SSO refused to create; locations: matched rows
      * whose empty fields SSO filled from this app, division references it
-     * could not map, rows with fields it did not accept).
+     * could not map, rows with fields it did not accept; vehicles: also home
+     * location references it could not map).
      *
      * @param  array<string, mixed>  $response
      */
@@ -146,7 +148,7 @@ class PushMasterDataCommand extends MasterDataCommand
     {
         $extra = '';
 
-        foreach (['assignment_conflicts', 'invalid', 'filled', 'partial', 'unresolved_divisions', 'refused'] as $key) {
+        foreach (['assignment_conflicts', 'invalid', 'filled', 'partial', 'unresolved_locations', 'unresolved_divisions', 'refused'] as $key) {
             if (is_array($response[$key] ?? null)) {
                 $extra .= sprintf(' %s=%d', $key, count($response[$key]));
             }
@@ -205,6 +207,26 @@ class PushMasterDataCommand extends MasterDataCommand
     }
 
     /**
+     * Vehicles whose home location SSO could not map (this app's locations
+     * were not pushed, or the location is turned off in SSO). They were
+     * linked without one; push locations first and rerun, or set it in SSO.
+     */
+    private function unresolvedLocationTable(mixed $rows): void
+    {
+        if (! is_array($rows) || $rows === []) {
+            return;
+        }
+
+        $this->warn('SSO could not set these home locations. Push locations first and rerun, or set the location in SSO:');
+        $this->table(['Local id', 'Name', 'Local location', 'Reason'], array_map(fn (mixed $row): array => [
+            (string) (is_array($row) ? ($row['local_id'] ?? '') : ''),
+            (string) (is_array($row) ? ($row['name'] ?? '') : ''),
+            (string) (is_array($row) ? ($row['home_location_local_id'] ?? $row['home_location_sso_id'] ?? '') : ''),
+            (string) (is_array($row) ? ($row['reason'] ?? '') : ''),
+        ], array_values($rows)));
+    }
+
+    /**
      * Locations whose division SSO could not map (this app's divisions were
      * not pushed, or the division is turned off in SSO). They were linked
      * without a division; push divisions first and rerun, or set it in SSO.
@@ -236,6 +258,12 @@ class PushMasterDataCommand extends MasterDataCommand
             return;
         }
 
+        if (is_array($rows[array_key_first($rows)]['kept'] ?? null)) {
+            $this->keptTable($rows);
+
+            return;
+        }
+
         $this->warn('SSO kept these addresses as text only. Finish them in Settings > Locations:');
         $this->table(['Local id', 'Name', 'Why', 'Cut from'], array_map(fn (mixed $row): array => [
             (string) (is_array($row) ? ($row['local_id'] ?? '') : ''),
@@ -243,6 +271,27 @@ class PushMasterDataCommand extends MasterDataCommand
             (string) (is_array($row) ? ($row['fields']['address'] ?? '') : ''),
             (string) (is_array($row) ? ($row['original'] ?? '') : ''),
         ], array_values($rows)));
+    }
+
+    /**
+     * Values SSO could not read but kept on the row as pending (a vehicle's
+     * VIN with an I in it, a plate state it does not know), so nothing the
+     * app had is lost. The agency fixes them in SSO's Settings.
+     *
+     * @param  array<int|string, mixed>  $rows
+     */
+    private function keptTable(array $rows): void
+    {
+        $lines = [];
+        foreach ($rows as $row) {
+            foreach ((array) (is_array($row) ? ($row['fields'] ?? []) : []) as $field => $message) {
+                $kept = is_array($row) ? ($row['kept'][$field] ?? '') : '';
+                $lines[] = [(string) ($row['local_id'] ?? ''), (string) ($row['name'] ?? ''), (string) $field, (string) $message, is_scalar($kept) ? (string) $kept : (string) json_encode($kept)];
+            }
+        }
+
+        $this->warn('SSO kept these values as pending. Fix them in Settings:');
+        $this->table(['Local id', 'Name', 'Field', 'Why', 'Kept as'], $lines);
     }
 
     /**

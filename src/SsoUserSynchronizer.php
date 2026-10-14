@@ -3,6 +3,7 @@
 namespace Unified\SsoClient;
 
 use Illuminate\Contracts\Auth\Authenticatable;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
@@ -12,6 +13,8 @@ use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
 use Unified\SsoClient\Exceptions\CompanyLinkCollisionException;
 use Unified\SsoClient\MasterData\Divisions\DivisionMirror;
 use Unified\SsoClient\MasterData\MasterDataRegistry;
+use Unified\SsoClient\MasterData\Personnel\Jobs\PullPersonnelRecord;
+use Unified\SsoClient\MasterData\Personnel\PersonnelMirror;
 use Unified\SsoClient\MasterData\Qualifications\QualificationMirror;
 
 class SsoUserSynchronizer implements SsoUserSynchronizerContract
@@ -37,6 +40,11 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
      * Whether the divisions mirror migration has run, memoized likewise.
      */
     private static ?bool $divisionMirrorInstalled = null;
+
+    /**
+     * Whether the personnel mirror migration has run, memoized likewise.
+     */
+    private static ?bool $personnelMirrorInstalled = null;
 
     /**
      * Synchronize the SSO user payload into local database records.
@@ -86,6 +94,7 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
             $this->syncRolesForCompanies($user, $companies, $localCompanies);
             $this->syncMirroredQualifications($user, $companies, $localCompanies);
             $this->syncMirroredDivisions($user, $companies, $localCompanies);
+            $this->queueStalePersonnelPulls($user, $companies, $localCompanies);
             $this->pruneStaleCompanyMemberships(
                 $user,
                 array_values(array_map(static fn ($company) => $company->id, $localCompanies)),
@@ -617,6 +626,86 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
         self::$timezoneColumnSupport = [];
         self::$qualificationMirrorInstalled = null;
         self::$divisionMirrorInstalled = null;
+        self::$personnelMirrorInstalled = null;
+    }
+
+    /**
+     * Honour `companies[].personnel_updated_at`: when SSO's copy of this
+     * person at a company is newer than the mirror's (or the mirror has no
+     * row yet), queue a pull of that one record after the login commits, so
+     * a dropped `person.updated` heals at the next sign-in. Nothing is
+     * fetched inside the login transaction, the same hint queues at most one
+     * pull per five minutes (an SSO that keeps answering an error must not
+     * be asked on every request), and any failure here is logged and
+     * ignored: a login never fails because of it.
+     *
+     * No-op unless the app opted in (`sso.master_data.personnel`), ran the
+     * mirror migration, and SSO sends the key.
+     *
+     * @param  array<int, array<string, mixed>>  $companies
+     * @param  array<int|string, object>  $localCompanies
+     */
+    protected function queueStalePersonnelPulls($user, array $companies, array $localCompanies): void
+    {
+        $ssoUserId = (string) ($user->sso_id ?? '');
+
+        if (! ctype_digit($ssoUserId)) {
+            return;
+        }
+
+        $withHint = array_filter(
+            $companies,
+            static fn ($companyData): bool => is_array($companyData)
+                && is_string($companyData['personnel_updated_at'] ?? null)
+                && isset($companyData['id'], $localCompanies[$companyData['id']]),
+        );
+
+        if ($withHint === []) {
+            return;
+        }
+
+        try {
+            $registry = app(MasterDataRegistry::class);
+
+            if (! $registry->enabled('personnel')) {
+                return;
+            }
+
+            $mirror = $registry->mirror('personnel');
+
+            if (! $mirror instanceof PersonnelMirror || ! (self::$personnelMirrorInstalled ??= $mirror->isInstalled())) {
+                return;
+            }
+
+            foreach ($withHint as $companyData) {
+                $localCompanyId = (int) $localCompanies[$companyData['id']]->id;
+
+                if (! $mirror->needsPull($localCompanyId, (int) $ssoUserId, $companyData['personnel_updated_at'])
+                    || ! $this->claimPersonnelPull($localCompanyId, $ssoUserId, $companyData['personnel_updated_at'])) {
+                    continue;
+                }
+
+                PullPersonnelRecord::dispatch($localCompanyId, $companyData['id'], (int) $ssoUserId)->afterCommit();
+            }
+        } catch (\Throwable $e) {
+            Log::warning('SSO sync: personnel staleness check failed, login continues', [
+                'user_id' => $user->id,
+                'error' => $e->getMessage(),
+            ]);
+            report($e);
+        }
+    }
+
+    /**
+     * Fails open: an unreachable cache queues the pull anyway.
+     */
+    private function claimPersonnelPull(int $localCompanyId, string $ssoUserId, string $hint): bool
+    {
+        try {
+            return Cache::add("sso:personnel-pull:{$localCompanyId}:{$ssoUserId}:".sha1($hint), true, 300);
+        } catch (\Throwable) {
+            return true;
+        }
     }
 
     /**

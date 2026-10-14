@@ -91,7 +91,9 @@ class SsoWebhookController extends Controller
                 'procedure.updated',
                 'procedure.deactivated',
                 'procedure.batch_updated',
-                'procedure.review_completed' => app(MasterDataWebhookHandler::class)->handle($event, $request->all()),
+                'procedure.review_completed',
+                'person.updated',
+                'person.deactivated' => app(MasterDataWebhookHandler::class)->handle($event, $request->all()),
                 default => $this->handleUnknownEvent($event),
             };
 

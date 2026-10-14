@@ -235,6 +235,11 @@ class QualificationMirror extends CatalogMirror implements SeedsSso
         return $counts;
     }
 
+    public function importBatchSize(): int
+    {
+        return 1000;
+    }
+
     /**
      * The company's whole local catalog and every assignment to it, in the
      * shape of SSO's POST .../qualifications/import. Assignments travel by the

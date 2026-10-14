@@ -12,6 +12,12 @@ namespace Unified\SsoClient\MasterData\Contracts;
 interface SeedsSso
 {
     /**
+     * Most rows SSO's import endpoint takes in one request; the push sends
+     * larger rosters in chunks of this size.
+     */
+    public function importBatchSize(): int;
+
+    /**
      * @return array{payload: array<string, mixed>, skipped_users: int, truncated_names: list<array{local_id: int|string, name: string}>}
      */
     public function buildImportPayload(int $localCompanyId): array;

@@ -552,6 +552,11 @@ class PersonnelMirror implements EntityMirror, FetchesSnapshot, SeedsSso
         return $map;
     }
 
+    public function importBatchSize(): int
+    {
+        return 500;
+    }
+
     /**
      * The company's people in the shape of SSO's POST .../personnel/import:
      * `{app_slug, personnel: [{local_id, user_sso_id?, is_active, user?,

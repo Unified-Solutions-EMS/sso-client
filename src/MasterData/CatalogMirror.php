@@ -56,6 +56,14 @@ abstract class CatalogMirror implements EntityMirror
     abstract public function maxNameLength(): int;
 
     /**
+     * Row cap of SSO's import request for this entity (500 unless overridden).
+     */
+    public function importBatchSize(): int
+    {
+        return 500;
+    }
+
+    /**
      * Normalize an SSO record into the entity's attributes. Must include
      * `name`, `is_active` and `sso_updated_at` (UTC 'Y-m-d H:i:s' or null).
      *

@@ -212,6 +212,11 @@ class VehicleMirror extends CatalogMirror implements SeedsSso
         return $result;
     }
 
+    public function importBatchSize(): int
+    {
+        return 1000;
+    }
+
     /**
      * The company's local vehicles in the shape of SSO's
      * POST .../vehicles/import, children included with their local ids. A

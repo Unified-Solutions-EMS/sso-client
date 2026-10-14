@@ -9,6 +9,7 @@ use Unified\SsoClient\MasterData\CatalogMirror;
 use Unified\SsoClient\MasterData\CodeLists\CodeListMirror;
 use Unified\SsoClient\MasterData\Contracts\SeedsSso;
 use Unified\SsoClient\MasterData\Exceptions\MasterDataSyncException;
+use Unified\SsoClient\MasterData\ImportBatcher;
 use Unified\SsoClient\MasterData\LocalTenantResolver;
 use Unified\SsoClient\MasterData\MasterDataClient;
 use Unified\SsoClient\MasterData\MasterDataRegistry;
@@ -111,7 +112,7 @@ class PushMasterDataCommand extends MasterDataCommand
             return;
         }
 
-        $response = $client->import($entity, $ssoCompanyId, $payload);
+        $response = (new ImportBatcher($client))->import($entity, $ssoCompanyId, $payload, $mirror->importBatchSize());
         $mapping = $response['mapping'] ?? null;
 
         if (! is_array($mapping)) {

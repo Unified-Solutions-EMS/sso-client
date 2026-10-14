@@ -6,6 +6,7 @@ namespace Unified\SsoClient\MasterData;
 
 use Illuminate\Contracts\Container\Container;
 use Unified\SsoClient\MasterData\Contracts\EntityMirror;
+use Unified\SsoClient\MasterData\Divisions\DivisionMirror;
 use Unified\SsoClient\MasterData\Exceptions\MasterDataSyncException;
 use Unified\SsoClient\MasterData\Qualifications\QualificationMirror;
 
@@ -23,6 +24,7 @@ class MasterDataRegistry
      */
     private const ENTITIES = [
         'qualifications' => QualificationMirror::class,
+        'divisions' => DivisionMirror::class,
     ];
 
     public function __construct(private readonly Container $container) {}

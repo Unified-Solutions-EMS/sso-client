@@ -33,7 +33,7 @@ abstract class MasterDataCommand extends Command
         $mirror = $registry->mirror($entity);
 
         if (! $mirror->isInstalled()) {
-            $this->error("The {$entity} mirror migration has not run. Publish it with `php artisan vendor:publish --tag=sso-master-data` and migrate.");
+            $this->error("The {$entity} mirror migration has not run. Publish it with `php artisan vendor:publish --tag={$mirror->publishTag()}` and migrate.");
 
             return null;
         }

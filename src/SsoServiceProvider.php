@@ -64,11 +64,15 @@ class SsoServiceProvider extends ServiceProvider
             __DIR__.'/../config/security.php' => config_path('security.php'),
         ], 'security-config');
 
-        // Master-data mirror migrations are opt-in per app, so they are
-        // published rather than loaded.
+        // Master-data mirror migrations are opt-in per app and per entity, so
+        // they are published rather than loaded, one tag each.
         $this->publishesMigrations([
-            __DIR__.'/../database/master-data' => database_path('migrations'),
+            __DIR__.'/../database/master-data/2026_10_06_000000_add_sso_mirror_columns_to_qualifications_table.php' => database_path('migrations/2026_10_06_000000_add_sso_mirror_columns_to_qualifications_table.php'),
         ], 'sso-master-data');
+
+        $this->publishesMigrations([
+            __DIR__.'/../database/master-data/2026_10_09_000000_create_or_extend_divisions_mirror.php' => database_path('migrations/2026_10_09_000000_create_or_extend_divisions_mirror.php'),
+        ], 'sso-master-data-divisions');
 
         // Auto-record failed logins / lockouts / password resets as
         // security events in every consuming app.

@@ -63,7 +63,11 @@ class SsoWebhookController extends Controller
                 'qualification.created',
                 'qualification.updated',
                 'qualification.deleted',
-                'user.qualifications_changed' => app(MasterDataWebhookHandler::class)->handle($event, $request->all()),
+                'user.qualifications_changed',
+                'division.created',
+                'division.updated',
+                'division.deactivated',
+                'user.division_changed' => app(MasterDataWebhookHandler::class)->handle($event, $request->all()),
                 default => $this->handleUnknownEvent($event),
             };
 

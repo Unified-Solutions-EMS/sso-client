@@ -61,6 +61,7 @@ class SsoWebhookController extends Controller
                 'user.impersonation.started' => $this->handleImpersonationStarted($request),
                 'user.impersonation.ended' => $this->handleImpersonationEnded($request),
                 'user.logged_out' => $this->handleUserLoggedOut($request),
+                'device.revoked' => $this->handleDeviceRevoked($request),
                 'trial.seed_data' => $this->handleTrialSeedData($request),
                 'trial.purge_data' => $this->handleTrialPurgeData($request),
                 'cad.migrate_data' => $this->handleCadMigrateData($request),
@@ -373,6 +374,64 @@ class SsoWebhookController extends Controller
             return ['status' => 'ok', 'action' => 'user.logged_out', 'skipped' => true];
         }
 
+        $this->queueForceLogout($user, 'sso_logout');
+
+        return ['status' => 'ok', 'action' => 'user.logged_out'];
+    }
+
+    /**
+     * An agency admin revoked a device in SSO. The payload names the user the
+     * device belonged to, so this app ends that user's sessions: rows are
+     * deleted outright on the database session driver, and a force_logout
+     * action is queued for every other driver (and for any request already
+     * past the session read). The OAuth tokens live inside the session
+     * payload, so deleting the row discards them with it. SSO's refresh
+     * results are cached by refresh-token hash for 60 seconds and cannot be
+     * mapped back to a user; they expire on their own.
+     *
+     * Fail-silent: SSO must record the delivery whatever happens here, so an
+     * unknown device, unknown user or storage error is still a 200.
+     *
+     * @return array<string, mixed>
+     */
+    protected function handleDeviceRevoked(Request $request): array
+    {
+        $userData = (array) $request->input('user', []);
+
+        try {
+            $user = $this->findUserBySsoId($userData['id'] ?? null, $userData['email'] ?? null);
+
+            if (! $user) {
+                return ['status' => 'ok', 'action' => 'device.revoked', 'skipped' => true];
+            }
+
+            $this->deleteDatabaseSessions($user->id);
+            $this->queueForceLogout($user, 'device_revoked');
+        } catch (\Throwable $e) {
+            Log::warning('SSO webhook: device.revoked handling failed', ['error' => $e->getMessage()]);
+        }
+
+        return ['status' => 'ok', 'action' => 'device.revoked'];
+    }
+
+    protected function deleteDatabaseSessions(int|string $userId): void
+    {
+        if (config('session.driver') !== 'database') {
+            return;
+        }
+
+        $table = (string) config('session.table', 'sessions');
+        $connection = config('session.connection');
+
+        if (! Schema::connection($connection)->hasTable($table)) {
+            return;
+        }
+
+        DB::connection($connection)->table($table)->where('user_id', $userId)->delete();
+    }
+
+    protected function queueForceLogout(mixed $user, string $reason): void
+    {
         SsoSessionAction::query()
             ->where('user_id', $user->id)
             ->delete();
@@ -380,11 +439,9 @@ class SsoWebhookController extends Controller
         SsoSessionAction::create([
             'user_id' => $user->id,
             'action' => SsoSessionAction::ACTION_FORCE_LOGOUT,
-            'payload' => ['reason' => 'sso_logout'],
+            'payload' => ['reason' => $reason],
             'expires_at' => now()->addHours(8),
         ]);
-
-        return ['status' => 'ok', 'action' => 'user.logged_out'];
     }
 
     /**

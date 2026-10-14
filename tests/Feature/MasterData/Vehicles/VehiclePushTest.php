@@ -101,7 +101,7 @@ class VehiclePushTest extends VehiclesTestCase
 
         $this->artisan('sso:push-master-data', ['entity' => 'vehicles'])
             ->expectsOutputToContain('linked=1 link_collisions=1')
-            ->expectsTable(['Local id', 'SSO id', 'Not linked because'], [[(string) $two, '901', 'sso_id_held_by_another_local_row']])
+            ->expectsTable(['Local id', 'Name', 'SSO id', 'Linked to local id', 'Not linked because'], [[(string) $two, 'M 1', '901', (string) $one, 'sso_id_held_by_another_local_row']])
             ->assertSuccessful();
 
         $this->assertNull(DB::table('vehicles')->find($two)->sso_vehicle_id);

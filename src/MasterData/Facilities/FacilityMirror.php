@@ -54,6 +54,8 @@ class FacilityMirror extends CatalogMirror implements SeedsSso
 
     private const ADDRESS_KEYS = ['suite', 'street', 'street2', 'city_gnis', 'city_name', 'state', 'zip', 'county', 'country'];
 
+    private ?bool $hasCompanyId = null;
+
     public function __construct(
         LocalTenantResolver $tenants,
         MasterDataClient $client,
@@ -278,6 +280,27 @@ class FacilityMirror extends CatalogMirror implements SeedsSso
     protected function scoped(int $localCompanyId): Builder
     {
         return $this->projection->scope(DB::table($this->table()), $localCompanyId);
+    }
+
+    /**
+     * The rows the migration's unique index spans: the company's rows when
+     * the table has a company_id, else the whole table. The projection's
+     * scope is narrower (CloudPCR's entries reach their company through a
+     * non-deleted type group), so an entry of another company or of a
+     * deleted group holding the SSO id was invisible to it and the push
+     * mapping hit the unique index instead (CloudPCR, 2026-10-14). Console
+     * push only, and only an id is read: the row that holds the link.
+     */
+    protected function linkHolders(int $localCompanyId): Builder
+    {
+        return $this->tableHasCompanyId()
+            ? DB::table($this->table())->where('company_id', $localCompanyId)
+            : DB::table($this->table());
+    }
+
+    private function tableHasCompanyId(): bool
+    {
+        return $this->hasCompanyId ??= Schema::hasColumn($this->table(), 'company_id');
     }
 
     protected function insert(int $localCompanyId, int $ssoId, array $attributes): void

@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
 use Unified\SsoClient\MasterData\Contracts\EntityMirror;
+use Unified\SsoClient\MasterData\Support\MappingLinker;
 
 /**
  * The catalog half every master-data mirror shares: a company-scoped local
@@ -317,12 +318,13 @@ abstract class CatalogMirror implements EntityMirror
 
     /**
      * Link local rows to the SSO ids the import assigned them. A local row
-     * already linked to a different SSO id, or an SSO id another local row of
-     * the company already holds (two local spellings SSO matched to one row),
-     * is reported and left alone rather than overwritten.
+     * already linked to a different SSO id, or an SSO id another local row
+     * already holds (an agency's duplicates SSO matched to one row: the
+     * first by local id keeps it), is reported and left alone rather than
+     * overwritten (MappingLinker).
      *
      * @param  array<int|string, int|string|array{sso_id: int|string, updated_at?: string|null}>  $mapping
-     * @return array{applied: int, collisions: list<array{local_id: int, sso_id: int, reason: string}>}
+     * @return array{applied: int, collisions: list<array{local_id: int, sso_id: int, reason: string, name: string|null, held_by: int|null}>}
      */
     public function applyImportMapping(int $localCompanyId, array $mapping): array
     {
@@ -345,34 +347,40 @@ abstract class CatalogMirror implements EntityMirror
 
         $applied = 0;
         $collisions = [];
+        $linker = new MappingLinker($this->ssoIdColumn(), fn (): Builder => $this->linkHolders($localCompanyId));
 
         foreach ($pairs as $localId => ['sso_id' => $ssoId, 'updated_at' => $ssoUpdatedAt]) {
             $row = $this->scoped($localCompanyId)->where('id', $localId)->first();
 
-            $reason = match (true) {
-                $row === null => 'local_row_missing',
-                $row->{$this->ssoIdColumn()} !== null && (int) $row->{$this->ssoIdColumn()} !== $ssoId => 'local_row_linked_to_another_sso_id',
-                $this->scoped($localCompanyId)->where($this->ssoIdColumn(), $ssoId)->where('id', '!=', $localId)->exists() => 'sso_id_held_by_another_local_row',
-                default => null,
-            };
-
-            if ($reason !== null) {
-                $collisions[] = ['local_id' => $localId, 'sso_id' => $ssoId, 'reason' => $reason];
-
-                continue;
-            }
-
-            $this->scoped($localCompanyId)
+            $refusal = $linker->refusal($row, $localId, $ssoId) ?? $linker->write($localId, $ssoId, fn () => $this->scoped($localCompanyId)
                 ->where('id', $localId)
                 ->update([
                     $this->ssoIdColumn() => $ssoId,
                     self::SSO_UPDATED_AT_COLUMN => $ssoUpdatedAt,
                     self::LINK_PENDING_COLUMN => false,
-                ]);
+                ]));
+
+            if ($refusal !== null) {
+                $name = $row?->{$this->nameColumn()};
+                $collisions[] = ['local_id' => $localId, 'sso_id' => $ssoId, 'name' => $name === null ? null : (string) $name] + $refusal;
+
+                continue;
+            }
+
             $applied++;
         }
 
         return ['applied' => $applied, 'collisions' => $collisions];
+    }
+
+    /**
+     * The rows the SSO link's unique index spans, for the push mapping's
+     * holder check. The company's rows unless a mirror reads through a
+     * narrower scope than its index (FacilityMirror).
+     */
+    protected function linkHolders(int $localCompanyId): Builder
+    {
+        return $this->scoped($localCompanyId);
     }
 
     /**

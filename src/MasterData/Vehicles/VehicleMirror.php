@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Unified\SsoClient\MasterData\Vehicles;
 
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
@@ -15,6 +16,7 @@ use Unified\SsoClient\MasterData\MasterDataClient;
 use Unified\SsoClient\MasterData\MasterDataRegistry;
 use Unified\SsoClient\MasterData\Support\ChildRowPolicy;
 use Unified\SsoClient\MasterData\Support\LinkedChildRows;
+use Unified\SsoClient\MasterData\Support\MappingLinker;
 
 /**
  * Mirrors SSO's vehicles (an agency list: the units it runs, NEMSIS
@@ -518,12 +520,16 @@ class VehicleMirror extends CatalogMirror implements SeedsSso
 
     /**
      * @param  array<int|string, mixed>  $mapping  {child_local_id: sso_child_id}
-     * @return list<array{local_id: int, sso_id: int, reason: string}>
+     * @return list<array{local_id: int, sso_id: int, reason: string, name: null, held_by: int|null}>
      */
     private function applyChildMapping(VehicleChildTable $child, string $kind, int $vehicleId, array $mapping): array
     {
         $ssoColumn = self::CHILD_SSO_ID_COLUMNS[$kind];
+        $siblings = fn (): Builder => DB::table($child->table())->where($child->parentColumn(), $vehicleId);
+        $linker = new MappingLinker($ssoColumn, $siblings);
         $collisions = [];
+
+        ksort($mapping);
 
         foreach ($mapping as $childLocalId => $ssoChildId) {
             $childLocalId = (int) $childLocalId;
@@ -533,23 +539,19 @@ class VehicleMirror extends CatalogMirror implements SeedsSso
                 continue;
             }
 
-            $siblings = DB::table($child->table())->where($child->parentColumn(), $vehicleId);
-            $row = (clone $siblings)->where('id', $childLocalId)->first();
+            $row = $siblings()->where('id', $childLocalId)->first();
+            $refusal = $linker->refusal($row, $childLocalId, $ssoChildId)
+                ?? $linker->write($childLocalId, $ssoChildId, fn () => $siblings()->where('id', $childLocalId)->update([$ssoColumn => $ssoChildId]));
 
-            $reason = match (true) {
-                $row === null => 'local_row_missing',
-                $row->{$ssoColumn} !== null && (int) $row->{$ssoColumn} !== $ssoChildId => 'local_row_linked_to_another_sso_id',
-                (clone $siblings)->where($ssoColumn, $ssoChildId)->where('id', '!=', $childLocalId)->exists() => 'sso_id_held_by_another_local_row',
-                default => null,
-            };
-
-            if ($reason !== null) {
-                $collisions[] = ['local_id' => $childLocalId, 'sso_id' => $ssoChildId, 'reason' => "{$kind} of vehicle {$vehicleId}: {$reason}"];
-
-                continue;
+            if ($refusal !== null) {
+                $collisions[] = [
+                    'local_id' => $childLocalId,
+                    'sso_id' => $ssoChildId,
+                    'reason' => "{$kind} of vehicle {$vehicleId}: {$refusal['reason']}",
+                    'name' => null,
+                    'held_by' => $refusal['held_by'],
+                ];
             }
-
-            (clone $siblings)->where('id', $childLocalId)->update([$ssoColumn => $ssoChildId]);
         }
 
         return $collisions;

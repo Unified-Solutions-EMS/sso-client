@@ -177,13 +177,7 @@ class PushMasterDataCommand extends MasterDataCommand
         $this->unmatchedTable($response['unmatched'] ?? null);
         $this->reviewNotice($entity, $ssoCompanyId, $response);
 
-        if ($result['collisions'] !== []) {
-            $this->table(['Local id', 'SSO id', 'Not linked because'], array_map(fn (array $collision): array => [
-                (string) $collision['local_id'],
-                (string) $collision['sso_id'],
-                $collision['reason'],
-            ], $result['collisions']));
-        }
+        $this->collisionTable($result['collisions']);
     }
 
     /**
@@ -472,13 +466,29 @@ class PushMasterDataCommand extends MasterDataCommand
             $this->line('Left out of the list by the agency: '.implode(', ', $result['left_out']));
         }
 
-        if ($result['collisions'] !== []) {
-            $this->table(['Local id', 'SSO id', 'Not linked because'], array_map(fn (array $collision): array => [
-                (string) $collision['local_id'],
-                (string) $collision['sso_id'],
-                $collision['reason'],
-            ], $result['collisions']));
+        $this->collisionTable($result['collisions']);
+    }
+
+    /**
+     * Mapping entries that were not linked, with the local row that holds
+     * the SSO id when there is one, so an operator can merge an agency's
+     * duplicate rows by hand (the push never deletes or changes them).
+     *
+     * @param  list<array<string, mixed>>  $collisions
+     */
+    private function collisionTable(array $collisions): void
+    {
+        if ($collisions === []) {
+            return;
         }
+
+        $this->table(['Local id', 'Name', 'SSO id', 'Linked to local id', 'Not linked because'], array_map(fn (array $collision): array => [
+            (string) $collision['local_id'],
+            (string) ($collision['name'] ?? ''),
+            (string) $collision['sso_id'],
+            (string) ($collision['held_by'] ?? ''),
+            (string) $collision['reason'],
+        ], $collisions));
     }
 
     /**

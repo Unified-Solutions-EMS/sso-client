@@ -8,13 +8,15 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Routes master-data webhook events (qualification.*, user.qualifications_changed,
- * division.*, user.division_changed, location.*, vehicle.*) to the matching
- * mirror.
+ * division.*, user.division_changed, location.*, vehicle.*, facility.*,
+ * medication.*, procedure.*) to the matching mirror.
  *
  * Every outcome other than a handler crash is a 200 acknowledgement: an entity
  * the app has not opted into, a mirror migration that has not run yet, or a
  * company this app has never seen are all normal states, and `sso:resync-master-data`
- * heals anything skipped here.
+ * heals anything skipped here. An event that finishes a push (a code list's
+ * `review_completed`) is applied while the entity is still off: the push runs
+ * before the flag is turned on.
  */
 class MasterDataWebhookHandler
 {
@@ -35,7 +37,7 @@ class MasterDataWebhookHandler
             return ['status' => 'ignored', 'action' => $event, 'reason' => 'unknown_event'];
         }
 
-        if (! $this->registry->enabled($entity)) {
+        if (! $this->registry->enabled($entity) && ! $this->registry->continuesPush($entity, $event)) {
             return ['status' => 'ignored', 'action' => $event, 'reason' => "master_data.{$entity} disabled"];
         }
 

@@ -12,14 +12,14 @@ namespace Unified\SsoClient\MasterData\Contracts;
 interface SeedsSso
 {
     /**
-     * @return array{payload: array<string, mixed>, skipped_users: int, truncated_names: list<array{local_id: int, name: string}>}
+     * @return array{payload: array<string, mixed>, skipped_users: int, truncated_names: list<array{local_id: int|string, name: string}>}
      */
     public function buildImportPayload(int $localCompanyId): array;
 
     /**
      * @param  array<int|string, int|string|array{sso_id: int|string, updated_at?: string|null}>  $mapping
      *                                                                                                      SSO id (or {sso_id, updated_at}) keyed by local id
-     * @return array{applied: int, collisions: list<array{local_id: int, sso_id: int, reason: string}>}
+     * @return array{applied: int, collisions: list<array{local_id: int|string, sso_id: int, reason: string}>}
      */
     public function applyImportMapping(int $localCompanyId, array $mapping): array;
 }

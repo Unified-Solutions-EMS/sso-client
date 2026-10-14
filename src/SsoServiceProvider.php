@@ -7,9 +7,15 @@ use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
+use Unified\SsoClient\MasterData\Facilities\FacilityProjection;
+use Unified\SsoClient\MasterData\Facilities\StandardFacilityProjection;
 use Unified\SsoClient\MasterData\Locations\LocationProjection;
 use Unified\SsoClient\MasterData\Locations\TextAddressLocationProjection;
 use Unified\SsoClient\MasterData\MasterDataRegistry;
+use Unified\SsoClient\MasterData\Medications\MedicationProjection;
+use Unified\SsoClient\MasterData\Medications\MirrorOnlyMedicationProjection;
+use Unified\SsoClient\MasterData\Procedures\MirrorOnlyProcedureProjection;
+use Unified\SsoClient\MasterData\Procedures\ProcedureProjection;
 use Unified\SsoClient\MasterData\Vehicles\StandardVehicleProjection;
 use Unified\SsoClient\MasterData\Vehicles\VehicleProjection;
 use Unified\SsoClient\Metrics\Contracts\MetricContextResolver;
@@ -38,6 +44,16 @@ class SsoServiceProvider extends ServiceProvider
         // Vehicles mirror: a `vehicles` table with the contract's column names
         // unless the app binds its own projection (CloudPCR's dem_vehicles).
         $this->app->bindIf(VehicleProjection::class, StandardVehicleProjection::class);
+
+        // Facilities mirror: a `facilities` table with the contract's column
+        // names unless the app binds its own (CloudPCR's dem_facility_entries).
+        $this->app->bindIf(FacilityProjection::class, StandardFacilityProjection::class);
+
+        // Medications / procedures mirrors: the package's own flat tables;
+        // the app binds a projection to carry the list into its structure
+        // (CloudPCR's configuration groups) and back for the push.
+        $this->app->bindIf(MedicationProjection::class, MirrorOnlyMedicationProjection::class);
+        $this->app->bindIf(ProcedureProjection::class, MirrorOnlyProcedureProjection::class);
 
         // Metrics — apps can override by binding their own
         // MetricContextResolver implementation in AppServiceProvider.
@@ -93,6 +109,18 @@ class SsoServiceProvider extends ServiceProvider
         $this->publishesMigrations([
             __DIR__.'/../database/master-data/2026_10_11_000000_create_or_extend_vehicles_mirror.php' => database_path('migrations/2026_10_11_000000_create_or_extend_vehicles_mirror.php'),
         ], 'sso-master-data-vehicles');
+
+        $this->publishesMigrations([
+            __DIR__.'/../database/master-data/2026_10_11_100000_create_or_extend_facilities_mirror.php' => database_path('migrations/2026_10_11_100000_create_or_extend_facilities_mirror.php'),
+        ], 'sso-master-data-facilities');
+
+        $this->publishesMigrations([
+            __DIR__.'/../database/master-data/2026_10_11_110000_create_medications_mirror.php' => database_path('migrations/2026_10_11_110000_create_medications_mirror.php'),
+        ], 'sso-master-data-medications');
+
+        $this->publishesMigrations([
+            __DIR__.'/../database/master-data/2026_10_11_120000_create_procedures_mirror.php' => database_path('migrations/2026_10_11_120000_create_procedures_mirror.php'),
+        ], 'sso-master-data-procedures');
 
         // Auto-record failed logins / lockouts / password resets as
         // security events in every consuming app.

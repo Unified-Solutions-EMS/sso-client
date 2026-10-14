@@ -80,7 +80,9 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   in the controller, no CSRF/auth middleware. Handles `user.created/updated/deleted`,
   `company.updated/activated`, `user.role.changed`, `user.app_role.changed`, `user.staff_role.changed`,
   `impersonation.started/ended`, `user.logged_out`, `trial.seed_data`, `trial.purge_data`,
-  `cad.migrate_data`. Unknown events ack rather than 500.
+  `cad.migrate_data`. Unknown events ack `{"status":"ok","action":"ignored"}` with a 200 rather than 500,
+  so SSO can ship new events (e.g. the `personnel.*` -> `person.*` rename, which has no mirror here yet)
+  before any app handles them (pinned by `SsoWebhookUnknownEventTest`).
   **`trial.purge_data` is verified before it destroys anything.** The handler asks SSO's
   authoritative `GET /api/internal/companies/trials` (CORE_APP_API_KEY) whether the company is a
   current trial or in the response's `purge_pending` id list (the conversion flow flips
@@ -258,18 +260,26 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
 - **Migrations** — `sso_session_actions` table and `users.staff_roles` column, loaded from the package.
 - **Master data mirrors** (`src/MasterData/`) — SSO is canonical for shared master data; apps hold
   a read-only mirror per entity, opted into with `config('sso.master_data.<entity>')` (env
-  `SSO_MASTER_DATA_QUALIFICATIONS`, `SSO_MASTER_DATA_DIVISIONS`, `SSO_MASTER_DATA_LOCATIONS`, `SSO_MASTER_DATA_VEHICLES`, all default false). Pieces:
+  `SSO_MASTER_DATA_QUALIFICATIONS`, `SSO_MASTER_DATA_DIVISIONS`, `SSO_MASTER_DATA_LOCATIONS`, `SSO_MASTER_DATA_VEHICLES`,
+  `SSO_MASTER_DATA_FACILITIES`, `SSO_MASTER_DATA_MEDICATIONS`, `SSO_MASTER_DATA_PROCEDURES`, all default false).
+  `mergeConfigFrom()` is shallow, so an app whose own `config/sso.php` defines `master_data` replaces the
+  package's whole array. That is safe: every reader defaults per key (`MasterDataRegistry::enabled()` reads
+  `config("sso.master_data.{$entity}", false)`, `schedule_resync` defaults true, `timeout` 120), so an app may
+  list only the entities it uses and the rest stay off (pinned by `PartialMasterDataConfigTest`). Any new
+  `master_data` key must be read with an explicit default for the same reason. Pieces:
   `Contracts\EntityMirror` (one class per entity: table, SSO id column, publish tag, webhook apply,
   resync, link-by-name), `CatalogMirror` (the shared base: linking, name adoption, `sso_link_pending`,
   the `sso_updated_at` stale guard, deactivate-never-delete, link-by-name, the push mapping; each
   entity adds its columns and its assignment rules), `MasterDataRegistry`
   (known entities + opt-in check; mirrors resolve through the container so an app can bind a
   subclass), `MasterDataWebhookHandler` (the webhook controller's `match` sends `qualification.*`,
-  `user.qualifications_changed`, `division.*`, `user.division_changed`, `location.*` and `vehicle.*` here; a disabled entity, an unmigrated mirror, or an unknown
-  company is a 200 ack), `MasterDataClient` (`GET {SSO_BASE_URL}/api/internal/companies/{id}/{entity}`,
+  `user.qualifications_changed`, `division.*`, `user.division_changed`, `location.*`, `vehicle.*`, `facility.*`, `medication.*`
+  and `procedure.*` here; a disabled entity, an unmigrated mirror, or an unknown company is a 200 ack, except that an event a
+  mirror lists in `Contracts\ContinuesPush::pushEvents()` (the code lists' `review_completed`) is applied while the entity is
+  still off, because it finishes the push), `MasterDataClient` (`GET {SSO_BASE_URL}/api/internal/companies/{id}/{entity}`,
   bearer `CORE_APP_API_KEY`), `sso:resync-master-data {entity} {--company=} {--link-by-name}` and the
-  one-time upward seed `sso:push-master-data {entity} {--company=} {--dry-run}` (mirrors that
-  implement `Contracts\SeedsSso`).
+  one-time upward seed `sso:push-master-data {entity} {--company=} {--dry-run} {--review=}` (mirrors that
+  implement `Contracts\SeedsSso`; `--review=ID --company=X` links a finished code-list review instead of pushing).
   Every mirror write is query-builder SQL pinned to the local company resolved from the
   authoritative SSO company id (§4a); rows SSO deleted or dropped are deactivated, never deleted.
   **Qualifications** (first entity) mirror into the app's existing `qualifications` +
@@ -474,6 +484,87 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     `unresolved_*`, `partial` and `refused` in SSO Settings > Vehicles; `SSO_MASTER_DATA_VEHICLES=true`;
     `sso:resync-master-data vehicles`; make the app's vehicle editor read-only. Read side:
     `VehicleCatalog::usableForCompany()`. Fleet is on Vapor (staging is live): James deploys it.
+
+  **Facilities** (fifth entity, `MasterData\Facilities\FacilityMirror`, branch `feature/lists-mirrors`;
+  SSO side on `feature/vehicles` and later). Destinations (hospitals, nursing homes, other receiving
+  facilities, NEMSIS dFacility); facility-as-destination only, never facility-as-company. Same projection idea:
+  `Facilities\FacilityProjection` names the table and the name / code / ZIP columns, **scopes a query to a
+  company** (`scope()`: a table may reach its company through a parent, as CloudPCR's entries do through their
+  type group), gives the owner columns of a new row (`insertColumns()`), maps an SSO row to columns
+  (`toColumns($company, $facility)`, which may find-or-create the type group), writes what lives outside the
+  row (`written()`: phones, fax, designations / NPIs kept as rows; `Support\ChildRows::sync()` compares and
+  writes in place) and maps back for the push (`pushColumns()`, `toImport()`). The package binds
+  `StandardFacilityProjection` (a `facilities` table with company_id and the contract's column names,
+  `designations` / `npis` as JSON text, written only where the column exists; the migration creates it for an
+  app with none). `tests/Stubs/DemFacilityProjection.php` is the CloudPCR template (`dem_facility_entries`
+  dfacility_02..13 + `dfacility_07b` + `mailing_city`, under `dem_facilities` dfacility_01 type groups, phones
+  in `dem_facility_entry_phones` with SSO's `fax` kept as a 9913001 phone). Entry ids never change (CAD
+  incidents, Billing claims, mobile bundles hold them); a type change moves the entry to another group.
+  - Adoption mirrors SSO's import match: code (ignoring case), then exact name with the same ZIP, exactly one
+    candidate each, pending until confirmed; no name-only adoption. `--link-by-name` links by code, then name.
+  - Migration (`vendor:publish --tag=sso-master-data-facilities`) adds `sso_facility_id`, `is_active`,
+    `sort_order`, `sso_updated_at`, `sso_link_pending` (each skipped when present); the SSO link is unique per
+    company where the table has company_id, else on its own (`{table}_sso_facility_unique`).
+  - SSO contract: `GET /api/internal/companies/{id}/facilities` -> `{company, facilities: [{id, type, name,
+    location_code, registry: {state, code, synced_at}|null, designations, npis, address: {suite, street,
+    street2, city_gnis, city_name, state(_name), zip, county(_name), country}, latitude, longitude, fax, phones:
+    [{id, number, type}], pending: {field: {app_slug: value}}, is_active, sort_order, updated_at}]}`;
+    `POST .../facilities/import` `{app_slug, facilities: [{local_id, name ≤100, type?, location_code?,
+    designations?, npis?, fax?, address?, latitude?, longitude?, phones?, is_active?}]}` (500 max) -> `{created,
+    matched, filled, conflicts (turned_off_in_sso | code_differs), partial [{local_id, name, fields, kept}],
+    refused, invalid, mapping}`. SSO matches by this app's earlier `list_links`, then code, then name + ZIP;
+    never overwrites a match but fills its empty fields (`filled`). A value SSO's rules refuse is kept on the
+    row per field and per app and reported in `partial`; every row then carries it in `pending` (`gps` =
+    `{latitude, longitude}`, `phones` = the refused phones) until the agency fixes or dismisses it, and
+    `FacilityMirror::withOwnPending()` writes this app's own kept value over SSO's empty one, so a resync or
+    delivery never blanks what the app sent (another app's kept values are never applied). Events
+    `facility.created|updated|deactivated` (full row) and `facility.batch_updated` `{facilities: [...]}` (state-list adds, up to 200, applied like a resync page).
+  - Read side: `FacilityCatalog::usableForCompany()` (active rows, SSO order, through the projection's scope).
+
+  **Medications and procedures** (sixth and seventh, `MasterData\Medications\MedicationMirror` and
+  `MasterData\Procedures\ProcedureMirror` on the shared `CodeLists\CodeListMirror`; SSO side
+  `feature/vehicles` + `feature/lists-import-direct`). No app keeps these lists flat (CloudPCR repeats each
+  code per state configuration and per level, Drug Tracking hangs products off ingredients), so **the mirror
+  is a package-owned table**, one row per code: `sso_medications` / `sso_procedures` (code verbatim,
+  code_system, code_type, name, display_name, label, levels, member_levels, only_states as JSON text, source,
+  is_active, sort_order, link columns; medications add ingredient_rxcui, is_controlled, dea_schedule,
+  is_blood_product). `vendor:publish --tag=sso-master-data-medications` / `-procedures` creates them.
+  - **The projection is the bridge** (`CodeLists\CodeListProjection`, bound as `MedicationProjection` /
+    `ProcedureProjection`; package default `MirrorOnly*Projection` does nothing): `localItems($company)` is the
+    app's list collapsed to one entry per code (`key?`, `code`, `label`, `levels`, `is_active?`,
+    `only_states?`, medications `is_controlled`, `dea_schedule`) for the push; `project($company, $items)`
+    writes the whole mirrored list into the app after every webhook that changed a row, every batch and every
+    resync (never while the entity is off). `tests/Stubs/DemFormularyProjection.php` (+
+    `DemMedicationProjection`, `DemProcedureProjection`) is the CloudPCR template;
+    `tests/Stubs/DrugTrackingMedicationProjection.php` the Drug Tracking one.
+  - Rows without levels stay on the list (a medication with none is stock only); `is_chartable` says which.
+    "Only report in" (`only_states`, FIPS, empty = every state) limits a code to some reporting states.
+  - **The push may wait for the agency.** The first app to send its list to an empty agency list gets
+    `created` + mapping at once (SSO `feature/lists-import-direct`). A later app's new codes wait in the
+    agency's review: the push prints `in_review` and the review id. When the agency finishes it, SSO sends
+    `{entity}.review_completed` `{review: {id, entity, mapping: {app_slug: [{local_id, sso_id|null}]}}}`,
+    applied **even while the entity is off** (`ContinuesPush`); a null sso_id is an entry the agency left out.
+    `sso:push-master-data medications --company=X --review=ID` reads the same mapping from
+    `GET .../medications/reviews/{id}` when the webhook was missed. Linking needs no local row: a mapped entry
+    links the mirror row with that code or creates it from the app's entry (no `sso_updated_at`, so SSO's next
+    delivery or the resync replaces it); the projection is not called before the flag is on. The whole list
+    goes in one request (SSO takes 500), because a second request from the same app replaces its rows in the
+    review; a longer list is refused locally.
+  - SSO contract: `GET /api/internal/companies/{id}/{medications|procedures}` -> `{company, medications: [{id,
+    code, code_system, code_type, name, display_name, label, source, levels, member_levels, is_chartable,
+    only_states, (ingredient_rxcui, is_controlled, dea_schedule, is_blood_product), is_active, sort_order,
+    updated_at}]}`; `POST .../import` `{app_slug, medications: [{local_id, code?, label, levels?,
+    is_controlled?, dea_schedule?, only_states?}]}` -> `{created, matched, in_review, invalid, partial?
+    [{local_id, name, fields, dropped}], review_id, mapping}`; events `{entity}.created|updated|deactivated`,
+    `{entity}.batch_updated` `{medications|procedures: [...]}` and `{entity}.review_completed`.
+  - Read side: `MedicationCatalog` / `ProcedureCatalog` (`usableForCompany()`, `chartableForCompany($company,
+    $stateFips)`), for apps that read the mirror directly.
+  - Cutover per company (facilities and code lists alike): publish the migration and migrate; bind the
+    projection; `sso:push-master-data <entity> --dry-run`, then for real with the flag off; settle what it
+    prints (`invalid`, `partial`, `refused`, conflicts) in SSO Settings and, for a code list sent second, wait
+    for the agency to finish the review; set the flag; `sso:resync-master-data <entity>`; make the app's
+    editor read-only with an "Edit in Settings" link (`{SSO_BASE_URL}/system#facilities`, `#medications`,
+    `#procedures`).
 
 ## Release discipline
 

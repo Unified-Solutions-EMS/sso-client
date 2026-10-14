@@ -6,6 +6,7 @@ namespace Unified\SsoClient\MasterData\Console;
 
 use Illuminate\Support\Facades\DB;
 use Unified\SsoClient\MasterData\CatalogMirror;
+use Unified\SsoClient\MasterData\CodeLists\CodeListMirror;
 use Unified\SsoClient\MasterData\Contracts\SeedsSso;
 use Unified\SsoClient\MasterData\Exceptions\MasterDataSyncException;
 use Unified\SsoClient\MasterData\LocalTenantResolver;
@@ -20,13 +21,20 @@ use Unified\SsoClient\MasterData\MasterDataRegistry;
  *
  * SSO matches by name on its side, so rerunning creates nothing new there and
  * re-applies the same mapping here.
+ *
+ * Code lists (medications, procedures) may answer with rows waiting in the
+ * agency's review (`in_review`, `review_id`). Those link when the agency
+ * finishes it (the `{entity}.review_completed` webhook), or with
+ * `--review=ID`, which reads the finished review's mapping from SSO instead
+ * of pushing again.
  */
 class PushMasterDataCommand extends MasterDataCommand
 {
     protected $signature = 'sso:push-master-data
         {entity : Master-data entity to seed into SSO, e.g. qualifications}
         {--company= : Only this SSO company id}
-        {--dry-run : Build and summarize the payload without sending it}';
+        {--dry-run : Build and summarize the payload without sending it}
+        {--review= : Medications or procedures: link the rows of this finished SSO review instead of pushing}';
 
     protected $description = 'Seed SSO with this app\'s local master data and link the local rows to SSO';
 
@@ -55,11 +63,21 @@ class PushMasterDataCommand extends MasterDataCommand
             return self::FAILURE;
         }
 
+        $review = $this->option('review');
+
+        if ($review !== null && $review !== '' && (! $mirror instanceof CodeListMirror || $this->option('company') === null)) {
+            $this->error('--review applies to medications and procedures, together with --company.');
+
+            return self::FAILURE;
+        }
+
         $failed = 0;
 
         foreach ($companies as $localCompanyId => $ssoCompanyId) {
             try {
-                $this->pushCompany($mirror, $client, $entity, $localCompanyId, $ssoCompanyId);
+                $review !== null && $review !== '' && $mirror instanceof CodeListMirror
+                    ? $this->applyReview($mirror, $client, $entity, $localCompanyId, $ssoCompanyId, (int) $review)
+                    : $this->pushCompany($mirror, $client, $entity, $localCompanyId, $ssoCompanyId);
             } catch (\Throwable $e) {
                 $failed++;
                 $this->error("Company {$ssoCompanyId}: {$e->getMessage()}");
@@ -125,6 +143,7 @@ class PushMasterDataCommand extends MasterDataCommand
         $this->unresolvedDivisionTable($response['unresolved_divisions'] ?? null);
         $this->partialTable($response['partial'] ?? null);
         $this->refusedTable($response['refused'] ?? null);
+        $this->reviewNotice($entity, $ssoCompanyId, $response);
 
         if ($result['collisions'] !== []) {
             $this->table(['Local id', 'SSO id', 'Not linked because'], array_map(fn (array $collision): array => [
@@ -148,7 +167,7 @@ class PushMasterDataCommand extends MasterDataCommand
     {
         $extra = '';
 
-        foreach (['assignment_conflicts', 'invalid', 'filled', 'partial', 'unresolved_locations', 'unresolved_divisions', 'refused'] as $key) {
+        foreach (['assignment_conflicts', 'invalid', 'filled', 'partial', 'unresolved_locations', 'unresolved_divisions', 'refused', 'in_review'] as $key) {
             if (is_array($response[$key] ?? null)) {
                 $extra .= sprintf(' %s=%d', $key, count($response[$key]));
             }
@@ -264,6 +283,12 @@ class PushMasterDataCommand extends MasterDataCommand
             return;
         }
 
+        if (is_array($rows[array_key_first($rows)]['dropped'] ?? null)) {
+            $this->droppedTable($rows);
+
+            return;
+        }
+
         $this->warn('SSO kept these addresses as text only. Finish them in Settings > Locations:');
         $this->table(['Local id', 'Name', 'Why', 'Cut from'], array_map(fn (mixed $row): array => [
             (string) (is_array($row) ? ($row['local_id'] ?? '') : ''),
@@ -292,6 +317,86 @@ class PushMasterDataCommand extends MasterDataCommand
 
         $this->warn('SSO kept these values as pending. Fix them in Settings:');
         $this->table(['Local id', 'Name', 'Field', 'Why', 'Kept as'], $lines);
+    }
+
+    /**
+     * Values SSO left off rows it added (a medication's level that is not on
+     * the state's certification list, a name another row already uses). The
+     * agency sets them in SSO's Settings if they still apply.
+     *
+     * @param  array<int|string, mixed>  $rows
+     */
+    private function droppedTable(array $rows): void
+    {
+        $lines = [];
+        foreach ($rows as $row) {
+            foreach ((array) (is_array($row) ? ($row['fields'] ?? []) : []) as $field => $message) {
+                $dropped = is_array($row) ? ($row['dropped'][$field] ?? '') : '';
+                $lines[] = [(string) ($row['local_id'] ?? ''), (string) ($row['name'] ?? ''), (string) $field, (string) $message, is_scalar($dropped) ? (string) $dropped : (string) json_encode($dropped)];
+            }
+        }
+
+        $this->warn('SSO added these rows without some of their values. Set them in Settings if they still apply:');
+        $this->table(['Local id', 'Name', 'Field', 'Why', 'Left off'], $lines);
+    }
+
+    /**
+     * Rows of a code list that wait in the agency's review: the agency
+     * decides them in SSO, and they link here when it is finished.
+     *
+     * @param  array<string, mixed>  $response
+     */
+    private function reviewNotice(string $entity, int|string $ssoCompanyId, array $response): void
+    {
+        $waiting = is_array($response['in_review'] ?? null) ? count($response['in_review']) : 0;
+        $reviewId = $response['review_id'] ?? null;
+
+        if ($waiting === 0 || ! is_scalar($reviewId)) {
+            return;
+        }
+
+        $this->warn(sprintf(
+            '%d %s in the agency\'s review in SSO (review %s, Settings > %s). They link here when it is finished, or run `php artisan sso:push-master-data %s --company=%s --review=%s` afterwards.',
+            $waiting,
+            $waiting === 1 ? 'row waits' : 'rows wait',
+            (string) $reviewId,
+            ucfirst($entity),
+            $entity,
+            (string) $ssoCompanyId,
+            (string) $reviewId,
+        ));
+    }
+
+    /**
+     * --review: link this app's rows of a finished review.
+     */
+    private function applyReview(CodeListMirror $mirror, MasterDataClient $client, string $entity, int $localCompanyId, int|string $ssoCompanyId, int $reviewId): void
+    {
+        $review = $client->review($entity, $ssoCompanyId, $reviewId);
+        $label = "Company {$ssoCompanyId} (local {$localCompanyId})";
+
+        if (($review['status'] ?? null) !== 'completed') {
+            $this->warn("{$label}: review {$reviewId} is not finished yet in SSO. Nothing was linked.");
+
+            return;
+        }
+
+        $entries = $review['mapping'][(string) config('sso.app_slug')] ?? [];
+        $result = DB::transaction(fn (): array => $mirror->applyReviewMapping($localCompanyId, is_array($entries) ? $entries : []));
+
+        $this->line(sprintf('%s: review %d linked=%d left_out=%d link_collisions=%d', $label, $reviewId, $result['applied'], count($result['left_out']), count($result['collisions'])));
+
+        if ($result['left_out'] !== []) {
+            $this->line('Left out of the list by the agency: '.implode(', ', $result['left_out']));
+        }
+
+        if ($result['collisions'] !== []) {
+            $this->table(['Local id', 'SSO id', 'Not linked because'], array_map(fn (array $collision): array => [
+                (string) $collision['local_id'],
+                (string) $collision['sso_id'],
+                $collision['reason'],
+            ], $result['collisions']));
+        }
     }
 
     /**

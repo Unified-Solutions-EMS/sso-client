@@ -275,6 +275,16 @@ return [
         // Vehicles. Bind a VehicleProjection first if the app's table is not a
         // `vehicles` table with the contract's column names (CloudPCR: dem_vehicles).
         'vehicles' => env('SSO_MASTER_DATA_VEHICLES', false),
+        // Facilities (destinations). Bind a FacilityProjection first if the
+        // app's table is not a `facilities` table with the contract's column
+        // names (CloudPCR: dem_facility_entries under dem_facilities groups).
+        'facilities' => env('SSO_MASTER_DATA_FACILITIES', false),
+        // Medications and procedures. The mirror tables are the package's
+        // own (sso_medications / sso_procedures); bind a MedicationProjection
+        // / ProcedureProjection to carry them into the app (CloudPCR: the
+        // per-state, per-level configuration groups).
+        'medications' => env('SSO_MASTER_DATA_MEDICATIONS', false),
+        'procedures' => env('SSO_MASTER_DATA_PROCEDURES', false),
 
         // Daily `sso:resync-master-data <entity>` for every enabled entity,
         // so assignments dropped by early-arriving webhooks (user not yet

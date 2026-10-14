@@ -11,5 +11,8 @@ class StubRunTrialPurger implements ShouldQueue
 
     public function __construct(public mixed $company, public string $adminSsoId) {}
 
-    public function handle(): void {}
+    public function handle(): void
+    {
+        app('App\\Services\\TrialDataPurger')->purge($this->company, $this->adminSsoId);
+    }
 }

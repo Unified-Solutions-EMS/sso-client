@@ -14,6 +14,10 @@ use Unified\SsoClient\Http\Concerns\VerifiesSsoWebhookSignature;
 use Unified\SsoClient\MasterData\MasterDataWebhookHandler;
 use Unified\SsoClient\Models\SsoSessionAction;
 use Unified\SsoClient\Security\SecurityEvents;
+use Unified\SsoClient\Trial\AppTrialJobs;
+use Unified\SsoClient\Trial\Jobs\PurgeTrialThenCleanMirrors;
+use Unified\SsoClient\Trial\Jobs\SeedTrialAfterMasterDataSync;
+use Unified\SsoClient\Trial\TrialMasterDataSync;
 use Unified\SsoClient\TrialPurgeVerifier;
 
 class SsoWebhookController extends Controller
@@ -402,21 +406,24 @@ class SsoWebhookController extends Controller
 
         $this->ensureUsersAttachedToCompany($company, $userSsoIds, $adminSsoId);
 
-        $seederClass = 'App\\Services\\TrialDataSeeder';
-
-        if (! class_exists($seederClass)) {
+        if (! class_exists(AppTrialJobs::SEEDER)) {
             Log::info('SSO webhook: no TrialDataSeeder found, skipping trial.seed_data');
 
             return ['status' => 'ok', 'action' => 'trial.seed_data', 'skipped' => true];
         }
 
-        $jobClass = 'App\\Jobs\\RunTrialSeeder';
+        // An SSO that seeds the shared lists says so with `master_data`; an
+        // older one omits it and the app seeds exactly as before. Mirrors are
+        // resynced first only when this app has any turned on.
+        $masterData = $request->input('master_data');
 
-        if (class_exists($jobClass)) {
-            $jobClass::dispatch($company, $userSsoIds, $adminSsoId);
-        } else {
-            app($seederClass)->seed($company, $userSsoIds, $adminSsoId);
+        if (is_array($masterData) && app(TrialMasterDataSync::class)->mirrors() !== []) {
+            SeedTrialAfterMasterDataSync::dispatch($company, $userSsoIds, $adminSsoId, $masterData);
+
+            return ['status' => 'ok', 'action' => 'trial.seed_data', 'master_data' => 'syncing'];
         }
+
+        app(AppTrialJobs::class)->seed($company, $userSsoIds, $adminSsoId);
 
         return ['status' => 'ok', 'action' => 'trial.seed_data'];
     }
@@ -434,9 +441,7 @@ class SsoWebhookController extends Controller
             return ['status' => 'ok', 'action' => 'trial.purge_data', 'reason' => 'company_not_found'];
         }
 
-        $purgerClass = 'App\\Services\\TrialDataPurger';
-
-        if (! class_exists($purgerClass)) {
+        if (! class_exists(AppTrialJobs::PURGER)) {
             Log::info('SSO webhook: no TrialDataPurger found, skipping trial.purge_data');
 
             return ['status' => 'ok', 'action' => 'trial.purge_data', 'skipped' => true];
@@ -460,14 +465,16 @@ class SsoWebhookController extends Controller
             return ['status' => 'ok', 'action' => 'trial.purge_data', 'skipped' => true, 'reason' => $verification];
         }
 
-        $jobClass = 'App\\Jobs\\RunTrialPurger';
         $adminSsoId = $request->input('admin_user_id', '');
+        $seeded = $request->input('master_data.seeded');
 
-        if (class_exists($jobClass)) {
-            $jobClass::dispatch($company, $adminSsoId);
-        } else {
-            app($purgerClass)->purge($company, $adminSsoId);
+        if (is_array($seeded) && $seeded !== []) {
+            PurgeTrialThenCleanMirrors::dispatch($company, $adminSsoId, $seeded);
+
+            return ['status' => 'ok', 'action' => 'trial.purge_data', 'master_data' => 'cleaning'];
         }
+
+        app(AppTrialJobs::class)->purge($company, $adminSsoId);
 
         return ['status' => 'ok', 'action' => 'trial.purge_data'];
     }

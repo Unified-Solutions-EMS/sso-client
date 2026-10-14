@@ -92,6 +92,42 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   logs a warning, and records a `trial.purge_blocked` security event — a malformed, replayed, or
   mistargeted delivery can no longer wipe a live customer. Against an SSO that predates
   `purge_pending`, conversion purges are skipped (data retained) until SSO ships the intent marker.
+  **Trial sample lists come from SSO** (`src/Trial/`, design `/Sites/docs/design/trial-seed-data-design.md`).
+  SSO seeds the new trial's shared lists itself, then fans out. Payload contract (both keys are optional;
+  without them the handlers do exactly what they did before, so an older SSO keeps working):
+  - `trial.seed_data` adds `master_data: {ready: bool, counts: {divisions, locations, vehicles, facilities,
+    medications, procedures, qualifications: int}}` (`counts` = active rows in SSO's list for the company when
+    the fan-out was sent). When the key is present **and** this app has at least one mirror turned on and
+    migrated, the handler queues `Trial\Jobs\SeedTrialAfterMasterDataSync` instead of the app's seeder (ack
+    `master_data: "syncing"`). The job resyncs EVERY enabled, installed mirror for the company
+    (`TrialMasterDataSync`, same `fetch` + `resync` as `sso:resync-master-data`), then checks each resynced
+    entity's active linked rows against `counts` (entities absent from `counts` are not checked; counted
+    entities this app does not mirror are ignored, the app seeds those locally). `ready !== true`, SSO
+    unreachable / erroring, or a short list throws `TrialMasterDataNotReadyException` (`ShouldntReport`), so
+    the queue retries: 6 tries, backoff 30/60/120/240/480 s (about 15 minutes); `failed()` logs and reports
+    once. Only after the check passes does it dispatch `App\Jobs\RunTrialSeeder` (queued, so the app job keeps
+    its own retry settings) or call `App\Services\TrialDataSeeder`. It fails closed: the seeder never runs
+    on lists SSO has not delivered. On a sync queue there is no retry; the throw makes the webhook answer
+    500 and SSO records the delivery as failed.
+  - `trial.purge_data` adds `master_data: {seeded: {divisions: [sso ids], locations: [...], vehicles: [...],
+    qualifications: [...]}}` = the sample rows SSO actually hard-deleted (seeded and never edited). After
+    `TrialPurgeVerifier` passes, a non-empty `seeded` queues `Trial\Jobs\PurgeTrialThenCleanMirrors` (ack
+    `master_data: "cleaning"`; 3 tries, backoff 10/60 s): it runs the app's purger **in-process**
+    (`dispatch_sync` of `App\Jobs\RunTrialPurger`, or `TrialDataPurger::purge()`), so extension rows are gone
+    first, then `TrialMirrorCleaner` removes the mirrored rows. A purger that throws stops the job before the
+    cleaner. The cleaner touches only those four entities, in the order vehicles, locations, divisions,
+    qualifications; only entities this app mirrors (flag on, installed; others report `not_mirrored`); only
+    rows linked to the listed SSO ids **in the one company the payload named**. Facilities, medications and
+    procedures are never deleted (design D1), even if listed. Vehicle crew-level / yearly-usage child rows go
+    with their vehicle. Each row goes through `Trial\Contracts\TrialMirrorCleanupPolicy::decide()`
+    (`Delete` / `Deactivate` / `Keep`; `beforeDelete()` runs inside the delete's transaction to remove
+    app-owned child rows such as `dem_location_phones`). The bound `DefaultTrialMirrorCleanupPolicy` deletes,
+    except a division a person (`company_user.division_id`), location or vehicle of the company still uses, or
+    a location a vehicle still calls home, which is deactivated (Crew's locations cascade-delete with their
+    division). Any delete the database refuses (foreign key) is deactivated instead. Apps bind their own policy
+    (usually extending the default) in `AppServiceProvider::register()` for references the database cannot
+    see, e.g. CloudPCR deactivating a `dem_vehicles` row a chart still names. App purgers must delete
+    extension rows only, never `sso_*`-linked list rows.
 - **Agency-status route** — `GET /api/internal/agency-status/{ssoCompanyId}` behind `ValidateCoreApiKey`,
   registered by the package so apps never add the route. Apps implement `Contracts\AgencyStatusProvider`
   and bind it. See DEV_GUIDELINES §2a for the response contract and the HIPAA redaction boundary

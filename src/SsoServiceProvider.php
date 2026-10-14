@@ -23,6 +23,8 @@ use Unified\SsoClient\Metrics\Metrics;
 use Unified\SsoClient\Metrics\Resolvers\EloquentMetricContextResolver;
 use Unified\SsoClient\Security\Listeners\RecordAuthenticationSecurityEvents;
 use Unified\SsoClient\Security\SecurityEvents;
+use Unified\SsoClient\Trial\Contracts\TrialMirrorCleanupPolicy;
+use Unified\SsoClient\Trial\DefaultTrialMirrorCleanupPolicy;
 
 class SsoServiceProvider extends ServiceProvider
 {
@@ -54,6 +56,10 @@ class SsoServiceProvider extends ServiceProvider
         // (CloudPCR's configuration groups) and back for the push.
         $this->app->bindIf(MedicationProjection::class, MirrorOnlyMedicationProjection::class);
         $this->app->bindIf(ProcedureProjection::class, MirrorOnlyProcedureProjection::class);
+
+        // Trial purge: what happens to a mirrored sample row SSO deleted.
+        // Apps bind their own policy to veto deletes the database cannot see.
+        $this->app->bindIf(TrialMirrorCleanupPolicy::class, DefaultTrialMirrorCleanupPolicy::class);
 
         // Metrics — apps can override by binding their own
         // MetricContextResolver implementation in AppServiceProvider.

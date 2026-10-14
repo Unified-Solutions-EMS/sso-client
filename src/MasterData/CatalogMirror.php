@@ -516,6 +516,15 @@ abstract class CatalogMirror implements EntityMirror
         return ['rows' => $rows, 'truncated_names' => $truncated];
     }
 
+    /**
+     * The company's rows, for readers (FacilityCatalog, TrialMirrorCleaner)
+     * as much as for the mirror itself.
+     */
+    public function forCompany(int $localCompanyId): Builder
+    {
+        return $this->scoped($localCompanyId);
+    }
+
     protected function scoped(int $localCompanyId): Builder
     {
         return DB::table($this->table())->where('company_id', $localCompanyId);

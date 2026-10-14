@@ -108,15 +108,6 @@ class FacilityMirror extends CatalogMirror implements SeedsSso
             && Schema::hasColumns($this->table(), [$this->ssoIdColumn(), $this->activeColumn(), 'sort_order', self::SSO_UPDATED_AT_COLUMN, self::LINK_PENDING_COLUMN]);
     }
 
-    /**
-     * The company's rows, for readers (FacilityCatalog) as much as for the
-     * mirror itself.
-     */
-    public function forCompany(int $localCompanyId): Builder
-    {
-        return $this->scoped($localCompanyId);
-    }
-
     public function applyWebhook(string $event, int $localCompanyId, array $payload): array
     {
         return match ($event) {

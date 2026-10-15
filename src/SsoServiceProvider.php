@@ -7,6 +7,12 @@ use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
+use Unified\SsoClient\MasterData\Agency\AgencyProjection;
+use Unified\SsoClient\MasterData\Agency\StandardAgencyProjection;
+use Unified\SsoClient\MasterData\Contacts\ContactProjection;
+use Unified\SsoClient\MasterData\Contacts\StandardContactProjection;
+use Unified\SsoClient\MasterData\Devices\DeviceProjection;
+use Unified\SsoClient\MasterData\Devices\StandardDeviceProjection;
 use Unified\SsoClient\MasterData\Facilities\FacilityProjection;
 use Unified\SsoClient\MasterData\Facilities\StandardFacilityProjection;
 use Unified\SsoClient\MasterData\Locations\LocationProjection;
@@ -18,6 +24,8 @@ use Unified\SsoClient\MasterData\Personnel\PersonnelProjection;
 use Unified\SsoClient\MasterData\Personnel\StandardPersonnelProjection;
 use Unified\SsoClient\MasterData\Procedures\MirrorOnlyProcedureProjection;
 use Unified\SsoClient\MasterData\Procedures\ProcedureProjection;
+use Unified\SsoClient\MasterData\StateConfigurations\StandardStateConfigurationProjection;
+use Unified\SsoClient\MasterData\StateConfigurations\StateConfigurationProjection;
 use Unified\SsoClient\MasterData\Vehicles\StandardVehicleProjection;
 use Unified\SsoClient\MasterData\Vehicles\VehicleProjection;
 use Unified\SsoClient\Metrics\Contracts\MetricContextResolver;
@@ -63,6 +71,15 @@ class SsoServiceProvider extends ServiceProvider
         // app binds its own projection (CloudPCR's dem_personnel, HR's
         // personnel_profiles).
         $this->app->bindIf(PersonnelProjection::class, StandardPersonnelProjection::class);
+
+        // Agency information, contacts, devices and state configurations land
+        // in the package's sso_* read models unless the app binds its own
+        // projection (CloudPCR's dem_agencies, dem_contacts, dem_devices,
+        // dem_configurations).
+        $this->app->bindIf(AgencyProjection::class, StandardAgencyProjection::class);
+        $this->app->bindIf(ContactProjection::class, StandardContactProjection::class);
+        $this->app->bindIf(DeviceProjection::class, StandardDeviceProjection::class);
+        $this->app->bindIf(StateConfigurationProjection::class, StandardStateConfigurationProjection::class);
 
         // Trial purge: what happens to a mirrored sample row SSO deleted.
         // Apps bind their own policy to veto deletes the database cannot see.
@@ -140,6 +157,17 @@ class SsoServiceProvider extends ServiceProvider
             __DIR__.'/../database/master-data/2026_10_13_000000_create_or_extend_personnel_mirror.php' => database_path('migrations/2026_10_13_000000_create_or_extend_personnel_mirror.php'),
             __DIR__.'/../database/master-data/2026_10_13_200000_add_sso_removed_at_to_mirror_child_tables.php' => database_path('migrations/2026_10_13_200000_add_sso_removed_at_to_mirror_child_tables.php'),
         ], 'sso-master-data-personnel');
+
+        foreach ([
+            'agency' => '2026_10_14_100000_create_or_extend_agency_mirror.php',
+            'contacts' => '2026_10_14_100100_create_or_extend_contacts_mirror.php',
+            'devices' => '2026_10_14_100200_create_or_extend_devices_mirror.php',
+            'state-configurations' => '2026_10_14_100300_create_or_extend_state_configurations_mirror.php',
+        ] as $tag => $file) {
+            $this->publishesMigrations([
+                __DIR__.'/../database/master-data/'.$file => database_path('migrations/'.$file),
+            ], 'sso-master-data-'.$tag);
+        }
 
         // Auto-record failed logins / lockouts / password resets as
         // security events in every consuming app.

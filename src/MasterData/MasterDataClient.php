@@ -80,9 +80,9 @@ class MasterDataClient
      *
      * @throws MasterDataSyncException
      */
-    public function import(string $entity, int|string $ssoCompanyId, array $payload): array
+    public function import(string $entity, int|string $ssoCompanyId, array $payload, ?int $timeout = null): array
     {
-        return $this->send('post', $entity, $ssoCompanyId, '/import', $payload);
+        return $this->send('post', $entity, $ssoCompanyId, '/import', $payload, [], $timeout);
     }
 
     /**

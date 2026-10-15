@@ -126,15 +126,16 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     `master_data: "cleaning"`; 3 tries, backoff 10/60 s): it runs the app's purger **in-process**
     (`dispatch_sync` of `App\Jobs\RunTrialPurger`, or `TrialDataPurger::purge()`), so extension rows are gone
     first, then `TrialMirrorCleaner` removes the mirrored rows. A purger that throws stops the job before the
-    cleaner. The cleaner touches only those four entities, in the order vehicles, locations, divisions,
-    qualifications; only entities this app mirrors (flag on, installed; others report `not_mirrored`); only
-    rows linked to the listed SSO ids **in the one company the payload named**. Facilities, medications and
-    procedures are never deleted (design D1), even if listed. Vehicle crew-level / yearly-usage child rows go
+    cleaner. The cleaner touches only the sample lists, in the order devices, contacts, vehicles, locations,
+    divisions, qualifications (devices and contacts only if SSO ever lists seeded ones); only entities this app
+    mirrors (flag on, installed; others report `not_mirrored`); only
+    rows linked to the listed SSO ids **in the one company the payload named**. Facilities, medications,
+    procedures, the agency information and state configurations are never deleted (design D1), even if listed. Vehicle crew-level / yearly-usage child rows go
     with their vehicle. Each row goes through `Trial\Contracts\TrialMirrorCleanupPolicy::decide()`
     (`Delete` / `Deactivate` / `Keep`; `beforeDelete()` runs inside the delete's transaction to remove
     app-owned child rows such as `dem_location_phones`). The bound `DefaultTrialMirrorCleanupPolicy` deletes,
-    except a division a person (`company_user.division_id`), location or vehicle of the company still uses, or
-    a location a vehicle still calls home, which is deactivated (Crew's locations cascade-delete with their
+    except a division a person (`company_user.division_id`), location or vehicle of the company still uses,
+    a location a vehicle still calls home, or a vehicle a device of the company is still on, which is deactivated (Crew's locations cascade-delete with their
     division). Any delete the database refuses (foreign key) is deactivated instead. Apps bind their own policy
     (usually extending the default) in `AppServiceProvider::register()` for references the database cannot
     see, e.g. CloudPCR deactivating a `dem_vehicles` row a chart still names. App purgers must delete
@@ -309,7 +310,8 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   a read-only mirror per entity, opted into with `config('sso.master_data.<entity>')` (env
   `SSO_MASTER_DATA_QUALIFICATIONS`, `SSO_MASTER_DATA_DIVISIONS`, `SSO_MASTER_DATA_LOCATIONS`, `SSO_MASTER_DATA_VEHICLES`,
   `SSO_MASTER_DATA_FACILITIES`, `SSO_MASTER_DATA_MEDICATIONS`, `SSO_MASTER_DATA_PROCEDURES`,
-  `SSO_MASTER_DATA_PERSONNEL`, all default false).
+  `SSO_MASTER_DATA_PERSONNEL`, `SSO_MASTER_DATA_AGENCY`, `SSO_MASTER_DATA_CONTACTS`, `SSO_MASTER_DATA_DEVICES`,
+  `SSO_MASTER_DATA_STATE_CONFIGURATIONS`, all default false).
   `mergeConfigFrom()` is shallow, so an app whose own `config/sso.php` defines `master_data` replaces the
   package's whole array. That is safe: every reader defaults per key (`MasterDataRegistry::enabled()` reads
   `config("sso.master_data.{$entity}", false)`, `schedule_resync` defaults true, `timeout` 120), so an app may
@@ -322,7 +324,8 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   (known entities + opt-in check; mirrors resolve through the container so an app can bind a
   subclass), `MasterDataWebhookHandler` (the webhook controller's `match` sends `qualification.*`,
   `user.qualifications_changed`, `division.*`, `user.division_changed`, `location.*`, `vehicle.*`, `facility.*`, `medication.*`,
-  `procedure.*` and `person.updated|deactivated` here; a disabled entity, an unmigrated mirror, or an unknown company is a 200 ack, except that an event a
+  `procedure.*`, `person.updated|deactivated`, `agency.*`, `contact.*`, `device.created|updated|deactivated|batch_updated`
+  (not `device.revoked`, which is the sessions handler) and `state_configuration.*` here; a disabled entity, an unmigrated mirror, or an unknown company is a 200 ack, except that an event a
   mirror lists in `Contracts\ContinuesPush::pushEvents()` (the code lists' `review_completed`) is applied while the entity is
   still off, because it finishes the push), `MasterDataClient` (`GET {SSO_BASE_URL}/api/internal/companies/{id}/{entity}`,
   bearer `CORE_APP_API_KEY`), `sso:resync-master-data {entity} {--company=} {--link-by-name}` and the
@@ -717,6 +720,80 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     HR the same; settle `conflicts` / `partial` / `unmatched` in SSO; `SSO_MASTER_DATA_PERSONNEL=true` in
     CloudPCR; `sso:resync-master-data personnel`; DEM golden diff empty; then HR; then switch the editors to
     `writeThrough()`.
+
+  **Agency information, contacts, devices and state configurations** (ninth to twelfth entities: the CloudPCR
+  Demographics move to SSO Settings; build spec `/Sites/docs/design/demographics-sso-contracts.md`, plan
+  `demographics-to-sso-plan.md`). Registry keys `agency`, `contacts`, `devices`, `state_configurations`; flags
+  `SSO_MASTER_DATA_AGENCY|CONTACTS|DEVICES|STATE_CONFIGURATIONS`. **An app whose `config/sso.php` overrides
+  `master_data` must list every key it uses**: the override replaces the package array, and a missing key is off.
+  - **One shared base, `MasterData\ProjectedMirror`** (on `CatalogMirror`, `SeedsSso`): the row's shape comes
+    entirely from a bound `Contracts\RecordProjection` (`table`, `nameColumn` (reports only), `matchColumns`,
+    `scope`, `insertColumns`, `fromSso($company, $row)` (pure: adoption reads the match columns through it),
+    `written($company, $localId, $row)` (children; idempotent, `Support\ChildRows` helps), `pushColumns`,
+    `toSso($company, $row)`). Each entity has its own interface (`Agency\AgencyProjection`,
+    `Contacts\ContactProjection`, `Devices\DeviceProjection` + `vehicleColumn()`,
+    `StateConfigurations\StateConfigurationProjection`), and the package binds a `Standard*Projection` on a
+    package-owned read model (`sso_agency_profiles`, `sso_agency_contacts`, `sso_devices`,
+    `sso_state_configurations`: the contract's field names as columns, lists and objects as JSON text, UTC
+    instants, every top-level `<field>_nv` in one `not_values` JSON column, only columns the table has).
+    `Support\StandardRecordProjection` is that shared default. CloudPCR binds its own over `dem_agencies` (+
+    `dem_agency_service_areas`, `dem_agency_year_stats`, `dem_custom_values`), `dem_contacts`, `dem_devices`,
+    `dem_configurations` (.10-.17 only); `tests/Stubs/DemAgencyProjection.php` is the agency template.
+  - The base owns: link column (`sso_agency_id`, `sso_contact_id`, `sso_device_id`,
+    `sso_state_configuration_id`), adoption of an unlinked local row by the projection's match columns (trimmed,
+    ignoring case, exactly one candidate; contacts last + first + type, devices serial, state configurations
+    state), pending until the push / `--link-by-name` / a resync confirms it, the `sso_updated_at` stale guard,
+    turn off never delete (a resync turns off linked rows SSO no longer lists), this app's kept values
+    (`pending: {field: {app_slug: value}}` written over SSO's; a kept list is appended;
+    `ProjectedMirror::withOwnPending()`), `{record}.created|updated|deactivated` (full row, upsert) and
+    `{record}.batch_updated` `{company, ids, <entity>: [rows], updated_at}` (`CatalogMirror::applyBatch()`),
+    and the push `{app_slug, <entity>: [{local_id, is_active, ...toSso()}]}` (500 a request) linked through
+    `MappingLinker`. SSO's own `name` field reaches the projection untouched (the report name is kept aside).
+  - **agency** is a singleton: snapshot `GET .../agency` -> `{company: {id, name, timezone}, agency: {...profile,
+    service_areas: [...], year_stats: [...], custom_values: {element_id: {value, nv}}} | null}` (null changes
+    nothing); every record carries `company`, because the agency name is `companies.name` and the time zone
+    is SSO's IANA `companies.timezone` (the app maps it, e.g. CloudPCR's dAgency.23). Adoption takes the
+    company's only local row when unlinked. No on/off column: nothing is turned off, resync reports
+    `deactivated=0`. Events `agency.created|updated|batch_updated` (full payload). Push `POST .../agency/import`
+    `{app_slug, agency: {local_id, ...}}`, one request (`ImportBatcher` never splits an object with `local_id`);
+    SSO is fill-only and answers `conflicts: [{local_id, name, field, local_value, sso_value}]`, printed as the
+    field table. A company with no agency row prints "no local agency to send" and sends nothing.
+  - **contacts** `GET .../contacts` -> `{company, contacts: [{id, type, nemsis_type, name, first_name,
+    middle_name, last_name, title, is_primary, phones: [{number, type}], emails: [{address, type}], address,
+    website, medical_director, fellowship_status, sso_user_id, <field>_nv, pending?, is_active, sort_order,
+    updated_at}]}`; events `contact.*`.
+  - **devices** `GET .../devices` -> `{company, devices: [{id, serial, name, device_types, manufacturer, model,
+    purchase_date, source (integration | manual), last_seen_at, vehicle_id, is_active, sort_order,
+    updated_at}]}`; events `device.created|updated|deactivated|batch_updated`. `vehicle_id` is translated
+    through the vehicles mirror's links like a location's division (null clears, an id not linked here leaves
+    the local value); the push sends `vehicle_sso_id` for a confirmed link, else `vehicle_local_id`, so push
+    vehicles first. **`Devices\DeviceWriteThrough::send($localCompanyId, $row)`** is the one place an app
+    writes into SSO on its own: CloudPCR's Integrations page (Stryker / ZOLL monitor registered or edited)
+    sends that one row to `POST .../devices/import` (`source` defaults to `integration`; `vehicle_local_id`
+    becomes `vehicle_sso_id` when confirmed). Queued after commit (`Jobs\WriteThroughDevice`, 15 s timeout,
+    one try), fail-silent (logs a warning, returns nothing, never holds up a transmission), and a no-op while
+    `SSO_MASTER_DATA_DEVICES` is off (the push carries devices before the cutover). The mapping is not applied:
+    the `device.*` webhook that follows brings the mirror row.
+  - **state_configurations** `GET .../state_configurations` -> `{company, state_configurations: [{id, state,
+    protocols, specialty_service_capabilities, billing_status, emd_performed, emd_vendor,
+    patient_monitoring_capabilities, crew_call_signs, dispatch_center, dispatch_center_phone, <field>_nv,
+    is_active, sort_order, updated_at}]}`; events `state_configuration.*`. Medications, procedures and
+    certification levels stay with their own mirrors.
+  - Migrations (`vendor:publish --tag=sso-master-data-agency|contacts|devices|state-configurations`) create the
+    standard table for an app with none, else add the link column, `is_active` (not for the agency),
+    `sort_order` (not for the agency), `sso_updated_at`, `sso_link_pending`, each skipped when present, and a
+    unique `{table}_{link}_unique` per company (`Support\MirrorLinkColumns`). Bind the projection first.
+  - Trial: the seed sync resyncs these like any enabled mirror (and checks `counts` for them when SSO sends
+    any); the purge never deletes the agency or state configurations, and cleans listed contacts / devices.
+  - "Edit in Settings": `Settings\SettingEntity::{Agency, Contacts, Devices, StateConfigurations}` (values
+    `agency`, `contacts`, `devices`, `state_configurations`) with `settingsPath()` `/system/agency`,
+    `/system/contacts`, `/system/devices`, `/system/state-configuration` and `settingsUrl()` =
+    `{SSO_BASE_URL}{path}`; the older cases name their tabs too. SSO's TS `SettingEntity` type must list the
+    new values before a settings schema uses them.
+  - Cutover per app and entity, in the order agency, contacts, devices (after vehicles), state configurations:
+    bind the projection; publish the migration and migrate; `sso:push-master-data <entity> --dry-run`, then for
+    real (flag off); settle conflicts in SSO Settings; set the flag; `sso:resync-master-data <entity>`; make
+    the app's editor read-only with "Edit in Settings".
 
 ## Release discipline
 

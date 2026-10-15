@@ -129,11 +129,19 @@ class PushMasterDataCommand extends MasterDataCommand
             $this->warn("{$label}: name of local row {$truncated['local_id']} is longer than SSO allows and is sent cut to its first {$limit} characters: \"{$truncated['name']}\"");
         }
 
+        $rows = $payload[$entity] ?? null;
+
+        if ($rows === null) {
+            $this->line("{$label}: no local {$entity} to send.");
+
+            return;
+        }
+
         if ($this->option('dry-run')) {
             $this->line(sprintf(
                 '%s [dry run]: would send %d %s and %d users\' assignments; skipped local users without sso_id=%d',
                 $label,
-                count($payload[$entity] ?? []),
+                is_array($rows) && ! array_key_exists('local_id', $rows) ? count($rows) : 1,
                 $entity,
                 count($payload['assignments'] ?? []),
                 $skipped,

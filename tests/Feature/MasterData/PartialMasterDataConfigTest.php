@@ -29,7 +29,7 @@ class PartialMasterDataConfigTest extends MasterDataTestCase
 
         $this->assertTrue($registry->enabled('divisions'));
 
-        foreach (['qualifications', 'locations', 'vehicles', 'facilities', 'medications', 'procedures'] as $entity) {
+        foreach (['qualifications', 'locations', 'vehicles', 'facilities', 'medications', 'procedures', 'agency', 'contacts', 'devices', 'state_configurations'] as $entity) {
             $this->assertFalse($registry->enabled($entity), "{$entity} should default to disabled");
         }
     }

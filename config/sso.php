@@ -265,6 +265,10 @@ return [
     | (`php artisan vendor:publish --tag=sso-master-data`). While an entity is
     | false its webhooks are acknowledged and ignored.
     |
+    | An app whose own config/sso.php defines `master_data` replaces this
+    | whole array (mergeConfigFrom is shallow): list every key the app uses
+    | there. Keys it leaves out read as false.
+    |
     */
     'master_data' => [
         'qualifications' => env('SSO_MASTER_DATA_QUALIFICATIONS', false),
@@ -290,6 +294,15 @@ return [
         // read model is enough (CloudPCR: dem_personnel; HR: personnel_profiles),
         // and push before turning this on.
         'personnel' => env('SSO_MASTER_DATA_PERSONNEL', false),
+        // Agency information, contacts, devices and state configurations
+        // (NEMSIS dAgency, dContact, dDevice, dConfiguration .10-.17). Bind
+        // the entity's projection first unless the package's sso_* read model
+        // is enough (CloudPCR: dem_agencies, dem_contacts, dem_devices,
+        // dem_configurations), and push before turning each on.
+        'agency' => env('SSO_MASTER_DATA_AGENCY', false),
+        'contacts' => env('SSO_MASTER_DATA_CONTACTS', false),
+        'devices' => env('SSO_MASTER_DATA_DEVICES', false),
+        'state_configurations' => env('SSO_MASTER_DATA_STATE_CONFIGURATIONS', false),
 
         // Daily `sso:resync-master-data <entity>` for every enabled entity,
         // so assignments dropped by early-arriving webhooks (user not yet

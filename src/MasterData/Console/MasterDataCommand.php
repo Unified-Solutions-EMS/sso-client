@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Unified\SsoClient\MasterData\Console;
 
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Log;
 use Unified\SsoClient\MasterData\Contracts\EntityMirror;
 use Unified\SsoClient\MasterData\LocalTenantResolver;
 use Unified\SsoClient\MasterData\MasterDataRegistry;
@@ -63,9 +64,36 @@ abstract class MasterDataCommand extends Command
         return [$localCompanyId => (string) $only];
     }
 
-    protected function summarize(int $companies, int $failed): int
+    /**
+     * Ends a run: one warning (console and log) naming every company SSO no
+     * longer has, so an operator can clear its stale sso_company_id, then the
+     * counts. Skips alone exit 0; only real failures fail the run.
+     *
+     * @param  array<int, int|string>  $notInSso  SSO company id keyed by local company id
+     */
+    protected function summarize(int $companies, int $failed, array $notInSso = []): int
     {
-        $this->info(sprintf('%d compan%s processed, %d failed.', $companies, $companies === 1 ? 'y' : 'ies', $failed));
+        if ($notInSso !== []) {
+            $pairs = implode(', ', array_map(
+                fn (int|string $local, int|string $sso): string => "local {$local} (SSO {$sso})",
+                array_keys($notInSso),
+                $notInSso,
+            ));
+
+            $this->warn("Skipped, company not in SSO (clear or fix their sso_company_id): {$pairs}");
+            Log::warning("{$this->getName()} {$this->argument('entity')}: skipped companies not in SSO", [
+                'local_company_ids' => array_keys($notInSso),
+                'sso_company_ids' => array_values($notInSso),
+            ]);
+        }
+
+        $this->info(sprintf(
+            '%d compan%s processed, %d failed%s.',
+            $companies,
+            $companies === 1 ? 'y' : 'ies',
+            $failed,
+            $notInSso === [] ? '' : sprintf(', %d skipped (not in SSO)', count($notInSso)),
+        ));
 
         return $failed === 0 ? self::SUCCESS : self::FAILURE;
     }

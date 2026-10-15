@@ -6,6 +6,7 @@ namespace Unified\SsoClient\MasterData\Console;
 
 use Illuminate\Support\Facades\DB;
 use Unified\SsoClient\MasterData\Contracts\EntityMirror;
+use Unified\SsoClient\MasterData\Exceptions\CompanyNotInSsoException;
 use Unified\SsoClient\MasterData\LocalTenantResolver;
 use Unified\SsoClient\MasterData\MasterDataClient;
 use Unified\SsoClient\MasterData\MasterDataRegistry;
@@ -43,6 +44,7 @@ class ResyncMasterDataCommand extends MasterDataCommand
         }
 
         $failed = 0;
+        $notInSso = [];
 
         foreach ($companies as $localCompanyId => $ssoCompanyId) {
             try {
@@ -51,6 +53,8 @@ class ResyncMasterDataCommand extends MasterDataCommand
                 $this->option('link-by-name')
                     ? $this->linkByName($mirror, $localCompanyId, $ssoCompanyId, $snapshot)
                     : $this->resync($mirror, $localCompanyId, $ssoCompanyId, $snapshot);
+            } catch (CompanyNotInSsoException) {
+                $notInSso[$localCompanyId] = $ssoCompanyId;
             } catch (\Throwable $e) {
                 $failed++;
                 $this->error("Company {$ssoCompanyId}: {$e->getMessage()}");
@@ -58,7 +62,7 @@ class ResyncMasterDataCommand extends MasterDataCommand
             }
         }
 
-        return $this->summarize(count($companies), $failed);
+        return $this->summarize(count($companies), $failed, $notInSso);
     }
 
     /**

@@ -333,6 +333,11 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   implement `Contracts\SeedsSso`; `--review=ID --company=X` links a finished code-list review instead of pushing;
   `--batch=N` sends N rows per import request instead of the entity's `importBatchSize()`, 1 up to that cap, for an
   SSO import that runs close to its 30 s limit).
+  **A 404 on a company's collection** (the snapshot GET or `/import`) means SSO no longer has that company
+  (deleted/merged, stale local `sso_company_id`): `MasterDataClient` throws `Exceptions\CompanyNotInSsoException`
+  (a `MasterDataSyncException`), and both commands count it as `skipped (not in SSO)`, never `report()` it, log one
+  warning per run listing the local/SSO id pairs, and exit 0 when skips are the only problem. A 404 on one record
+  or review, and every other 4xx/5xx, still fails and reports as before.
   Every mirror write is query-builder SQL pinned to the local company resolved from the
   authoritative SSO company id (§4a); rows SSO deleted or dropped are deactivated, never deleted.
   **Child rows SSO removes are never hard-deleted unless the table says so** (`Support\ChildRowPolicy`).

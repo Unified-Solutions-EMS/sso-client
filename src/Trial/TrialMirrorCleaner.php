@@ -17,8 +17,9 @@ use Unified\SsoClient\Trial\Contracts\TrialMirrorCleanupPolicy;
  * purged a trial (`trial.purge_data` `master_data.seeded`), after the app's
  * own purger has removed the extension rows that pointed at them.
  *
- * Only the four sample lists are touched (design D1: registry facilities and
- * state medications/procedures are the agency's real data and stay), only
+ * Only the sample lists are touched (design D1: registry facilities, state
+ * medications/procedures, the agency's information and its state
+ * configurations are the agency's real data and stay), only
  * rows linked to the listed SSO ids, and only in the one local company the
  * HMAC-verified payload named (§4a). Entities this app does not mirror are
  * skipped: an unlinked local list is the app's own, and its purger owns it.
@@ -28,9 +29,10 @@ use Unified\SsoClient\Trial\Contracts\TrialMirrorCleanupPolicy;
 class TrialMirrorCleaner
 {
     /**
-     * Cleanup order: what points at a row is removed before the row.
+     * Cleanup order: what points at a row is removed before the row
+     * (a device names its vehicle).
      */
-    public const ENTITIES = ['vehicles', 'locations', 'divisions', 'qualifications'];
+    public const ENTITIES = ['devices', 'contacts', 'vehicles', 'locations', 'divisions', 'qualifications'];
 
     public function __construct(
         private readonly MasterDataRegistry $registry,

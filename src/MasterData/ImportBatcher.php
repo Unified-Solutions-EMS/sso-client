@@ -9,7 +9,8 @@ namespace Unified\SsoClient\MasterData;
  * entity's row cap (SSO answers 422 above it) and folds the answers back into
  * the single response one request would have produced.
  *
- * An entity under the cap is one request, unchanged. Assignments (divisions,
+ * An entity under the cap is one request, unchanged, and so is a singleton
+ * (the agency's one object, not a list). Assignments (divisions,
  * qualifications) are resolved by SSO against the rows of the same request,
  * so each chunk carries only the assignments that point at its own rows.
  */
@@ -23,7 +24,8 @@ class ImportBatcher
      */
     public function import(string $entity, int|string $ssoCompanyId, array $payload, int $batchSize): array
     {
-        $rows = is_array($payload[$entity] ?? null) ? array_values($payload[$entity]) : [];
+        $rows = $payload[$entity] ?? null;
+        $rows = is_array($rows) && ! array_key_exists('local_id', $rows) ? array_values($rows) : [];
         $batchSize = max(1, $batchSize);
 
         if (count($rows) <= $batchSize) {

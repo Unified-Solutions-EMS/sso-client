@@ -5,8 +5,11 @@ declare(strict_types=1);
 namespace Unified\SsoClient\MasterData;
 
 use Illuminate\Contracts\Container\Container;
+use Unified\SsoClient\MasterData\Agency\AgencyMirror;
+use Unified\SsoClient\MasterData\Contacts\ContactMirror;
 use Unified\SsoClient\MasterData\Contracts\ContinuesPush;
 use Unified\SsoClient\MasterData\Contracts\EntityMirror;
+use Unified\SsoClient\MasterData\Devices\DeviceMirror;
 use Unified\SsoClient\MasterData\Divisions\DivisionMirror;
 use Unified\SsoClient\MasterData\Exceptions\MasterDataSyncException;
 use Unified\SsoClient\MasterData\Facilities\FacilityMirror;
@@ -15,6 +18,7 @@ use Unified\SsoClient\MasterData\Medications\MedicationMirror;
 use Unified\SsoClient\MasterData\Personnel\PersonnelMirror;
 use Unified\SsoClient\MasterData\Procedures\ProcedureMirror;
 use Unified\SsoClient\MasterData\Qualifications\QualificationMirror;
+use Unified\SsoClient\MasterData\StateConfigurations\StateConfigurationMirror;
 use Unified\SsoClient\MasterData\Vehicles\VehicleMirror;
 
 /**
@@ -38,6 +42,10 @@ class MasterDataRegistry
         'medications' => MedicationMirror::class,
         'procedures' => ProcedureMirror::class,
         'personnel' => PersonnelMirror::class,
+        'agency' => AgencyMirror::class,
+        'contacts' => ContactMirror::class,
+        'devices' => DeviceMirror::class,
+        'state_configurations' => StateConfigurationMirror::class,
     ];
 
     public function __construct(private readonly Container $container) {}

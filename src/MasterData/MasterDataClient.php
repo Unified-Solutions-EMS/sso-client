@@ -9,6 +9,7 @@ use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Unified\SsoClient\MasterData\Contracts\EntityMirror;
 use Unified\SsoClient\MasterData\Contracts\FetchesSnapshot;
+use Unified\SsoClient\MasterData\Exceptions\CompanyNotInSsoException;
 use Unified\SsoClient\MasterData\Exceptions\MasterDataSyncException;
 
 /**
@@ -19,6 +20,10 @@ use Unified\SsoClient\MasterData\Exceptions\MasterDataSyncException;
  * - GET  /api/internal/companies/{ssoCompanyId}/{entity}/reviews/{id}  a code list's cutover review
  * - GET / PATCH /api/internal/companies/{ssoCompanyId}/personnel[/{ssoUserId}]  paged personnel
  *   snapshots, one person, and the write-through (get() / patch())
+ *
+ * A 404 on the collection itself (the snapshot or the import, no suffix past
+ * the entity) can only mean SSO has no such company, so it throws the typed
+ * CompanyNotInSsoException. A 404 on one record or review keeps the generic one.
  */
 class MasterDataClient
 {
@@ -142,6 +147,10 @@ class MasterDataClient
             throw new MasterDataSyncException("Could not reach SSO for {$entity}: {$e->getMessage()}", 0, $e);
         } catch (\Throwable $e) {
             throw new MasterDataSyncException("Could not reach SSO for {$entity}: {$e->getMessage()}", 0, $e);
+        }
+
+        if ($response->status() === 404 && in_array($suffix, ['', '/import'], true)) {
+            throw new CompanyNotInSsoException($ssoCompanyId, $entity);
         }
 
         if (! $response->successful()) {

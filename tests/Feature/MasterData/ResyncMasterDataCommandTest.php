@@ -4,7 +4,12 @@ namespace Unified\SsoClient\Tests\Feature\MasterData;
 
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use Unified\SsoClient\MasterData\Exceptions\CompanyNotInSsoException;
+use Unified\SsoClient\MasterData\Exceptions\MasterDataSyncException;
+use Unified\SsoClient\MasterData\MasterDataClient;
 
 class ResyncMasterDataCommandTest extends MasterDataTestCase
 {
@@ -226,5 +231,60 @@ class ResyncMasterDataCommandTest extends MasterDataTestCase
         $row = $this->mirrored($companyId, 501);
         $this->assertSame('Paramedic', $row->name);
         $this->assertSame('2026-10-06 00:00:00', $row->sso_updated_at);
+    }
+
+    public function test_a_company_sso_no_longer_has_is_skipped_once_without_reporting_and_exits_zero(): void
+    {
+        $alive = $this->company(70, 'Alpha');
+        $goneA = $this->company(80, 'Bravo');
+        $goneB = $this->company(90, 'Charlie');
+
+        Http::fake([
+            'sso.test/api/internal/companies/70/qualifications' => Http::response($this->snapshot(70, [$this->qualificationRecord(501, 'Paramedic')])),
+            'sso.test/api/internal/companies/80/qualifications' => Http::response(['message' => 'Not Found'], 404),
+            'sso.test/api/internal/companies/90/qualifications' => Http::response(['message' => 'Not Found'], 404),
+        ]);
+        Exceptions::fake();
+        Log::spy();
+
+        $this->artisan('sso:resync-master-data', ['entity' => 'qualifications'])
+            ->expectsOutputToContain("Skipped, company not in SSO (clear or fix their sso_company_id): local {$goneA} (SSO 80), local {$goneB} (SSO 90)")
+            ->expectsOutputToContain('3 companies processed, 0 failed, 2 skipped (not in SSO).')
+            ->doesntExpectOutputToContain('HTTP 404')
+            ->assertSuccessful();
+
+        Exceptions::assertNothingReported();
+        $this->assertNotNull($this->mirrored($alive, 501));
+        Log::shouldHaveReceived('warning')->once()->withArgs(fn (string $message, array $context): bool => str_contains($message, 'skipped companies not in SSO')
+            && $context['local_company_ids'] === [$goneA, $goneB]
+            && $context['sso_company_ids'] === ['80', '90']);
+    }
+
+    public function test_other_sso_errors_still_fail_and_report(): void
+    {
+        $this->company(70);
+        Http::fake(['sso.test/api/internal/companies/70/qualifications' => Http::response(['message' => 'boom'], 500)]);
+        Exceptions::fake();
+
+        $this->artisan('sso:resync-master-data', ['entity' => 'qualifications'])
+            ->expectsOutputToContain('SSO returned HTTP 500 for qualifications of company 70.')
+            ->expectsOutputToContain('1 company processed, 1 failed.')
+            ->assertFailed();
+
+        Exceptions::assertReported(MasterDataSyncException::class);
+        Exceptions::assertNotReported(CompanyNotInSsoException::class);
+    }
+
+    public function test_a_404_on_one_record_is_not_read_as_a_missing_company(): void
+    {
+        Http::fake(['sso.test/api/internal/companies/70/personnel/5' => Http::response(['message' => 'Not Found'], 404)]);
+
+        try {
+            app(MasterDataClient::class)->get('personnel', 70, '/5');
+            $this->fail('Expected a MasterDataSyncException.');
+        } catch (MasterDataSyncException $e) {
+            $this->assertNotInstanceOf(CompanyNotInSsoException::class, $e);
+            $this->assertSame('SSO returned HTTP 404 for personnel/5 of company 70.', $e->getMessage());
+        }
     }
 }

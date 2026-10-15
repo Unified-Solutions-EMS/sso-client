@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\DB;
 use Unified\SsoClient\MasterData\CatalogMirror;
 use Unified\SsoClient\MasterData\CodeLists\CodeListMirror;
 use Unified\SsoClient\MasterData\Contracts\SeedsSso;
+use Unified\SsoClient\MasterData\Exceptions\CompanyNotInSsoException;
 use Unified\SsoClient\MasterData\Exceptions\MasterDataSyncException;
 use Unified\SsoClient\MasterData\ImportBatcher;
 use Unified\SsoClient\MasterData\LocalTenantResolver;
@@ -80,12 +81,15 @@ class PushMasterDataCommand extends MasterDataCommand
         }
 
         $failed = 0;
+        $notInSso = [];
 
         foreach ($companies as $localCompanyId => $ssoCompanyId) {
             try {
                 $review !== null && $review !== '' && $mirror instanceof CodeListMirror
                     ? $this->applyReview($mirror, $client, $entity, $localCompanyId, $ssoCompanyId, (int) $review)
                     : $this->pushCompany($mirror, $client, $entity, $localCompanyId, $ssoCompanyId, $batchSize);
+            } catch (CompanyNotInSsoException) {
+                $notInSso[$localCompanyId] = $ssoCompanyId;
             } catch (\Throwable $e) {
                 $failed++;
                 $this->error("Company {$ssoCompanyId}: {$e->getMessage()}");
@@ -93,7 +97,7 @@ class PushMasterDataCommand extends MasterDataCommand
             }
         }
 
-        return $this->summarize(count($companies), $failed);
+        return $this->summarize(count($companies), $failed, $notInSso);
     }
 
     /**

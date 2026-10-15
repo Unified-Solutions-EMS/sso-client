@@ -5,7 +5,10 @@ namespace Unified\SsoClient\Tests\Feature\MasterData;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Http;
+use Unified\SsoClient\MasterData\Exceptions\CompanyNotInSsoException;
+use Unified\SsoClient\MasterData\Exceptions\MasterDataSyncException;
 
 class PushMasterDataCommandTest extends MasterDataTestCase
 {
@@ -277,5 +280,36 @@ class PushMasterDataCommandTest extends MasterDataTestCase
         }
 
         Http::assertNothingSent();
+    }
+
+    public function test_a_company_sso_no_longer_has_is_skipped_without_reporting_and_exits_zero(): void
+    {
+        $companyId = $this->company(70);
+        $this->localQualification($companyId, 'Paramedic');
+        Http::fake([self::IMPORT_URL => Http::response(['message' => 'Not Found'], 404)]);
+        Exceptions::fake();
+
+        $this->artisan('sso:push-master-data', ['entity' => 'qualifications'])
+            ->expectsOutputToContain("Skipped, company not in SSO (clear or fix their sso_company_id): local {$companyId} (SSO 70)")
+            ->expectsOutputToContain('1 company processed, 0 failed, 1 skipped (not in SSO).')
+            ->assertSuccessful();
+
+        Exceptions::assertNothingReported();
+    }
+
+    public function test_a_validation_error_from_the_import_still_fails_and_reports(): void
+    {
+        $companyId = $this->company(70);
+        $this->localQualification($companyId, 'Paramedic');
+        Http::fake([self::IMPORT_URL => Http::response(['message' => 'Too many rows'], 422)]);
+        Exceptions::fake();
+
+        $this->artisan('sso:push-master-data', ['entity' => 'qualifications'])
+            ->expectsOutputToContain('SSO returned HTTP 422 for qualifications/import of company 70.')
+            ->expectsOutputToContain('1 company processed, 1 failed.')
+            ->assertFailed();
+
+        Exceptions::assertReported(MasterDataSyncException::class);
+        Exceptions::assertNotReported(CompanyNotInSsoException::class);
     }
 }

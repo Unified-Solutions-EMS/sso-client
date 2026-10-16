@@ -35,7 +35,7 @@ final class MappingLinker
 
     public const HELD_BY_ANOTHER_LOCAL_ROW = 'sso_id_held_by_another_local_row';
 
-    /** @var array<int, int> local id keyed by the SSO id this mapping linked it to */
+    /** @var array<int, int|string> local id keyed by the SSO id this mapping linked it to */
     private array $linked = [];
 
     /**
@@ -49,9 +49,9 @@ final class MappingLinker
     /**
      * Why this row must not take the SSO id, or null when it may.
      *
-     * @return array{reason: string, held_by: int|null}|null
+     * @return array{reason: string, held_by: int|string|null}|null
      */
-    public function refusal(?object $row, int $localId, int $ssoId): ?array
+    public function refusal(?object $row, int|string $localId, int $ssoId): ?array
     {
         if ($row === null) {
             return self::refuse(self::LOCAL_ROW_MISSING);
@@ -77,9 +77,9 @@ final class MappingLinker
      * the refusal when the unique index turned it down.
      *
      * @param  Closure(): mixed  $write
-     * @return array{reason: string, held_by: int|null}|null
+     * @return array{reason: string, held_by: int|string|null}|null
      */
-    public function write(int $localId, int $ssoId, Closure $write): ?array
+    public function write(int|string $localId, int $ssoId, Closure $write): ?array
     {
         try {
             DB::transaction($write);
@@ -92,17 +92,17 @@ final class MappingLinker
         return null;
     }
 
-    private function holder(int $ssoId, int $localId): ?int
+    private function holder(int $ssoId, int|string $localId): int|string|null
     {
         $holder = ($this->holders)()->where($this->column, $ssoId)->where('id', '!=', $localId)->orderBy('id')->value('id');
 
-        return $holder === null ? null : (int) $holder;
+        return is_numeric($holder) ? (int) $holder : (is_string($holder) ? $holder : null);
     }
 
     /**
-     * @return array{reason: string, held_by: int|null}
+     * @return array{reason: string, held_by: int|string|null}
      */
-    private static function refuse(string $reason, ?int $heldBy = null): array
+    private static function refuse(string $reason, int|string|null $heldBy = null): array
     {
         return ['reason' => $reason, 'held_by' => $heldBy];
     }

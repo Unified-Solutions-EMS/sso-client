@@ -128,11 +128,21 @@ abstract class ProjectedMirror extends CatalogMirror implements SeedsSso
             $row = $this->findLinked($localCompanyId, (int) $record['id']);
 
             if ($row !== null) {
-                $this->projection->written($localCompanyId, (int) $row->id, $this->forProjection($record));
+                $this->written($localCompanyId, $row, $this->forProjection($record));
             }
         }
 
         return $result;
+    }
+
+    /**
+     * Hands the written row to the projection (RecordProjection::written()).
+     *
+     * @param  array<string, mixed>  $record
+     */
+    protected function written(int $localCompanyId, object $row, array $record): void
+    {
+        $this->projection->written($localCompanyId, (int) $row->id, $record);
     }
 
     /**
@@ -203,7 +213,7 @@ abstract class ProjectedMirror extends CatalogMirror implements SeedsSso
         $localByKey = [];
 
         foreach ($this->scoped($localCompanyId)->whereNull($this->ssoIdColumn())->orderBy('id')->get() as $row) {
-            $entry = ['id' => (int) $row->id, 'name' => (string) ($row->{$this->nameColumn()} ?? '')];
+            $entry = ['id' => self::localKey($row->id) ?? 0, 'name' => (string) ($row->{$this->nameColumn()} ?? '')];
             $key = $this->localMatchKey($row);
 
             if ($key === null) {
@@ -281,7 +291,7 @@ abstract class ProjectedMirror extends CatalogMirror implements SeedsSso
     protected function importRow(int $localCompanyId, object $row): array
     {
         return [
-            'local_id' => (int) $row->id,
+            'local_id' => self::localKey($row->id) ?? 0,
             'is_active' => (bool) $row->mirror_is_active,
         ] + $this->projection->toSso($localCompanyId, $row);
     }
@@ -476,7 +486,7 @@ abstract class ProjectedMirror extends CatalogMirror implements SeedsSso
         return implode('', $parts) === '' ? null : implode("\x1F", $parts);
     }
 
-    protected function confirmLink(int $localCompanyId, int $localId, int $ssoId): void
+    protected function confirmLink(int $localCompanyId, int|string $localId, int $ssoId): void
     {
         $this->scoped($localCompanyId)
             ->where('id', $localId)

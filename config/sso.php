@@ -303,6 +303,11 @@ return [
         'contacts' => env('SSO_MASTER_DATA_CONTACTS', false),
         'devices' => env('SSO_MASTER_DATA_DEVICES', false),
         'state_configurations' => env('SSO_MASTER_DATA_STATE_CONFIGURATIONS', false),
+        // Units ("Unit/Resource": Medic 1, Engine 3). Bind a UnitProjection
+        // first unless the package's sso_units read model is enough (CAD:
+        // units, Crew: resources, Fire: neris_station_units), and push
+        // divisions, locations and vehicles before units.
+        'units' => env('SSO_MASTER_DATA_UNITS', false),
 
         // Daily `sso:resync-master-data <entity>` for every enabled entity,
         // so assignments dropped by early-arriving webhooks (user not yet

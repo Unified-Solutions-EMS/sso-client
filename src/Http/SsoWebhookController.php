@@ -112,7 +112,11 @@ class SsoWebhookController extends Controller
                 'state_configuration.created',
                 'state_configuration.updated',
                 'state_configuration.deactivated',
-                'state_configuration.batch_updated' => app(MasterDataWebhookHandler::class)->handle($event, $request->all()),
+                'state_configuration.batch_updated',
+                'unit.created',
+                'unit.updated',
+                'unit.deactivated',
+                'unit.batch_updated' => app(MasterDataWebhookHandler::class)->handle($event, $request->all()),
                 default => $this->handleUnknownEvent($event),
             };
 

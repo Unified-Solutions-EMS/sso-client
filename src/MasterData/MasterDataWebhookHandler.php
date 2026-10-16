@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Log;
  * Routes master-data webhook events (qualification.*, user.qualifications_changed,
  * division.*, user.division_changed, location.*, vehicle.*, facility.*,
  * medication.*, procedure.*, person.updated, person.deactivated, agency.*,
- * contact.*, device.* other than device.revoked, state_configuration.*) to
+ * contact.*, device.* other than device.revoked, state_configuration.*, unit.*) to
  * the matching mirror.
  *
  * Every outcome other than a handler crash is a 200 acknowledgement: an entity

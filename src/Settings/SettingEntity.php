@@ -19,6 +19,7 @@ enum SettingEntity: string
     case Contacts = 'contacts';
     case Devices = 'devices';
     case StateConfigurations = 'state_configurations';
+    case Units = 'units';
 
     public function settingsPath(): string
     {
@@ -32,6 +33,7 @@ enum SettingEntity: string
             self::Contacts => '/system/contacts',
             self::Devices => '/system/devices',
             self::StateConfigurations => '/system/state-configuration',
+            self::Units => '/system/units',
         };
     }
 

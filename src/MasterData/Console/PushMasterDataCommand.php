@@ -182,6 +182,7 @@ class PushMasterDataCommand extends MasterDataCommand
         $this->conflictTable(array_values(array_filter($conflicts, 'is_array')));
         $this->assignmentConflictTable($response['assignment_conflicts'] ?? null);
         $this->invalidTable($response['invalid'] ?? null);
+        $this->unresolvedVehicleTable($response['unresolved_vehicles'] ?? null);
         $this->unresolvedLocationTable($response['unresolved_locations'] ?? null);
         $this->unresolvedDivisionTable($response['unresolved_divisions'] ?? null);
         $this->partialTable($response['partial'] ?? null);
@@ -205,7 +206,7 @@ class PushMasterDataCommand extends MasterDataCommand
     {
         $extra = '';
 
-        foreach (['assignment_conflicts', 'invalid', 'filled', 'partial', 'unresolved_locations', 'unresolved_divisions', 'refused', 'in_review', 'unmatched'] as $key) {
+        foreach (['assignment_conflicts', 'invalid', 'filled', 'partial', 'unresolved_vehicles', 'unresolved_locations', 'unresolved_divisions', 'refused', 'in_review', 'unmatched'] as $key) {
             if (is_array($response[$key] ?? null)) {
                 $extra .= sprintf(' %s=%d', $key, count($response[$key]));
             }
@@ -314,6 +315,26 @@ class PushMasterDataCommand extends MasterDataCommand
     }
 
     /**
+     * Units whose usual vehicle SSO could not map (this app's vehicles were
+     * not pushed, or the vehicle is turned off in SSO). They were linked
+     * without one; push vehicles first and rerun, or set it in SSO.
+     */
+    private function unresolvedVehicleTable(mixed $rows): void
+    {
+        if (! is_array($rows) || $rows === []) {
+            return;
+        }
+
+        $this->warn('SSO could not set these usual vehicles. Push vehicles first and rerun, or set the vehicle in SSO:');
+        $this->table(['Local id', 'Name', 'Local vehicle', 'Reason'], array_map(fn (mixed $row): array => [
+            (string) (is_array($row) ? ($row['local_id'] ?? '') : ''),
+            (string) (is_array($row) ? ($row['name'] ?? '') : ''),
+            (string) (is_array($row) ? ($row['vehicle_local_id'] ?? $row['vehicle_sso_id'] ?? '') : ''),
+            (string) (is_array($row) ? ($row['reason'] ?? '') : ''),
+        ], array_values($rows)));
+    }
+
+    /**
      * Vehicles whose home location SSO could not map (this app's locations
      * were not pushed, or the location is turned off in SSO). They were
      * linked without one; push locations first and rerun, or set it in SSO.
@@ -373,6 +394,13 @@ class PushMasterDataCommand extends MasterDataCommand
 
         if (is_array($rows[array_key_first($rows)]['dropped'] ?? null)) {
             $this->droppedTable($rows);
+
+            return;
+        }
+
+        if (! array_key_exists('address', (array) ($rows[array_key_first($rows)]['fields'] ?? []))) {
+            $this->warn('SSO saved these rows without some of their values. Set them in Settings if they still apply:');
+            $this->refusedTable($rows);
 
             return;
         }

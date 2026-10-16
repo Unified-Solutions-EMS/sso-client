@@ -26,6 +26,8 @@ use Unified\SsoClient\MasterData\Procedures\MirrorOnlyProcedureProjection;
 use Unified\SsoClient\MasterData\Procedures\ProcedureProjection;
 use Unified\SsoClient\MasterData\StateConfigurations\StandardStateConfigurationProjection;
 use Unified\SsoClient\MasterData\StateConfigurations\StateConfigurationProjection;
+use Unified\SsoClient\MasterData\Units\StandardUnitProjection;
+use Unified\SsoClient\MasterData\Units\UnitProjection;
 use Unified\SsoClient\MasterData\Vehicles\StandardVehicleProjection;
 use Unified\SsoClient\MasterData\Vehicles\VehicleProjection;
 use Unified\SsoClient\Metrics\Contracts\MetricContextResolver;
@@ -80,6 +82,11 @@ class SsoServiceProvider extends ServiceProvider
         $this->app->bindIf(ContactProjection::class, StandardContactProjection::class);
         $this->app->bindIf(DeviceProjection::class, StandardDeviceProjection::class);
         $this->app->bindIf(StateConfigurationProjection::class, StandardStateConfigurationProjection::class);
+
+        // Units land in the package's sso_units + sso_unit_seats read model
+        // unless the app binds its own projection (CAD's units, Crew's
+        // resources, Fire's NERIS station units).
+        $this->app->bindIf(UnitProjection::class, StandardUnitProjection::class);
 
         // Trial purge: what happens to a mirrored sample row SSO deleted.
         // Apps bind their own policy to veto deletes the database cannot see.
@@ -163,6 +170,7 @@ class SsoServiceProvider extends ServiceProvider
             'contacts' => '2026_10_14_100100_create_or_extend_contacts_mirror.php',
             'devices' => '2026_10_14_100200_create_or_extend_devices_mirror.php',
             'state-configurations' => '2026_10_14_100300_create_or_extend_state_configurations_mirror.php',
+            'units' => '2026_10_16_100000_create_or_extend_units_mirror.php',
         ] as $tag => $file) {
             $this->publishesMigrations([
                 __DIR__.'/../database/master-data/'.$file => database_path('migrations/'.$file),

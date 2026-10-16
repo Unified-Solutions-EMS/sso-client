@@ -324,16 +324,17 @@ abstract class CatalogMirror implements EntityMirror
      * overwritten (MappingLinker).
      *
      * @param  array<int|string, int|string|array{sso_id: int|string, updated_at?: string|null}>  $mapping
-     * @return array{applied: int, collisions: list<array{local_id: int, sso_id: int, reason: string, name: string|null, held_by: int|null}>}
+     * @return array{applied: int, collisions: list<array{local_id: int|string, sso_id: int, reason: string, name: string|null, held_by: int|string|null}>}
      */
     public function applyImportMapping(int $localCompanyId, array $mapping): array
     {
         $pairs = [];
         foreach ($mapping as $localId => $entry) {
             $ssoId = (int) (is_array($entry) ? ($entry['sso_id'] ?? 0) : $entry);
+            $localId = self::localKey($localId);
 
-            if ((int) $localId > 0 && $ssoId > 0) {
-                $pairs[(int) $localId] = [
+            if ($localId !== null && $ssoId > 0) {
+                $pairs[$localId] = [
                     'sso_id' => $ssoId,
                     // SSO's own timestamp, so the webhooks this same import
                     // dispatched are not judged stale against our clock. The
@@ -384,9 +385,10 @@ abstract class CatalogMirror implements EntityMirror
     }
 
     /**
-     * Local id keyed by SSO id, for the company's linked rows.
+     * Local id keyed by SSO id, for the company's linked rows (an integer,
+     * or a string for a table keyed by uuid).
      *
-     * @return array<int, int>
+     * @return array<int, int|string>
      */
     public function linkedMap(int $localCompanyId, bool $activeOnly = false, bool $confirmedOnly = false): array
     {
@@ -398,7 +400,7 @@ abstract class CatalogMirror implements EntityMirror
             ->get(['id', $this->ssoIdColumn()]);
 
         foreach ($rows as $row) {
-            $map[(int) $row->{$this->ssoIdColumn()}] = (int) $row->id;
+            $map[(int) $row->{$this->ssoIdColumn()}] = self::localKey($row->id) ?? 0;
         }
 
         return $map;
@@ -417,7 +419,8 @@ abstract class CatalogMirror implements EntityMirror
 
         $seen = [];
         foreach ($records as $record) {
-            $counts[$this->upsert($localCompanyId, $record)]++;
+            $result = $this->upsert($localCompanyId, $record);
+            $counts[$result] = ($counts[$result] ?? 0) + 1;
             $seen[] = (int) $record['id'];
         }
 
@@ -467,7 +470,8 @@ abstract class CatalogMirror implements EntityMirror
         $counts = ['created' => 0, 'updated' => 0, 'linked' => 0, 'unchanged' => 0, 'stale' => 0, 'pending' => 0];
 
         foreach ($this->snapshotRecords([$this->entity() => array_values($records)]) as $record) {
-            $counts[$this->upsert($localCompanyId, $record, delivery: true)]++;
+            $result = $this->upsert($localCompanyId, $record, delivery: true);
+            $counts[$result] = ($counts[$result] ?? 0) + 1;
         }
 
         return ['status' => 'ok', 'counts' => $counts];
@@ -637,6 +641,30 @@ abstract class CatalogMirror implements EntityMirror
     protected function normalizeName(string $name): string
     {
         return mb_strtolower(trim($name));
+    }
+
+    /**
+     * A local row id as the push and the mapping carry it: an integer for an
+     * auto-increment table, the string for a uuid-keyed one (CAD's units),
+     * null for nothing usable.
+     */
+    public static function localKey(mixed $id): int|string|null
+    {
+        if (is_int($id)) {
+            return $id > 0 ? $id : null;
+        }
+
+        if (! is_string($id) || trim($id) === '') {
+            return null;
+        }
+
+        $id = trim($id);
+
+        if (ctype_digit($id)) {
+            return (int) $id > 0 ? (int) $id : null;
+        }
+
+        return $id;
     }
 
     /**

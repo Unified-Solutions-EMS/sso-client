@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Unified\SsoClient\MasterData\CatalogMirror;
 use Unified\SsoClient\MasterData\MasterDataRegistry;
+use Unified\SsoClient\MasterData\Units\UnitMirror;
 use Unified\SsoClient\MasterData\Vehicles\VehicleMirror;
 use Unified\SsoClient\Trial\Contracts\TrialMirrorCleanupPolicy;
 
@@ -30,9 +31,9 @@ class TrialMirrorCleaner
 {
     /**
      * Cleanup order: what points at a row is removed before the row
-     * (a device names its vehicle).
+     * (a device names its vehicle; a unit its vehicle, location and division).
      */
-    public const ENTITIES = ['devices', 'contacts', 'vehicles', 'locations', 'divisions', 'qualifications'];
+    public const ENTITIES = ['units', 'devices', 'contacts', 'vehicles', 'locations', 'divisions', 'qualifications'];
 
     public function __construct(
         private readonly MasterDataRegistry $registry,
@@ -110,6 +111,12 @@ class TrialMirrorCleaner
                     foreach ($mirror->childTables() as $child) {
                         DB::table($child->table())->where($child->parentColumn(), $row->id)->delete();
                     }
+                }
+
+                $seats = $mirror instanceof UnitMirror ? $mirror->units()->seatTable() : null;
+
+                if ($seats !== null) {
+                    DB::table($seats->table())->where($seats->parentColumn(), $row->id)->delete();
                 }
 
                 $mirror->forCompany($localCompanyId)->where('id', $row->id)->delete();

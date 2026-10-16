@@ -19,6 +19,7 @@ use Unified\SsoClient\MasterData\Personnel\PersonnelMirror;
 use Unified\SsoClient\MasterData\Procedures\ProcedureMirror;
 use Unified\SsoClient\MasterData\Qualifications\QualificationMirror;
 use Unified\SsoClient\MasterData\StateConfigurations\StateConfigurationMirror;
+use Unified\SsoClient\MasterData\Units\UnitMirror;
 use Unified\SsoClient\MasterData\Vehicles\VehicleMirror;
 
 /**
@@ -46,6 +47,7 @@ class MasterDataRegistry
         'contacts' => ContactMirror::class,
         'devices' => DeviceMirror::class,
         'state_configurations' => StateConfigurationMirror::class,
+        'units' => UnitMirror::class,
     ];
 
     public function __construct(private readonly Container $container) {}

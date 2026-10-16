@@ -311,7 +311,7 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   `SSO_MASTER_DATA_QUALIFICATIONS`, `SSO_MASTER_DATA_DIVISIONS`, `SSO_MASTER_DATA_LOCATIONS`, `SSO_MASTER_DATA_VEHICLES`,
   `SSO_MASTER_DATA_FACILITIES`, `SSO_MASTER_DATA_MEDICATIONS`, `SSO_MASTER_DATA_PROCEDURES`,
   `SSO_MASTER_DATA_PERSONNEL`, `SSO_MASTER_DATA_AGENCY`, `SSO_MASTER_DATA_CONTACTS`, `SSO_MASTER_DATA_DEVICES`,
-  `SSO_MASTER_DATA_STATE_CONFIGURATIONS`, all default false).
+  `SSO_MASTER_DATA_STATE_CONFIGURATIONS`, `SSO_MASTER_DATA_UNITS`, all default false).
   `mergeConfigFrom()` is shallow, so an app whose own `config/sso.php` defines `master_data` replaces the
   package's whole array. That is safe: every reader defaults per key (`MasterDataRegistry::enabled()` reads
   `config("sso.master_data.{$entity}", false)`, `schedule_resync` defaults true, `timeout` 120), so an app may
@@ -325,7 +325,7 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   subclass), `MasterDataWebhookHandler` (the webhook controller's `match` sends `qualification.*`,
   `user.qualifications_changed`, `division.*`, `user.division_changed`, `location.*`, `vehicle.*`, `facility.*`, `medication.*`,
   `procedure.*`, `person.updated|deactivated`, `agency.*`, `contact.*`, `device.created|updated|deactivated|batch_updated`
-  (not `device.revoked`, which is the sessions handler) and `state_configuration.*` here; a disabled entity, an unmigrated mirror, or an unknown company is a 200 ack, except that an event a
+  (not `device.revoked`, which is the sessions handler), `state_configuration.*` and `unit.*` here; a disabled entity, an unmigrated mirror, or an unknown company is a 200 ack, except that an event a
   mirror lists in `Contracts\ContinuesPush::pushEvents()` (the code lists' `review_completed`) is applied while the entity is
   still off, because it finishes the push), `MasterDataClient` (`GET {SSO_BASE_URL}/api/internal/companies/{id}/{entity}`,
   bearer `CORE_APP_API_KEY`), `sso:resync-master-data {entity} {--company=} {--link-by-name}` and the
@@ -799,6 +799,50 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     bind the projection; publish the migration and migrate; `sso:push-master-data <entity> --dry-run`, then for
     real (flag off); settle conflicts in SSO Settings; set the flag; `sso:resync-master-data <entity>`; make
     the app's editor read-only with "Edit in Settings".
+
+  **Units** (thirteenth entity, `MasterData\Units\UnitMirror` on `ProjectedMirror`; SSO side PR #175, plan
+  `/Sites/docs/design/units-rotations-plan.md` phase 2). A unit is a staffed position (Medic 1, Engine 3),
+  labelled **"Unit/Resource"** on screen (never "Call sign"); it is not a vehicle and links to its usual
+  vehicle, home location and division. Registry key `units`, flag `SSO_MASTER_DATA_UNITS`
+  (`config('sso.master_data.units')`), publish tag `sso-master-data-units`, "Edit in Settings"
+  `SettingEntity::Units` -> `/system/units`.
+  - **`Units\UnitProjection`** (extends `RecordProjection`) adds `vehicleColumn()`, `locationColumn()`,
+    `divisionColumn()` (local ids the mirror translates through the vehicles / locations / divisions links:
+    null clears, an id not linked here leaves the local value; the push sends `*_sso_id` for a confirmed
+    link, else `*_local_id`, so push those lists first), `seatTable(): ?Units\UnitSeatTable` (crew seats),
+    `accepts($company, $record)` (a unit with no linked or adoptable row that the app cannot hold is
+    `skipped`; Fire keeps units under stations) and `pushable($company, $rows)` (rows the push sends; CAD
+    leaves out its untouched trial sample). `written()` is redeclared with `int|string $localId`.
+    The package binds `StandardUnitProjection` (`sso_units` + `sso_unit_seats`). Apps bind their own over
+    their table (CAD `units`, Crew `resources`, Fire `neris_station_units`) before migrating.
+  - **Local ids may be uuids** (CAD). `CatalogMirror::localKey()` keeps a non-numeric id as a string through
+    `applyImportMapping`, `linkedMap`, `MappingLinker`, `ProjectedMirror::linkByName` and the push; numeric
+    ids behave exactly as before. A seat table needs integer parent ids.
+  - **Seats** are linked by SSO's seat id (`sso_unit_seat_id`), updated in place, adopted by position, and a
+    seat SSO removed is unlinked and stamped `sso_removed_at` (never deleted unless the seat table declares
+    `DeclaresChildRowPolicy`). The qualification is translated through the qualifications links (unknown =
+    null); the push sends `qualification_sso_id` and SSO's `mapping.{local_id}.seats` links them. A unit
+    whose only change was a seat reports `updated`; the resync adds `unlinked_seats`.
+  - SSO contract: `GET .../units` -> `{company: {id, division_label, timezone}, units: [{id, uuid, name,
+    display_name, unit_type(_name), level_of_care(_name), capabilities, vehicle_id, vehicle {id,
+    unit_number, call_sign}, location_id, location {id, name}, division_id, division {id, name}, crew_size,
+    seats: [{id, uuid, position, label, qualification_id, qualification_name, sort_order}], source_app,
+    is_active, sort_order, updated_at}]}`; `POST .../units/import` `{app_slug, units: [{local_id, uuid?, name,
+    display_name?, unit_type?, level_of_care?, capabilities?, crew_size?, is_active?, vehicle_sso_id? |
+    vehicle_local_id?, location_*?, division_*?, seats?: [{local_id, position?, label,
+    qualification_sso_id?}]}]}` (500 max) -> `{created, matched, filled, partial, refused, invalid,
+    conflicts, unresolved_vehicles, unresolved_locations, unresolved_divisions, mapping: {local_id: {sso_id,
+    updated_at, seats: {local: sso}}}}`. SSO matches this app's earlier link, then the name (trimmed, spaces
+    collapsed, ignoring case), fill-only. Unit types are SSO's fixed list (ambulance, engine, ladder, rescue,
+    supervisor, wheelchair_van, command, support, other); SSO maps common app words. Names are cut at 100 on
+    push. Events `unit.created|updated|deactivated` (full row) and `unit.batch_updated` `{units: [...]}`.
+  - Trial purge: `units` is cleaned first; the default policy deletes only `sso_units` rows (with their
+    seats) and deactivates units in an app's own table; a vehicle, location or division a remaining unit
+    names is deactivated, not deleted.
+  - Cutover per app: bind the projection; publish `sso-master-data-units` and migrate; push divisions,
+    locations, vehicles; `sso:push-master-data units --dry-run`, then for real (flag off); settle conflicts in
+    SSO Settings > Units (Review differences); set the flag; `sso:resync-master-data units`; make the app's
+    unit editor read-only with "Edit in Settings".
 
 ## Release discipline
 

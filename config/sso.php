@@ -308,6 +308,11 @@ return [
         // units, Crew: resources, Fire: neris_station_units), and push
         // divisions, locations and vehicles before units.
         'units' => env('SSO_MASTER_DATA_UNITS', false),
+        // Rotations (a repeating day cycle with timed on-duty blocks, run by
+        // units and people). Read model sso_rotations + blocks + assignments;
+        // read it with Unified\SsoClient\Rotations\MirroredRotations. Turn
+        // units on first: assignments name units by SSO id.
+        'rotations' => env('SSO_MASTER_DATA_ROTATIONS', false),
 
         // Daily `sso:resync-master-data <entity>` for every enabled entity,
         // so assignments dropped by early-arriving webhooks (user not yet

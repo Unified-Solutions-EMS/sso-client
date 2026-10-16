@@ -24,6 +24,8 @@ use Unified\SsoClient\MasterData\Personnel\PersonnelProjection;
 use Unified\SsoClient\MasterData\Personnel\StandardPersonnelProjection;
 use Unified\SsoClient\MasterData\Procedures\MirrorOnlyProcedureProjection;
 use Unified\SsoClient\MasterData\Procedures\ProcedureProjection;
+use Unified\SsoClient\MasterData\Rotations\RotationProjection;
+use Unified\SsoClient\MasterData\Rotations\StandardRotationProjection;
 use Unified\SsoClient\MasterData\StateConfigurations\StandardStateConfigurationProjection;
 use Unified\SsoClient\MasterData\StateConfigurations\StateConfigurationProjection;
 use Unified\SsoClient\MasterData\Units\StandardUnitProjection;
@@ -87,6 +89,11 @@ class SsoServiceProvider extends ServiceProvider
         // unless the app binds its own projection (CAD's units, Crew's
         // resources, Fire's NERIS station units).
         $this->app->bindIf(UnitProjection::class, StandardUnitProjection::class);
+
+        // Rotations land in the package's sso_rotations read model (with its
+        // blocks and assignments). Crew Scheduling extends the projection to
+        // push its template rotations up.
+        $this->app->bindIf(RotationProjection::class, StandardRotationProjection::class);
 
         // Trial purge: what happens to a mirrored sample row SSO deleted.
         // Apps bind their own policy to veto deletes the database cannot see.
@@ -171,6 +178,7 @@ class SsoServiceProvider extends ServiceProvider
             'devices' => '2026_10_14_100200_create_or_extend_devices_mirror.php',
             'state-configurations' => '2026_10_14_100300_create_or_extend_state_configurations_mirror.php',
             'units' => '2026_10_16_100000_create_or_extend_units_mirror.php',
+            'rotations' => '2026_10_17_100000_create_or_extend_rotations_mirror.php',
         ] as $tag => $file) {
             $this->publishesMigrations([
                 __DIR__.'/../database/master-data/'.$file => database_path('migrations/'.$file),

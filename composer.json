@@ -35,6 +35,7 @@
                 "Unified\\SsoClient\\SsoServiceProvider"
             ],
             "aliases": {
+                "AiUsage": "Unified\\SsoClient\\Metrics\\Facades\\AiUsage",
                 "Metrics": "Unified\\SsoClient\\Metrics\\Facades\\Metrics",
                 "SecurityEvents": "Unified\\SsoClient\\Security\\Facades\\SecurityEvents"
             }

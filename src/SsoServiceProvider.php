@@ -32,6 +32,7 @@ use Unified\SsoClient\MasterData\Units\StandardUnitProjection;
 use Unified\SsoClient\MasterData\Units\UnitProjection;
 use Unified\SsoClient\MasterData\Vehicles\StandardVehicleProjection;
 use Unified\SsoClient\MasterData\Vehicles\VehicleProjection;
+use Unified\SsoClient\Metrics\AiUsage;
 use Unified\SsoClient\Metrics\Contracts\MetricContextResolver;
 use Unified\SsoClient\Metrics\Metrics;
 use Unified\SsoClient\Metrics\Resolvers\EloquentMetricContextResolver;
@@ -111,6 +112,7 @@ class SsoServiceProvider extends ServiceProvider
         });
 
         $this->app->singleton(Metrics::class);
+        $this->app->singleton(AiUsage::class);
         $this->app->singleton(SecurityEvents::class);
     }
 

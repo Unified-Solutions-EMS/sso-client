@@ -258,6 +258,13 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   (`metrics.session`) for `session.start` heartbeats, appended to an app's `web` group. Context keys
   `local_company_id` / `local_user_id` are translated to SSO ids by `EloquentMetricContextResolver`
   via `companies.sso_company_id` / `users.sso_id`. `METRICS_APP_KEY` must be the SSO registry slug.
+- **AI usage** — `AiUsage::record($feature, $purpose, $model, $inputTokens, $outputTokens, $cachedTokens,
+  $audioSeconds, $durationMs, $outcome, $surface, $attribution)` (`Metrics\AiUsage`, facade aliased globally)
+  is the one place the `ai.request` event is shaped: one call per model call, forwarded through
+  `Metrics::increment()` so id translation and queueing stay there. Feature keys are sanitised to
+  `[a-z0-9_-]{1,40}`; null/zero optionals are dropped (token counts always sent); surface defaults to
+  `mobile` on `api/mobile/*`, `queue` in console without a routed request, else `web`. Fail-silent.
+  Context must stay PHI-free: never prompt text, transcripts or file names. ai-core forwards here.
 - **Security events** — `SecurityEvents` facade (aliased globally) records attack-signal events to SSO's
   `/api/internal/security-events/ingest` (CORE_APP_API_KEY auth, endpoint derived from `SSO_BASE_URL`,
   app key falls back to `METRICS_APP_KEY` → `SSO_APP_SLUG`, so already-wired apps need zero config).

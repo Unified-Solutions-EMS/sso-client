@@ -843,6 +843,34 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     locations, vehicles; `sso:push-master-data units --dry-run`, then for real (flag off); settle conflicts in
     SSO Settings > Units (Review differences); set the flag; `sso:resync-master-data units`; make the app's
     unit editor read-only with "Edit in Settings".
+- **Rotations mirror** (`MasterData\Rotations`, units-rotations plan phase 4, SSO PR #176). A rotation is a
+  repeating day cycle (`cycle_days`, `anchor_date` = company-local "day 1") with timed blocks (`day_index`,
+  `start_time` HH:MM naive wall clock, `duration_minutes`), assigned to units and people
+  (`assignable_type` unit|user, `start_day_index` = **the cycle day the assignee is on at the anchor date**,
+  `starts_on`, `ends_on`). Registry key `rotations`, flag `SSO_MASTER_DATA_ROTATIONS`, publish tag
+  `sso-master-data-rotations`, `SettingEntity::Rotations` -> `/system/rotations`.
+  - `RotationMirror` on `ProjectedMirror` over the bound `RotationProjection` (default
+    `StandardRotationProjection` on `sso_rotations`). Blocks and assignments always live in the package's
+    `sso_rotation_blocks` / `sso_rotation_assignments` (`RotationChildTable`), linked by SSO's child ids,
+    updated in place and **deleted** when SSO drops them (pure mirrors; `ChildRowPolicy::delete()`): a
+    stale assignment would put a unit on duty that SSO took off. Assignments keep SSO's `sso_unit_id` /
+    `sso_user_id`; readers match them to the units mirror link and `users.sso_id`.
+  - Events `rotation.created|updated|deactivated` (full row with blocks and assignments; a block or
+    assignment edit in SSO re-sends its rotation) and `rotation.batch_updated` `{rotations: [...]}`. The
+    `company` block carries `timezone`; the mirror does not store it, readers pass the app's synced
+    `companies.timezone`.
+  - Push: `RotationProjection::pushRotations()` supplies the rows (not the mirror table; `sso_rotations` rows
+    ARE SSO's) and `linkPushed()` records each mapping (Crew: `shift_templates.sso_rotation_id`). The
+    standard projection pushes nothing. SSO's `unresolved_units` is printed as a table.
+  - `Unified\SsoClient\Rotations\RotationCalendar` is SSO's `App\Support\Rotations\RotationCalendar` copied
+    unchanged (D6: a block ends at start wall clock + duration as wall clock; `elapsed_minutes` is the real
+    length). `tests/Fixtures/rotations/golden.json` is SSO's file byte for byte and
+    `tests/Unit/Rotations/RotationCalendarTest.php` runs it: change both repos together or not at all.
+  - `Rotations\MirroredRotations` reads the mirror for one local company: `options()` (picker rows with
+    SSO's pattern summary), `rotation()`, `windows($company, $from, $to, $tz, unit|user|rotation)` (active
+    rotations and assignments only, SSO ids on every window) and `patternWindows()` (a rotation run with a
+    start day of the caller's own, Crew templates). It returns nothing while the entity is off.
+  - Trial purge: `rotations` is cleaned before `units`; sample rotations are deleted with their children.
 
 ## Release discipline
 

@@ -18,6 +18,7 @@ use Unified\SsoClient\MasterData\Medications\MedicationMirror;
 use Unified\SsoClient\MasterData\Personnel\PersonnelMirror;
 use Unified\SsoClient\MasterData\Procedures\ProcedureMirror;
 use Unified\SsoClient\MasterData\Qualifications\QualificationMirror;
+use Unified\SsoClient\MasterData\Rotations\RotationMirror;
 use Unified\SsoClient\MasterData\StateConfigurations\StateConfigurationMirror;
 use Unified\SsoClient\MasterData\Units\UnitMirror;
 use Unified\SsoClient\MasterData\Vehicles\VehicleMirror;
@@ -48,6 +49,7 @@ class MasterDataRegistry
         'devices' => DeviceMirror::class,
         'state_configurations' => StateConfigurationMirror::class,
         'units' => UnitMirror::class,
+        'rotations' => RotationMirror::class,
     ];
 
     public function __construct(private readonly Container $container) {}

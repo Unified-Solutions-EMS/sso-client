@@ -185,6 +185,7 @@ class PushMasterDataCommand extends MasterDataCommand
         $this->unresolvedVehicleTable($response['unresolved_vehicles'] ?? null);
         $this->unresolvedLocationTable($response['unresolved_locations'] ?? null);
         $this->unresolvedDivisionTable($response['unresolved_divisions'] ?? null);
+        $this->unresolvedUnitTable($response['unresolved_units'] ?? null);
         $this->partialTable($response['partial'] ?? null);
         $this->refusedTable($response['refused'] ?? null);
         $this->unmatchedTable($response['unmatched'] ?? null);
@@ -206,7 +207,7 @@ class PushMasterDataCommand extends MasterDataCommand
     {
         $extra = '';
 
-        foreach (['assignment_conflicts', 'invalid', 'filled', 'partial', 'unresolved_vehicles', 'unresolved_locations', 'unresolved_divisions', 'refused', 'in_review', 'unmatched'] as $key) {
+        foreach (['assignment_conflicts', 'invalid', 'filled', 'partial', 'unresolved_vehicles', 'unresolved_locations', 'unresolved_divisions', 'unresolved_units', 'refused', 'in_review', 'unmatched'] as $key) {
             if (is_array($response[$key] ?? null)) {
                 $extra .= sprintf(' %s=%d', $key, count($response[$key]));
             }
@@ -330,6 +331,26 @@ class PushMasterDataCommand extends MasterDataCommand
             (string) (is_array($row) ? ($row['local_id'] ?? '') : ''),
             (string) (is_array($row) ? ($row['name'] ?? '') : ''),
             (string) (is_array($row) ? ($row['vehicle_local_id'] ?? $row['vehicle_sso_id'] ?? '') : ''),
+            (string) (is_array($row) ? ($row['reason'] ?? '') : ''),
+        ], array_values($rows)));
+    }
+
+    /**
+     * Rotation assignments whose unit SSO could not use (this app's units
+     * were not pushed, or the unit is turned off in SSO). The rotation was
+     * saved without them; push units first and rerun, or assign in SSO.
+     */
+    private function unresolvedUnitTable(mixed $rows): void
+    {
+        if (! is_array($rows) || $rows === []) {
+            return;
+        }
+
+        $this->warn('SSO could not assign these rotations to their unit. Push units first and rerun, or assign the rotation in SSO:');
+        $this->table(['Local id', 'Rotation', 'Unit', 'Reason'], array_map(fn (mixed $row): array => [
+            (string) (is_array($row) ? ($row['local_id'] ?? '') : ''),
+            (string) (is_array($row) ? ($row['name'] ?? '') : ''),
+            (string) (is_array($row) ? ($row['unit_sso_id'] ?? $row['unit_local_id'] ?? '') : ''),
             (string) (is_array($row) ? ($row['reason'] ?? '') : ''),
         ], array_values($rows)));
     }

@@ -17,7 +17,7 @@ use Unified\SsoClient\Trial\TrialMirrorCleanupAction;
 interface TrialMirrorCleanupPolicy
 {
     /**
-     * @param  'units'|'devices'|'contacts'|'divisions'|'locations'|'vehicles'|'qualifications'  $entity
+     * @param  'rotations'|'units'|'devices'|'contacts'|'divisions'|'locations'|'vehicles'|'qualifications'  $entity
      * @param  object  $row  the local mirror row (already pinned to the company)
      */
     public function decide(string $entity, int $localCompanyId, object $row): TrialMirrorCleanupAction;

@@ -136,13 +136,25 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     county_fips}`, blanks filled from the trial's own city / state / zip).
   - **A seeder opts in with `Contracts\ReceivesTrialContext`** (`withTrialContext(?TrialContext $context):
     void`); `TrialDataSeederContract::seed($company, $userSsoIds, $adminSsoId)` is unchanged and seeders that
-    do not implement it run exactly as before. `AppTrialJobs::seed()` hands the context over on every path
-    (the webhook without mirrors, and `SeedTrialAfterMasterDataSync`, which carries the raw `master_data`
-    and builds the context when it runs) and always calls `withTrialContext()` before `seed()`, with null when
-    SSO sent none. Without `App\Jobs\RunTrialSeeder` it calls the seeder directly. With it,
-    `Trial\TrialContextRelay` puts the context in that job's queued payload (key `ssoTrialContext`, no other
-    job carries it) and, while a worker runs the job, hands it to any `ReceivesTrialContext` the container
-    resolves, so the app's job needs no change and keeps its own retry settings.
+    do not implement it run exactly as before. The context travels on every path (the webhook without
+    mirrors, and `SeedTrialAfterMasterDataSync`, which carries the raw `master_data` and builds the context
+    when it runs) into `AppTrialJobs::seed()`. Without `App\Jobs\RunTrialSeeder` it calls
+    `withTrialContext()` (null when SSO sent none), then `seed()`. With it, it dispatches
+    `RunTrialSeeder::dispatch($company, $userSsoIds, $adminSsoId, $context)`: a job whose constructor takes
+    three arguments silently drops the fourth (PHP ignores extra arguments), so nothing changes until the app
+    opts in. `TrialContext` holds only strings, ints and arrays, so it serializes with the job. **The opt-in in
+    the app's job** (plus `use Unified\SsoClient\Trial\TrialContext;` and
+    `use Unified\SsoClient\Contracts\ReceivesTrialContext;`):
+
+    ```php
+    // constructor: add a fourth parameter
+    public ?TrialContext $context = null,
+
+    // handle(), before $seeder->seed(...)
+    if ($seeder instanceof ReceivesTrialContext) {
+        $seeder->withTrialContext($this->context);
+    }
+    ```
   - **The rule for seeders: a seeder that needs a place or a name reads `TrialContext`, never a literal.**
     No hard-coded Columbus / Springfield, no local "Medic 1/2/3" list: cities, stations, vehicle and unit
     names, people come from the context. With an entity's mirror flag on, the seeder adopts the mirrored

@@ -15,6 +15,9 @@ namespace Unified\SsoClient\Trial;
  * dropped. User ids are SSO user ids (integers), not the SSO UUIDs the
  * seeder contract receives.
  *
+ * Holds only strings, integers and arrays of them, so it serializes as is
+ * on a queued job (`RunTrialSeeder`'s fourth constructor argument).
+ *
  * @phpstan-type Station array{number: int, name: string, street: ?string, city: ?string, state: ?string, zip: ?string}
  * @phpstan-type Vehicle array{unit_number: string, call_sign: ?string, type: ?string}
  * @phpstan-type Facility array{name: string, type: ?string}

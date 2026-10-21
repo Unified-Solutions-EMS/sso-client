@@ -13,7 +13,10 @@ use Unified\SsoClient\Contracts\ReceivesTrialContext;
  * `TrialDataPurger`.
  *
  * A seeder implementing {@see ReceivesTrialContext} is handed the trial
- * context first, on either path ({@see TrialContextRelay} for the job).
+ * context first. The job is dispatched with the context as a fourth
+ * argument: a `RunTrialSeeder` whose constructor takes three ignores it
+ * (PHP drops extra arguments), one with a fourth `?TrialContext $context`
+ * parameter passes it on to the seeder itself.
  */
 class AppTrialJobs
 {
@@ -25,8 +28,6 @@ class AppTrialJobs
 
     public const PURGER_JOB = 'App\\Jobs\\RunTrialPurger';
 
-    public function __construct(private readonly TrialContextRelay $relay) {}
-
     /**
      * Queued, so the app's job keeps its own retry settings.
      *
@@ -35,9 +36,7 @@ class AppTrialJobs
     public function seed(mixed $company, array $userSsoIds, string $adminSsoId, ?TrialContext $context = null): void
     {
         if (class_exists(self::SEEDER_JOB)) {
-            $this->relay->send($context, function () use ($company, $userSsoIds, $adminSsoId): void {
-                (self::SEEDER_JOB)::dispatch($company, $userSsoIds, $adminSsoId);
-            });
+            (self::SEEDER_JOB)::dispatch($company, $userSsoIds, $adminSsoId, $context);
 
             return;
         }

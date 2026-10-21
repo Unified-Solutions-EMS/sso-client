@@ -126,4 +126,11 @@ class TrialContextTest extends TestCase
         $this->assertEquals($context, TrialContext::fromArray($context->toArray()));
         $this->assertSame($context->toArray(), TrialContext::fromArray(json_decode(json_encode($context->toArray()), true))->toArray());
     }
+
+    public function test_serializes_as_is_for_a_queued_job(): void
+    {
+        $context = TrialContext::fromArray(self::fixture());
+
+        $this->assertEquals($context, unserialize(serialize($context)));
+    }
 }

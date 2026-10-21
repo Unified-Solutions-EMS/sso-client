@@ -4,11 +4,19 @@ declare(strict_types=1);
 
 namespace Unified\SsoClient\Trial;
 
+use Unified\SsoClient\Contracts\ReceivesTrialContext;
+
 /**
  * Runs the app's own trial seeder and purger the way the webhook always has:
  * through `App\Jobs\RunTrialSeeder` / `RunTrialPurger` when the app has
  * them, otherwise straight through `App\Services\TrialDataSeeder` /
  * `TrialDataPurger`.
+ *
+ * A seeder implementing {@see ReceivesTrialContext} is handed the trial
+ * context first. The job is dispatched with the context as a fourth
+ * argument: a `RunTrialSeeder` whose constructor takes three ignores it
+ * (PHP drops extra arguments), one with a fourth `?TrialContext $context`
+ * parameter passes it on to the seeder itself.
  */
 class AppTrialJobs
 {
@@ -25,15 +33,21 @@ class AppTrialJobs
      *
      * @param  array<string>  $userSsoIds
      */
-    public function seed(mixed $company, array $userSsoIds, string $adminSsoId): void
+    public function seed(mixed $company, array $userSsoIds, string $adminSsoId, ?TrialContext $context = null): void
     {
         if (class_exists(self::SEEDER_JOB)) {
-            (self::SEEDER_JOB)::dispatch($company, $userSsoIds, $adminSsoId);
+            (self::SEEDER_JOB)::dispatch($company, $userSsoIds, $adminSsoId, $context);
 
             return;
         }
 
-        app(self::SEEDER)->seed($company, $userSsoIds, $adminSsoId);
+        $seeder = app(self::SEEDER);
+
+        if ($seeder instanceof ReceivesTrialContext) {
+            $seeder->withTrialContext($context);
+        }
+
+        $seeder->seed($company, $userSsoIds, $adminSsoId);
     }
 
     public function purge(mixed $company, string $adminSsoId): void

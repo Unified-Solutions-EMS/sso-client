@@ -107,8 +107,9 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   SSO seeds the new trial's shared lists itself, then fans out. Payload contract (both keys are optional;
   without them the handlers do exactly what they did before, so an older SSO keeps working):
   - `trial.seed_data` adds `master_data: {ready: bool, counts: {divisions, locations, vehicles, facilities,
-    medications, procedures, qualifications: int}}` (`counts` = active rows in SSO's list for the company when
-    the fan-out was sent). When the key is present **and** this app has at least one mirror turned on and
+    medications, procedures, qualifications, agency, contacts, devices, state_configurations, ...: int},
+    context: {...}}` (`counts` = active rows in SSO's list for the company when the fan-out was sent, keyed by
+    registry entity, so a new entity needs no package code). When the key is present **and** this app has at least one mirror turned on and
     migrated, the handler queues `Trial\Jobs\SeedTrialAfterMasterDataSync` instead of the app's seeder (ack
     `master_data: "syncing"`). The job resyncs EVERY enabled, installed mirror for the company
     (`TrialMasterDataSync`, same `fetch` + `resync` as `sso:resync-master-data`), then checks each resynced
@@ -120,17 +121,51 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     its own retry settings) or call `App\Services\TrialDataSeeder`. It fails closed: the seeder never runs
     on lists SSO has not delivered. On a sync queue there is no retry; the throw makes the webhook answer
     500 and SSO records the delivery as failed.
+  - **`master_data.context` and `Trial\TrialContext`.** SSO sends where the trial is and what it seeded:
+    `{state ('NY'), state_fips ('36'), city, county_fips ('36001'), zip, timezone (IANA), agency_name, phone,
+    owner_user_id, fake_user_ids: [int], divisions: [name], stations: [{number, name, street, city, state,
+    zip}], vehicles: [{unit_number, call_sign, type (ALS|BLS|Engine|Command|Rescue)}], units: [name],
+    facilities: [{name, type}], people: [{user_id, first_name, last_name, licence, level}]}` (user ids are
+    SSO user ids, not the UUIDs the seeder contract receives; fixture `tests/Fixtures/trial_seed_context.php`).
+    `TrialContext::fromPayload($masterData): ?self` builds an immutable value object (null when the block is
+    absent; missing keys read as null / `[]`, unknown keys ignored, entries without their name dropped, FIPS
+    and ZIP keep leading zeros). Accessors `state()`, `stateFips()`, `city()`, `countyFips()`, `zip()`,
+    `timezone()`, `agencyName()`, `phone()`, `ownerUserId()`, `fakeUserIds()`, `divisions()`, `stations()`,
+    `vehicles()`, `units()`, `facilities()`, `people()`, plus `vehicleNames()`, `stationNames()`,
+    `station(int $number): ?array` and `address(int $stationNumber = 1)` (`{street, city, state, zip,
+    county_fips}`, blanks filled from the trial's own city / state / zip).
+  - **A seeder opts in with `Contracts\ReceivesTrialContext`** (`withTrialContext(?TrialContext $context):
+    void`); `TrialDataSeederContract::seed($company, $userSsoIds, $adminSsoId)` is unchanged and seeders that
+    do not implement it run exactly as before. `AppTrialJobs::seed()` hands the context over on every path
+    (the webhook without mirrors, and `SeedTrialAfterMasterDataSync`, which carries the raw `master_data`
+    and builds the context when it runs) and always calls `withTrialContext()` before `seed()`, with null when
+    SSO sent none. Without `App\Jobs\RunTrialSeeder` it calls the seeder directly. With it,
+    `Trial\TrialContextRelay` puts the context in that job's queued payload (key `ssoTrialContext`, no other
+    job carries it) and, while a worker runs the job, hands it to any `ReceivesTrialContext` the container
+    resolves, so the app's job needs no change and keeps its own retry settings.
+  - **The rule for seeders: a seeder that needs a place or a name reads `TrialContext`, never a literal.**
+    No hard-coded Columbus / Springfield, no local "Medic 1/2/3" list: cities, stations, vehicle and unit
+    names, people come from the context. With an entity's mirror flag on, the seeder adopts the mirrored
+    rows and never creates that list; with it off it creates its local rows with the context's names and
+    place, so a trial looks the same in every app either way. A null context (older SSO) falls back to the
+    app's own defaults.
   - `trial.purge_data` adds `master_data: {seeded: {divisions: [sso ids], locations: [...], vehicles: [...],
     qualifications: [...]}}` = the sample rows SSO actually hard-deleted (seeded and never edited). After
     `TrialPurgeVerifier` passes, a non-empty `seeded` queues `Trial\Jobs\PurgeTrialThenCleanMirrors` (ack
     `master_data: "cleaning"`; 3 tries, backoff 10/60 s): it runs the app's purger **in-process**
     (`dispatch_sync` of `App\Jobs\RunTrialPurger`, or `TrialDataPurger::purge()`), so extension rows are gone
     first, then `TrialMirrorCleaner` removes the mirrored rows. A purger that throws stops the job before the
-    cleaner. The cleaner touches only the sample lists, in the order devices, contacts, vehicles, locations,
-    divisions, qualifications (devices and contacts only if SSO ever lists seeded ones); only entities this app
-    mirrors (flag on, installed; others report `not_mirrored`); only
+    cleaner. The cleaner touches only the sample lists, in the order rotations, units, devices, contacts,
+    vehicles, locations, divisions, qualifications (`TrialMirrorCleaner::ENTITIES`: what points at a row goes
+    before the row); only entities this app mirrors (flag on, installed; others report `not_mirrored`); only
     rows linked to the listed SSO ids **in the one company the payload named**. Facilities, medications,
-    procedures, the agency information and state configurations are never deleted (design D1), even if listed. Vehicle crew-level / yearly-usage child rows go
+    procedures, the agency information and state configurations are never deleted (design D1), even if listed
+    (they are left out of the report). **Personnel is not cleaned either**: the fake users' mirrored
+    personnel rows are turned off (never deleted) when SSO sends `person.deactivated` or a complete personnel
+    resync no longer lists them, because charts, eCrew and shift members hold those row ids. `user.deleted`
+    deletes the local user; what happens to a personnel row then is the app's own foreign key. So after a
+    purge the fake users' personnel rows remain, inactive, unless the app's purger removes them with the
+    charts that name them. Vehicle crew-level / yearly-usage child rows go
     with their vehicle. Each row goes through `Trial\Contracts\TrialMirrorCleanupPolicy::decide()`
     (`Delete` / `Deactivate` / `Keep`; `beforeDelete()` runs inside the delete's transaction to remove
     app-owned child rows such as `dem_location_phones`). The bound `DefaultTrialMirrorCleanupPolicy` deletes,
@@ -795,8 +830,10 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     standard table for an app with none, else add the link column, `is_active` (not for the agency),
     `sort_order` (not for the agency), `sso_updated_at`, `sso_link_pending`, each skipped when present, and a
     unique `{table}_{link}_unique` per company (`Support\MirrorLinkColumns`). Bind the projection first.
-  - Trial: the seed sync resyncs these like any enabled mirror (and checks `counts` for them when SSO sends
-    any); the purge never deletes the agency or state configurations, and cleans listed contacts / devices.
+  - Trial: the seed sync resyncs these like any enabled mirror and checks SSO's `counts.agency|contacts|devices|
+    state_configurations` for the ones this app has on and migrated (`TrialDemographicsTest`); the purge never
+    deletes the agency or state configurations, and cleans listed contacts / devices (SSO lists only the
+    seeded ones; the owner's contact stays).
   - "Edit in Settings": `Settings\SettingEntity::{Agency, Contacts, Devices, StateConfigurations}` (values
     `agency`, `contacts`, `devices`, `state_configurations`) with `settingsPath()` `/system/agency`,
     `/system/contacts`, `/system/devices`, `/system/state-configuration` and `settingsUrl()` =

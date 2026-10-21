@@ -11,6 +11,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 use Unified\SsoClient\Trial\AppTrialJobs;
+use Unified\SsoClient\Trial\TrialContext;
 use Unified\SsoClient\Trial\TrialMasterDataSync;
 
 /**
@@ -34,7 +35,8 @@ class SeedTrialAfterMasterDataSync implements ShouldQueue
 
     /**
      * @param  array<string>  $userSsoIds
-     * @param  array<string, mixed>  $masterData  the payload's `master_data`
+     * @param  array<string, mixed>  $masterData  the payload's `master_data`, kept raw so the
+     *                                            trial context is built when the job runs
      */
     public function __construct(
         public mixed $company,
@@ -52,7 +54,7 @@ class SeedTrialAfterMasterDataSync implements ShouldQueue
             'mirrored' => $mirrored,
         ]);
 
-        $app->seed($this->company, $this->userSsoIds, $this->adminSsoId);
+        $app->seed($this->company, $this->userSsoIds, $this->adminSsoId, TrialContext::fromPayload($this->masterData));
     }
 
     public function failed(\Throwable $e): void

@@ -17,6 +17,7 @@ use Unified\SsoClient\Security\SecurityEvents;
 use Unified\SsoClient\Trial\AppTrialJobs;
 use Unified\SsoClient\Trial\Jobs\PurgeTrialThenCleanMirrors;
 use Unified\SsoClient\Trial\Jobs\SeedTrialAfterMasterDataSync;
+use Unified\SsoClient\Trial\TrialContext;
 use Unified\SsoClient\Trial\TrialMasterDataSync;
 use Unified\SsoClient\TrialPurgeVerifier;
 
@@ -508,7 +509,7 @@ class SsoWebhookController extends Controller
             return ['status' => 'ok', 'action' => 'trial.seed_data', 'master_data' => 'syncing'];
         }
 
-        app(AppTrialJobs::class)->seed($company, $userSsoIds, $adminSsoId);
+        app(AppTrialJobs::class)->seed($company, $userSsoIds, $adminSsoId, is_array($masterData) ? TrialContext::fromPayload($masterData) : null);
 
         return ['status' => 'ok', 'action' => 'trial.seed_data'];
     }

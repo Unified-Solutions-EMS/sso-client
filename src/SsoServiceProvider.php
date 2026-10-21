@@ -40,6 +40,7 @@ use Unified\SsoClient\Security\Listeners\RecordAuthenticationSecurityEvents;
 use Unified\SsoClient\Security\SecurityEvents;
 use Unified\SsoClient\Trial\Contracts\TrialMirrorCleanupPolicy;
 use Unified\SsoClient\Trial\DefaultTrialMirrorCleanupPolicy;
+use Unified\SsoClient\Trial\TrialContextRelay;
 
 class SsoServiceProvider extends ServiceProvider
 {
@@ -99,6 +100,8 @@ class SsoServiceProvider extends ServiceProvider
         // Trial purge: what happens to a mirrored sample row SSO deleted.
         // Apps bind their own policy to veto deletes the database cannot see.
         $this->app->bindIf(TrialMirrorCleanupPolicy::class, DefaultTrialMirrorCleanupPolicy::class);
+
+        $this->app->singleton(TrialContextRelay::class);
 
         // Metrics — apps can override by binding their own
         // MetricContextResolver implementation in AppServiceProvider.
@@ -192,6 +195,8 @@ class SsoServiceProvider extends ServiceProvider
         if (config('security.listen_auth_events', true)) {
             Event::subscribe(RecordAuthenticationSecurityEvents::class);
         }
+
+        $this->app->make(TrialContextRelay::class)->register($this->app, $this->app->make('events'));
 
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule): void {
             $this->scheduleMasterDataResync($schedule);

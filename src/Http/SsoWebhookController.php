@@ -263,7 +263,7 @@ class SsoWebhookController extends Controller
         $company = $this->findCompanyBySsoId($companyData['id'] ?? null, $companyData['legacy_tenant_id'] ?? null);
 
         if ($user && $company) {
-            $this->syncRoles($user, $company, $roles);
+            $this->applyRoleChange($request, $user, $company, $roles);
         }
 
         return ['status' => 'ok', 'action' => 'user.company_role_changed'];
@@ -292,7 +292,7 @@ class SsoWebhookController extends Controller
         $company = $this->findCompanyBySsoId($companyData['id'] ?? null, $companyData['legacy_tenant_id'] ?? null);
 
         if ($user && $company) {
-            $this->syncRoles($user, $company, $roles);
+            $this->applyRoleChange($request, $user, $company, $roles);
         }
 
         return ['status' => 'ok', 'action' => 'user.app_role_changed'];
@@ -703,6 +703,38 @@ class SsoWebhookController extends Controller
                 'updated_at' => now(),
             ]);
         }
+    }
+
+    /**
+     * SSO says "removed" with an explicit empty role list (it sends
+     * `user.app_role_changed` with `roles: []` to every app when a person is
+     * taken out of a company). That must detach the membership, not fall
+     * through to the User default that a payload with no roles key gets.
+     */
+    protected function applyRoleChange(Request $request, $user, $company, array $roles): void
+    {
+        $explicitlyNone = $request->has('roles') && array_values(array_filter($roles)) === [];
+
+        if ($explicitlyNone) {
+            $this->detachCompanyMembership($user, $company);
+
+            return;
+        }
+
+        $this->syncRoles($user, $company, $roles);
+    }
+
+    protected function detachCompanyMembership($user, $company): void
+    {
+        DB::table('company_user_roles')
+            ->where('company_id', $company->id)
+            ->where('user_id', $user->id)
+            ->delete();
+
+        DB::table('company_user')
+            ->where('company_id', $company->id)
+            ->where('user_id', $user->id)
+            ->delete();
     }
 
     protected function syncRoles($user, $company, array $roles): void

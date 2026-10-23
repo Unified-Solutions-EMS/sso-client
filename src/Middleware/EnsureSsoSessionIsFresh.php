@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Log;
 use Unified\SsoClient\SsoClient;
 use Unified\SsoClient\SsoSessionState;
 use Unified\SsoClient\SsoSingleFlight;
+use Unified\SsoClient\SsoUserSynchronizer;
 
 class EnsureSsoSessionIsFresh
 {
@@ -74,6 +75,15 @@ class EnsureSsoSessionIsFresh
                     ]);
 
                     return $this->handleUnauthenticated($request);
+                }
+
+                if (SsoUserSynchronizer::deniesAppAccess($payload)) {
+                    Log::info('SSO session: access to this app was removed in every agency, ending the session', [
+                        'sso_user_id' => $returnedId,
+                        'app_slug' => config('sso.app_slug'),
+                    ]);
+
+                    return $this->handleNoAccess($request);
                 }
 
                 $this->sessionState->markTokenValidated();
@@ -147,6 +157,29 @@ class EnsureSsoSessionIsFresh
         );
 
         return true;
+    }
+
+    /**
+     * The person's access to this app was taken away while they were signed
+     * in. End the session here and show the same page the sign-in shows,
+     * rather than sending them back through SSO, which would answer at once
+     * and land them on that page anyway.
+     */
+    protected function handleNoAccess(Request $request)
+    {
+        $this->sessionState->forget();
+        Auth::logout();
+        $request->session()->invalidate();
+        $request->session()->regenerateToken();
+
+        if ($request->expectsJson()) {
+            return response()->json(['message' => 'You no longer have access to this app.'], 403);
+        }
+
+        return response()->view('sso::no-access', [
+            'appName' => (string) config('app.name'),
+            'dashboardUrl' => rtrim((string) config('sso.base_url'), '/').'/dashboard',
+        ], 403);
     }
 
     protected function handleUnauthenticated(Request $request)

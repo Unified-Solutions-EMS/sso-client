@@ -66,7 +66,7 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
     public function synchronize(array $payload): array
     {
         $userData = $payload['user'] ?? [];
-        $companies = $payload['companies'] ?? [];
+        $companies = self::companiesWithAppAccess($payload['companies'] ?? []);
         $selectedCompany = $payload['selectedCompany'] ?? null;
 
         $ssoUserId = $userData['id'] ?? null;
@@ -117,6 +117,48 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
 
             return [$user->fresh(), $selectedLocalCompany];
         });
+    }
+
+    /**
+     * The companies in an /api/user payload where the user may use THIS app.
+     *
+     * SSO answers for the app that asked: `appRole` is this app's role name in
+     * the company, or null when the agency set the person to "No access" for
+     * this app. A company with `appRole` null and no roles is dropped, so the
+     * sign-in neither attaches nor keeps that membership (the prune removes an
+     * existing one) and never grants the default User role. A payload from an
+     * SSO that does not send `appRole` keeps every company, as before.
+     *
+     * @param  array<int, mixed>  $companies
+     * @return array<int, array<string, mixed>>
+     */
+    public static function companiesWithAppAccess(array $companies): array
+    {
+        return array_values(array_filter($companies, static function (mixed $company): bool {
+            if (! is_array($company)) {
+                return false;
+            }
+
+            if (! array_key_exists('appRole', $company) || $company['appRole'] !== null) {
+                return true;
+            }
+
+            return array_filter((array) ($company['roles'] ?? [])) !== [];
+        }));
+    }
+
+    /**
+     * True when SSO names at least one company for the user but none of them
+     * gives the user any role in this app: the person exists and belongs to an
+     * agency, and has been set to "No access" for this app everywhere.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    public static function deniesAppAccess(array $payload): bool
+    {
+        $companies = (array) ($payload['companies'] ?? []);
+
+        return $companies !== [] && self::companiesWithAppAccess($companies) === [];
     }
 
     protected function resolveDisplayName(array $userData): string

@@ -11,6 +11,7 @@ use Unified\SsoClient\Exceptions\SsoClientException;
 use Unified\SsoClient\SsoClient;
 use Unified\SsoClient\SsoSessionState;
 use Unified\SsoClient\SsoSingleFlight;
+use Unified\SsoClient\SsoUserSynchronizer;
 
 class SsoCallbackController extends Controller
 {
@@ -100,6 +101,10 @@ class SsoCallbackController extends Controller
             // Fetch user profile from SSO
             $payload = $this->ssoClient->fetchUser($tokens['access_token']);
 
+            if (SsoUserSynchronizer::deniesAppAccess($payload)) {
+                return $this->refuseNoAccess($request, $payload);
+            }
+
             // Synchronize user/company/roles into local database
             [$user, $company] = $this->synchronizer->synchronize($payload);
 
@@ -186,6 +191,39 @@ class SsoCallbackController extends Controller
 
             return $this->failCallback('Sign in failed. Please try again.', $e);
         }
+    }
+
+    /**
+     * The person signed in to SSO but has "No access" to this app in every
+     * agency they belong to. Their memberships here are removed (the same sync
+     * a sign-in runs, which drops companies without access), any session this
+     * browser already holds for this app is ended, and a plain page says why.
+     * Not a failure: it is not counted toward the loop breaker and does not
+     * redirect, so SSO cannot bounce the browser straight back here.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    protected function refuseNoAccess(Request $request, array $payload)
+    {
+        $this->synchronizer->synchronize($payload);
+
+        if (Auth::check()) {
+            Auth::logout();
+        }
+        $this->sessionState->forget();
+        $request->session()->invalidate();
+        $request->session()->regenerateToken();
+        $this->sessionState->clearCallbackFailures();
+
+        Log::info('SSO callback: user has no access to this app in any of their agencies', [
+            'sso_user_id' => $payload['user']['id'] ?? null,
+            'app_slug' => config('sso.app_slug'),
+        ]);
+
+        return response()->view('sso::no-access', [
+            'appName' => (string) config('app.name'),
+            'dashboardUrl' => rtrim((string) config('sso.base_url'), '/').'/dashboard',
+        ], 403);
     }
 
     /**

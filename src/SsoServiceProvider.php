@@ -180,11 +180,14 @@ class SsoServiceProvider extends ServiceProvider
             'devices' => '2026_10_14_100200_create_or_extend_devices_mirror.php',
             'state-configurations' => '2026_10_14_100300_create_or_extend_state_configurations_mirror.php',
             'units' => '2026_10_16_100000_create_or_extend_units_mirror.php',
-            'rotations' => '2026_10_17_100000_create_or_extend_rotations_mirror.php',
-        ] as $tag => $file) {
-            $this->publishesMigrations([
+            'rotations' => [
+                '2026_10_17_100000_create_or_extend_rotations_mirror.php',
+                '2026_10_27_100000_add_color_and_calendar_to_rotations_mirror.php',
+            ],
+        ] as $tag => $files) {
+            $this->publishesMigrations(collect((array) $files)->mapWithKeys(fn (string $file): array => [
                 __DIR__.'/../database/master-data/'.$file => database_path('migrations/'.$file),
-            ], 'sso-master-data-'.$tag);
+            ])->all(), 'sso-master-data-'.$tag);
         }
 
         // Auto-record failed logins / lockouts / password resets as

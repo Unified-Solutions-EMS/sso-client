@@ -2,9 +2,11 @@
 
 namespace Unified\SsoClient\Tests\Feature\MasterData\Rotations;
 
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Testing\TestResponse;
 use Unified\SsoClient\MasterData\MasterDataRegistry;
 use Unified\SsoClient\MasterData\Rotations\RotationMirror;
@@ -264,6 +266,109 @@ class RotationMirrorTest extends MasterDataTestCase
         $this->assertNull($this->mirroredRotation($this->companyId, 301));
         $this->assertNotNull($this->mirroredRotation($this->companyId, 302));
         $this->assertSame(0, DB::table('sso_rotation_blocks')->count() + DB::table('sso_rotation_assignments')->count());
+    }
+
+    public function test_color_and_show_on_calendar_are_mirrored_and_a_change_to_either_is_an_update(): void
+    {
+        $this->deliver('rotation.created', $this->rotation(301, '24/48 Blue', ['color' => '#e60b0b', 'show_on_calendar' => true]))
+            ->assertJson(['result' => 'created']);
+
+        $row = $this->mirroredRotation($this->companyId, 301);
+        $this->assertSame(['#e60b0b', true], [$row->color, (bool) $row->show_on_calendar]);
+
+        $this->deliver('rotation.updated', $this->rotation(301, '24/48 Blue', ['color' => '#e60b0b', 'show_on_calendar' => true]))
+            ->assertJson(['result' => 'unchanged']);
+
+        $this->deliver('rotation.updated', $this->rotation(301, '24/48 Blue', ['color' => '#1d4ed8', 'show_on_calendar' => true]))
+            ->assertJson(['result' => 'updated']);
+        $this->assertSame('#1d4ed8', $this->mirroredRotation($this->companyId, 301)->color);
+
+        $this->deliver('rotation.updated', $this->rotation(301, '24/48 Blue', ['color' => '#1d4ed8', 'show_on_calendar' => false]))
+            ->assertJson(['result' => 'updated']);
+        $this->assertFalse((bool) $this->mirroredRotation($this->companyId, 301)->show_on_calendar);
+    }
+
+    public function test_a_missing_flag_is_off_and_a_color_that_is_not_a_hex_is_dropped(): void
+    {
+        $this->deliver('rotation.created', $this->rotation(301, '24/48 Blue'))->assertJson(['result' => 'created']);
+        $this->deliver('rotation.created', $this->rotation(302, 'Kelly', ['color' => 'red', 'assignments' => []]))->assertJson(['result' => 'created']);
+
+        $this->assertSame([null, false], [$this->mirroredRotation($this->companyId, 301)->color, (bool) $this->mirroredRotation($this->companyId, 301)->show_on_calendar]);
+        $this->assertNull($this->mirroredRotation($this->companyId, 302)->color);
+    }
+
+    public function test_resync_carries_color_and_show_on_calendar(): void
+    {
+        Http::fake(['sso.test/api/internal/companies/70/rotations' => Http::sequence()
+            ->push(['company' => ['id' => 70, 'timezone' => 'America/New_York'], 'rotations' => [$this->rotation(301, '24/48 Blue', ['color' => '#e60b0b', 'show_on_calendar' => true])]])
+            ->push(['company' => ['id' => 70, 'timezone' => 'America/New_York'], 'rotations' => [$this->rotation(301, '24/48 Blue', ['color' => '#16a34a', 'show_on_calendar' => true])]]),
+        ]);
+
+        $this->artisan('sso:resync-master-data', ['entity' => 'rotations'])
+            ->expectsOutputToContain('created=1 updated=0')
+            ->assertSuccessful();
+        $this->assertSame(['#e60b0b', true], [$this->mirroredRotation($this->companyId, 301)->color, (bool) $this->mirroredRotation($this->companyId, 301)->show_on_calendar]);
+
+        $this->artisan('sso:resync-master-data', ['entity' => 'rotations'])
+            ->expectsOutputToContain('created=0 updated=1')
+            ->assertSuccessful();
+        $this->assertSame('#16a34a', $this->mirroredRotation($this->companyId, 301)->color);
+    }
+
+    public function test_the_reader_returns_color_and_show_on_calendar(): void
+    {
+        $this->deliver('rotation.created', $this->rotation(301, '24/48 Blue', ['color' => '#e60b0b', 'show_on_calendar' => true]));
+        $this->deliver('rotation.created', $this->rotation(302, 'Kelly', ['assignments' => []]));
+
+        $reader = app(MirroredRotations::class);
+
+        $this->assertSame(
+            [['24/48 Blue', '#e60b0b', true], ['Kelly', null, false]],
+            array_map(fn (array $option): array => [$option['name'], $option['color'], $option['show_on_calendar']], $reader->options($this->companyId)),
+        );
+
+        $rotation = $reader->rotation($this->companyId, 301);
+        $this->assertSame(['#e60b0b', true], [$rotation['color'], $rotation['show_on_calendar']]);
+        $this->assertSame([null, false], [$reader->rotation($this->companyId, 302)['color'], $reader->rotation($this->companyId, 302)['show_on_calendar']]);
+    }
+
+    public function test_the_import_payload_passes_color_and_show_on_calendar_through_only_when_given(): void
+    {
+        $this->app->instance(RotationProjection::class, new class extends StandardRotationProjection
+        {
+            public function pushRotations(int $localCompanyId): array
+            {
+                return [
+                    ['local_id' => 12, 'name' => 'A shift', 'cycle_days' => 3, 'anchor_date' => '2026-01-05', 'color' => '#e60b0b', 'show_on_calendar' => true, 'blocks' => []],
+                    ['local_id' => 13, 'name' => 'B shift', 'cycle_days' => 3, 'anchor_date' => '2026-01-06', 'blocks' => []],
+                ];
+            }
+        });
+
+        $mirror = app(MasterDataRegistry::class)->mirror('rotations');
+        $this->assertInstanceOf(RotationMirror::class, $mirror);
+
+        $rotations = $mirror->buildImportPayload($this->companyId)['payload']['rotations'];
+
+        $this->assertSame(['#e60b0b', true], [$rotations[0]['color'], $rotations[0]['show_on_calendar']]);
+        $this->assertArrayNotHasKey('color', $rotations[1]);
+        $this->assertArrayNotHasKey('show_on_calendar', $rotations[1]);
+    }
+
+    public function test_the_upgrade_stub_adds_the_columns_to_a_table_published_before_them(): void
+    {
+        Schema::table('sso_rotations', function (Blueprint $table): void {
+            $table->dropColumn(['color', 'show_on_calendar']);
+        });
+        DB::table('sso_rotations')->insert(['company_id' => $this->companyId, 'name' => 'Existing', 'cycle_days' => 1, 'sso_rotation_id' => 399]);
+
+        $stub = require __DIR__.'/../../../../database/master-data/2026_10_27_100000_add_color_and_calendar_to_rotations_mirror.php';
+        $stub->up();
+        $stub->up();
+
+        $this->assertTrue(Schema::hasColumns('sso_rotations', ['color', 'show_on_calendar']));
+        $row = $this->mirroredRotation($this->companyId, 399);
+        $this->assertSame([null, false], [$row->color, (bool) $row->show_on_calendar]);
     }
 
     public function test_the_registry_settings_link_and_publish_tag(): void

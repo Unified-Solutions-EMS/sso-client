@@ -51,6 +51,27 @@ class StandardRotationProjection extends StandardRecordProjection implements Rot
             'anchor_date' => 'anchor_date',
             'pattern' => 'pattern',
             'source_app' => 'source_app',
+            'color' => 'color',
+            'show_on_calendar' => 'show_on_calendar',
         ];
+    }
+
+    protected function booleanColumns(): array
+    {
+        return ['show_on_calendar'];
+    }
+
+    /**
+     * `show_on_calendar` is NOT NULL: an SSO that does not send it yet
+     * means off. A color that is not a `#rrggbb` hex is dropped rather than
+     * cut to fit the column.
+     */
+    protected function toStored(string $column, mixed $value): mixed
+    {
+        return match ($column) {
+            'show_on_calendar' => (bool) $value,
+            'color' => is_string($value) && preg_match('/^#[0-9a-fA-F]{6}$/', $value) === 1 ? $value : null,
+            default => parent::toStored($column, $value),
+        };
     }
 }

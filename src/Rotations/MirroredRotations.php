@@ -40,9 +40,12 @@ class MirroredRotations
 
     /**
      * The company's rotations for a picker: `[{sso_id, name, pattern,
-     * cycle_days, anchor_date, is_active}]`, by sort order then name.
+     * cycle_days, anchor_date, is_active, color, show_on_calendar}]`, by
+     * sort order then name. `color` is SSO's hex (`#e60b0b`) or null;
+     * `show_on_calendar` says whether the agency wants the rotation's
+     * on-duty days tinted on the app's calendars.
      *
-     * @return list<array{sso_id: int, name: string, pattern: string|null, cycle_days: int, anchor_date: string, is_active: bool}>
+     * @return list<array{sso_id: int, name: string, pattern: string|null, cycle_days: int, anchor_date: string, is_active: bool, color: string|null, show_on_calendar: bool}>
      */
     public function options(int $localCompanyId, bool $activeOnly = true): array
     {
@@ -63,6 +66,8 @@ class MirroredRotations
                 'cycle_days' => (int) $row->cycle_days,
                 'anchor_date' => self::date($row->anchor_date),
                 'is_active' => (bool) $row->is_active,
+                'color' => $row->color ?? null,
+                'show_on_calendar' => (bool) ($row->show_on_calendar ?? false),
             ])
             ->values()
             ->all();
@@ -72,7 +77,7 @@ class MirroredRotations
      * One rotation of the company in RotationCalendar's shape plus its name
      * and assignments, or null (unknown, another company's, not mirrored).
      *
-     * @return array{sso_id: int, name: string, pattern: string|null, is_active: bool, cycle_days: int, anchor_date: string, blocks: list<array{day_index: int, start_time: string, duration_minutes: int, label: string|null}>, assignments: list<array{sso_id: int, assignable_type: string, unit_id: int|null, user_id: int|null, name: string|null, start_day_index: int, starts_on: string|null, ends_on: string|null, is_active: bool}>}|null
+     * @return array{sso_id: int, name: string, pattern: string|null, is_active: bool, cycle_days: int, anchor_date: string, color: string|null, show_on_calendar: bool, blocks: list<array{day_index: int, start_time: string, duration_minutes: int, label: string|null}>, assignments: list<array{sso_id: int, assignable_type: string, unit_id: int|null, user_id: int|null, name: string|null, start_day_index: int, starts_on: string|null, ends_on: string|null, is_active: bool}>}|null
      */
     public function rotation(int $localCompanyId, int $ssoRotationId): ?array
     {
@@ -186,6 +191,8 @@ class MirroredRotations
             'is_active' => (bool) $row->is_active,
             'cycle_days' => max(1, (int) $row->cycle_days),
             'anchor_date' => self::date($row->anchor_date),
+            'color' => $row->color ?? null,
+            'show_on_calendar' => (bool) ($row->show_on_calendar ?? false),
             'blocks' => ($blocks->get($row->id) ?? collect())->map(fn (object $block): array => [
                 'day_index' => (int) $block->day_index,
                 'start_time' => substr((string) $block->start_time, 0, 5),

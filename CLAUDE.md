@@ -927,6 +927,17 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     rotations and assignments only, SSO ids on every window) and `patternWindows()` (a rotation run with a
     start day of the caller's own, Crew templates). It returns nothing while the entity is off.
   - Trial purge: `rotations` is cleaned before `units`; sample rotations are deleted with their children.
+  - Calendar tint (UNI-1226): the contract carries `color` (`#rrggbb` or null; anything else is stored as
+    null) and `show_on_calendar` (bool, absent = false). The standard projection maps both onto
+    `sso_rotations`, so a change to either reports `updated`; `MirroredRotations::options()` / `rotation()`
+    return them and a push row may carry them (Crew Scheduling reads them to tint its calendars). Fresh
+    installs get the columns from the create stub; an app that already published
+    `create_or_extend_rotations_mirror` (Crew, CAD, Fire) picks up the separate guarded stub
+    `2026_10_27_100000_add_color_and_calendar_to_rotations_mirror` with
+    `php artisan vendor:publish --tag=sso-master-data-rotations` then `php artisan migrate` (publishing
+    skips files already present, so only the new stub lands), then `sso:resync-master-data rotations` to
+    fill the new columns. A new rotation column always ships as a new stub under the same tag; never edit
+    the published create stub expecting apps to see it.
 
 ## Release discipline
 

@@ -37,6 +37,8 @@ return new class extends Migration
                 $blueprint->date('anchor_date')->nullable();
                 $blueprint->string('pattern')->nullable();
                 $blueprint->string('source_app', 50)->nullable();
+                $blueprint->string('color', 7)->nullable();
+                $blueprint->boolean('show_on_calendar')->default(false);
                 $blueprint->timestamps();
             });
         }

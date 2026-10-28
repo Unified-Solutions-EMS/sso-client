@@ -2,6 +2,7 @@
 
 namespace Unified\SsoClient\Tests\Feature;
 
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Support\Facades\DB;
@@ -50,6 +51,7 @@ class NoAppAccessTest extends TestCase
 
         Schema::table('users', function (Blueprint $table) {
             $table->rememberToken();
+            $table->json('staff_roles')->nullable();
         });
 
         Schema::create('sso_session_actions', function (Blueprint $table) {
@@ -181,6 +183,64 @@ class NoAppAccessTest extends TestCase
         $this->assertAuthenticatedAs($user);
     }
 
+    public function test_staff_are_never_refused_and_keep_every_agency(): void
+    {
+        $staff = ['companies' => [$this->company(20, null)], 'staffRoles' => ['global-admin']];
+
+        $this->assertFalse(SsoUserSynchronizer::deniesAppAccess($staff));
+        $this->assertTrue(SsoUserSynchronizer::isStaff($staff));
+        $this->assertFalse(SsoUserSynchronizer::isStaff(['staffRoles' => []]));
+        $this->assertFalse(SsoUserSynchronizer::isStaff(['staffRoles' => [null, '']]));
+    }
+
+    public function test_staff_sign_in_with_no_app_role_anywhere_and_land_in_their_agency(): void
+    {
+        $client = Mockery::mock(SsoClient::class);
+        $client->shouldReceive('exchangeCode')->andReturn(['access_token' => 'a', 'refresh_token' => 'r', 'expires_in' => 3600]);
+        $client->shouldReceive('fetchUser')->andReturn([
+            'user' => ['id' => 298, 'email' => 'steve@unified.test', 'displayName' => 'Steve Wilson'],
+            'companies' => [$this->company(2, null)],
+            'selectedCompany' => ['id' => 2],
+            'staffRoles' => ['global-admin'],
+        ]);
+        $this->app->instance(SsoClient::class, $client);
+        $this->app->bind(SsoUserSynchronizerContract::class, AccessTestSynchronizer::class);
+
+        $response = $this->withSession([
+            SsoSessionState::KEY_OAUTH_STATE => 'state-abc',
+            SsoSessionState::KEY_CODE_VERIFIER => 'verifier-xyz',
+        ])->get('/auth/sso/callback?state=state-abc&code=auth-code');
+
+        $response->assertRedirect('/dashboard');
+        $user = AccessTestUser::where('sso_id', '298')->firstOrFail();
+        $this->assertAuthenticatedAs($user);
+        $company = Company::where('sso_company_id', '2')->firstOrFail();
+        $this->assertSame([$company->id], DB::table('company_user')->where('user_id', $user->id)->pluck('company_id')->all());
+        $this->assertSame(['global-admin'], json_decode((string) DB::table('users')->where('id', $user->id)->value('staff_roles'), true));
+    }
+
+    public function test_signed_in_staff_with_no_app_role_anywhere_stay_signed_in(): void
+    {
+        $user = AccessTestUser::create(['name' => 'Steve Wilson', 'email' => 'steve@unified.test', 'sso_id' => '298']);
+
+        Http::fake([
+            'sso.example.test/api/user' => Http::response([
+                'user' => ['id' => 298, 'email' => 'steve@unified.test'],
+                'companies' => [$this->company(2, null)],
+                'staffRoles' => ['global-admin'],
+            ]),
+        ]);
+
+        $this->actingAs($user)->withSession([
+            SsoSessionState::KEY_ACCESS_TOKEN => 'live-access',
+            SsoSessionState::KEY_REFRESH_TOKEN => 'live-refresh',
+            SsoSessionState::KEY_TOKEN_EXPIRES_AT => now()->addHour()->timestamp,
+            SsoSessionState::KEY_SSO_USER_ID => '298',
+        ])->get('/board')->assertOk()->assertSee('board');
+
+        $this->assertAuthenticatedAs($user);
+    }
+
     protected function tearDown(): void
     {
         Mockery::close();
@@ -193,4 +253,23 @@ class AccessTestUser extends Authenticatable
     protected $table = 'users';
 
     protected $guarded = [];
+
+    /**
+     * @return BelongsToMany<Company, $this>
+     */
+    public function companies(): BelongsToMany
+    {
+        return $this->belongsToMany(Company::class, 'company_user', 'user_id', 'company_id')->withTimestamps();
+    }
+}
+
+/**
+ * The stub synchronizer, but signing in a user the session guard accepts.
+ */
+class AccessTestSynchronizer extends StubSynchronizer
+{
+    protected function getUserModelClass(): string
+    {
+        return AccessTestUser::class;
+    }
 }

@@ -66,7 +66,9 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
     public function synchronize(array $payload): array
     {
         $userData = $payload['user'] ?? [];
-        $companies = self::companiesWithAppAccess($payload['companies'] ?? []);
+        $companies = self::isStaff($payload)
+            ? array_values(array_filter((array) ($payload['companies'] ?? []), 'is_array'))
+            : self::companiesWithAppAccess($payload['companies'] ?? []);
         $selectedCompany = $payload['selectedCompany'] ?? null;
 
         $ssoUserId = $userData['id'] ?? null;
@@ -150,15 +152,33 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
     /**
      * True when SSO names at least one company for the user but none of them
      * gives the user any role in this app: the person exists and belongs to an
-     * agency, and has been set to "No access" for this app everywhere.
+     * agency, and has been set to "No access" for this app everywhere. Never
+     * true for Unified staff (see isStaff()).
      *
      * @param  array<string, mixed>  $payload
      */
     public static function deniesAppAccess(array $payload): bool
     {
+        if (self::isStaff($payload)) {
+            return false;
+        }
+
         $companies = (array) ($payload['companies'] ?? []);
 
         return $companies !== [] && self::companiesWithAppAccess($companies) === [];
+    }
+
+    /**
+     * Unified staff hold a platform staff role in SSO and reach every app's
+     * admin surface on that alone; agencies never grant them an app role
+     * (staff-only apps such as Public Website have no agency enablement at
+     * all), so the "No access" refusal and the company filter do not apply.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    public static function isStaff(array $payload): bool
+    {
+        return array_filter((array) ($payload['staffRoles'] ?? [])) !== [];
     }
 
     protected function resolveDisplayName(array $userData): string

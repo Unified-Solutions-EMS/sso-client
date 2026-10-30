@@ -39,6 +39,14 @@ const COPY = {
 
 const OPEN_KEY = 'unified-assistant:open';
 
+/**
+ * SSO's review plan is an ai-core proposal: 'drafted' and 'refined' are still
+ * open for the admin; 'approved' / 'executing' are being applied; 'rejected'
+ * is set aside. The widget's own optimistic words are kept alongside.
+ */
+const OPEN_PLAN_STATUSES = ['drafted', 'refined', 'proposed', 'draft', 'pending'];
+const SET_ASIDE_PLAN_STATUSES = ['rejected', 'set_aside'];
+
 /** Host pages listen for this to refetch what the assistant just changed. */
 const ACTION_EVENT = 'unified-assistant:action';
 
@@ -402,7 +410,7 @@ class AssistantWidget {
 
     private renderReview(plan: ReviewPlan): HTMLElement {
         const card = h('div', { class: 'card review', 'data-plan': plan.id });
-        const resolved = plan.status !== 'proposed' && plan.status !== 'draft' && plan.status !== 'pending';
+        const resolved = !OPEN_PLAN_STATUSES.includes(plan.status);
 
         card.append(h('div', { class: 'card-title' }, COPY.reviewTitle), h('div', { class: 'hint' }, COPY.reviewHint));
 
@@ -434,7 +442,7 @@ class AssistantWidget {
             card.append(h('div', { class: 'row-actions' }, approve, setAside));
         } else {
             card.classList.add('done');
-            card.append(h('div', { class: 'hint' }, plan.status === 'set_aside' ? COPY.setAsideDone : COPY.applying));
+            card.append(h('div', { class: 'hint' }, SET_ASIDE_PLAN_STATUSES.includes(plan.status) ? COPY.setAsideDone : COPY.applying));
         }
 
         return card;

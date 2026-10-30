@@ -7,6 +7,7 @@ use Illuminate\Http\Response;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Unified\SsoClient\Assistant\AssistantBundle;
 
 /**
  * Serves the widget bundle from the app's own origin so no CDN or Vite step
@@ -20,8 +21,6 @@ use Illuminate\Support\Facades\Http;
  */
 class AssistantWidgetController extends Controller
 {
-    private const CACHE_KEY = 'sso-client.assistant.widget';
-
     private const FETCH_TIMEOUT_SECONDS = 5;
 
     private const FALLBACK_CACHE_SECONDS = 60;
@@ -48,11 +47,11 @@ class AssistantWidgetController extends Controller
      */
     private function bundle(): array
     {
-        if ($this->servesLocalBundle()) {
-            return $this->local();
+        if (AssistantBundle::servesLocal()) {
+            return AssistantBundle::local();
         }
 
-        $cached = Cache::get(self::CACHE_KEY);
+        $cached = Cache::get(AssistantBundle::CACHE_KEY);
 
         if (is_array($cached)) {
             return $cached;
@@ -61,21 +60,15 @@ class AssistantWidgetController extends Controller
         $fetched = $this->fromSso();
 
         if ($fetched !== null) {
-            Cache::put(self::CACHE_KEY, $fetched, (int) config('sso.assistant.bundle_cache_seconds', 3600));
+            Cache::put(AssistantBundle::CACHE_KEY, $fetched, (int) config('sso.assistant.bundle_cache_seconds', 3600));
 
             return $fetched;
         }
 
-        $local = $this->local();
-        Cache::put(self::CACHE_KEY, $local, self::FALLBACK_CACHE_SECONDS);
+        $local = AssistantBundle::local();
+        Cache::put(AssistantBundle::CACHE_KEY, $local, self::FALLBACK_CACHE_SECONDS);
 
         return $local;
-    }
-
-    private function servesLocalBundle(): bool
-    {
-        return config('sso.assistant.bundle_source', 'sso') === 'local'
-            || config('sso.assistant.proxy', true) === false;
     }
 
     /**
@@ -100,21 +93,6 @@ class AssistantWidgetController extends Controller
         $body = $response->body();
         $etag = trim((string) $response->header('ETag'));
 
-        return ['body' => $body, 'etag' => $etag !== '' ? $etag : $this->etagFor($body)];
-    }
-
-    /**
-     * @return array{body: string, etag: string}
-     */
-    private function local(): array
-    {
-        $body = (string) file_get_contents(__DIR__.'/../../../dist/assistant.js');
-
-        return ['body' => $body, 'etag' => $this->etagFor($body)];
-    }
-
-    private function etagFor(string $body): string
-    {
-        return '"'.md5($body).'"';
+        return ['body' => $body, 'etag' => $etag !== '' ? $etag : AssistantBundle::etagFor($body)];
     }
 }

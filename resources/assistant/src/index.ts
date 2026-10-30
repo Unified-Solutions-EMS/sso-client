@@ -243,7 +243,7 @@ class AssistantWidget {
         this.root.append(style, this.launcher, this.scrim, this.drawer);
     }
 
-    private setOpen(open: boolean, persist = true): void {
+    private setOpen(open: boolean, persist = true, toggleIntercom = true): void {
         if (open === this.open) {
             return;
         }
@@ -254,7 +254,10 @@ class AssistantWidget {
         this.drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
         this.launcher.setAttribute('aria-expanded', open ? 'true' : 'false');
         this.launcher.hidden = open;
-        setIntercomHidden(open);
+
+        if (toggleIntercom) {
+            setIntercomHidden(open);
+        }
 
         if (persist) {
             try {
@@ -385,10 +388,7 @@ class AssistantWidget {
                         {
                             class: 'btn primary',
                             type: 'button',
-                            onclick: () => {
-                                askHelp(handoff.question);
-                                this.setOpen(false);
-                            },
+                            onclick: () => this.handOffToHelp(handoff.question),
                         },
                         COPY.askHelp,
                     ),
@@ -626,11 +626,24 @@ class AssistantWidget {
     }
 
     private askHelpInstead(): void {
-        if (askHelp('')) {
-            this.setOpen(false);
-        } else {
+        if (!this.handOffToHelp('')) {
             this.appendNotice(COPY.noHelp);
         }
+    }
+
+    /**
+     * Closes the drawer first, then opens Help. askHelp() restores the Intercom
+     * launcher itself and nothing may send Intercom('update') after it: an update
+     * resets the Messenger composer and loses the prefilled question.
+     */
+    private handOffToHelp(question: string): boolean {
+        if (!hasIntercom()) {
+            return false;
+        }
+
+        this.setOpen(false, true, false);
+
+        return askHelp(question);
     }
 
     /* Helpers */

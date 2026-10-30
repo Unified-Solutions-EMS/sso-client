@@ -338,6 +338,13 @@ return [
     | enabled        launcher, widget bundle and proxy routes
     | proxy          SSO sets false: it is the host and serves /assistant/*
     |                itself, in-process
+    | bundle_source  where GET /assistant/widget.js gets the bundle: 'sso'
+    |                fetches {SSO_BASE_URL}/assistant/widget.js and caches it
+    |                (a widget fix ships by deploying SSO); 'local' serves the
+    |                committed dist/assistant.js. SSO sets 'local' (it is the
+    |                origin); proxy = false implies it. Apps fall back to the
+    |                committed copy while SSO cannot be reached.
+    | bundle_cache_seconds  how long an app keeps SSO's bundle before asking again
     | middleware     for the proxy routes (a signed-in web session)
     | timeout        seconds to wait for SSO on a turn (tool calls fan out)
     | tool_provider  FQCN implementing Contracts\AssistantToolProvider, or
@@ -351,6 +358,8 @@ return [
     'assistant' => [
         'enabled' => env('SSO_ASSISTANT_ENABLED', true),
         'proxy' => true,
+        'bundle_source' => 'sso',
+        'bundle_cache_seconds' => (int) env('SSO_ASSISTANT_BUNDLE_CACHE_SECONDS', 3600),
         'middleware' => ['web', 'auth'],
         'timeout' => (int) env('SSO_ASSISTANT_TIMEOUT', 120),
         'tool_provider' => null,

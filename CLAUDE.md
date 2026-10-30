@@ -363,6 +363,20 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      same call from `onShow` (or a 900 ms timer when the Messenger was already open). Nothing may send
      `Intercom('update', …)` after that: an update resets the composer, which is why the handoff closes
      the drawer through `setOpen(false, true, false)` instead of the normal close.
+     **Threads + suggestions (2026-10-30):** bootstrap answers `{enabled, conversation: {id, title,
+     started_at, messages}, conversations: [{id, title, last_activity_at, message_count}], suggestions:
+     [{label, prompt}], review, notice}`; `GET /assistant/bootstrap?conversation=ID` reopens a previous
+     thread and `DELETE /assistant/conversation` ends the current one and answers the same shape with a
+     new empty thread. Every turn carries `conversation_id` (the open thread). A header button (clock,
+     `aria-label` "Conversations") opens an in-drawer panel under the header: **New conversation** on top
+     (the DELETE call, no confirm), then the previous threads (title, "Today" / "Yesterday" / "Oct 28",
+     message count; the current thread is left out) or "No previous conversations yet." Picking one loads
+     it and shows a thin "Reopened: <title>" bar under the header until the next new thread. On an empty
+     thread the `suggestions` render as wrap-around pill buttons under the intro bubble, titled "Things I
+     can do"; a pill sends its `prompt` as the user's message. **Ideas** in the footer row (next to "Ask
+     Help instead", hidden when SSO sends no suggestions, reads "Hide ideas" while on) toggles the pills at
+     any time; after a reply they stay hidden unless toggled. Verified headless at 1280 and 390 against a
+     mocked proxy.
      **Host-page event:** after a turn whose response carries actions, and after a successful undo, the
      widget dispatches `window.dispatchEvent(new CustomEvent('unified-assistant:action', {detail:
      {actions, undone?: id}}))` (`undone` is the action id that was just reversed) so pages refetch what
@@ -375,7 +389,9 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      `Http::withToken(config('app.core_api_key'))` and stamps `sso_user_id` (auth user's `sso_id`),
      `sso_company_id` (`session('selected_company_id')` → `companies.sso_company_id`), `app_slug`
      (`sso.app_slug`) and `impersonating` (`session()->has('impersonator_id')`). **Identity never comes
-     from the request body**; anything the body says about those keys is dropped. SSO's status and JSON
+     from the request body**; anything the body says about those keys is dropped. Bootstrap forwards the
+     optional `conversation` query parameter (integer, 422 otherwise) and a turn passes `conversation_id`
+     through; both are thread selectors, not identity. SSO's status and JSON
      pass straight back; an unreachable SSO is a 502 with a customer-facing line. SSO itself sets
      `'proxy' => false` and serves the same paths in-process.
   3. **This app's tools for SSO.** `GET /api/internal/assistant/tools?sso_user_id&sso_company_id&impersonating[&include_hidden=1]`

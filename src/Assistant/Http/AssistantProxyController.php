@@ -24,9 +24,16 @@ use Illuminate\Support\Facades\Log;
  */
 class AssistantProxyController extends Controller
 {
+    /**
+     * The current thread, or with ?conversation=ID a previous one reopened.
+     */
     public function bootstrap(Request $request): JsonResponse|Response
     {
-        return $this->forward($request, 'get', '/conversation');
+        $query = $request->validate([
+            'conversation' => ['sometimes', 'nullable', 'integer'],
+        ]);
+
+        return $this->forward($request, 'get', '/conversation', array_filter($query, fn ($value): bool => $value !== null));
     }
 
     public function message(Request $request): JsonResponse|Response
@@ -37,6 +44,7 @@ class AssistantProxyController extends Controller
             'page.url' => ['sometimes', 'nullable', 'string', 'max:2048'],
             'page.title' => ['sometimes', 'nullable', 'string', 'max:512'],
             'setup_app' => ['sometimes', 'nullable', 'string', 'max:64'],
+            'conversation_id' => ['sometimes', 'nullable', 'integer'],
         ]);
 
         return $this->forward($request, 'post', '/turn', $body);
@@ -92,6 +100,10 @@ class AssistantProxyController extends Controller
         return $this->forward($request, 'post', "/review/{$plan}/set-aside");
     }
 
+    /**
+     * Ends the current thread. SSO answers with the bootstrap shape (a new
+     * empty conversation plus the thread list), passed straight back.
+     */
     public function clearConversation(Request $request): JsonResponse|Response
     {
         return $this->forward($request, 'delete', '/conversation');

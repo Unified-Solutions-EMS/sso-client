@@ -84,6 +84,101 @@ class AssistantProxyTest extends AssistantTestCase
         });
     }
 
+    public function test_bootstrap_forwards_the_conversation_query_to_reopen_a_thread(): void
+    {
+        $this->fakeSso();
+        $this->signedInMember();
+
+        $this->getJson('/assistant/bootstrap?conversation=31')->assertOk();
+
+        Http::assertSent(function (ClientRequest $request): bool {
+            parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+
+            return str_starts_with($request->url(), 'https://sso.test/api/internal/assistant/conversation')
+                && $query['conversation'] === '31'
+                && $query['sso_user_id'] === '7'
+                && $query['sso_company_id'] === '42';
+        });
+    }
+
+    public function test_bootstrap_without_a_conversation_sends_none(): void
+    {
+        $this->fakeSso();
+        $this->signedInMember();
+
+        $this->getJson('/assistant/bootstrap')->assertOk();
+
+        Http::assertSent(function (ClientRequest $request): bool {
+            parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+
+            return ! array_key_exists('conversation', $query);
+        });
+    }
+
+    public function test_bootstrap_rejects_a_non_numeric_conversation(): void
+    {
+        $this->fakeSso();
+        $this->signedInMember();
+
+        $this->getJson('/assistant/bootstrap?conversation=abc')->assertStatus(422);
+
+        Http::assertNothingSent();
+    }
+
+    public function test_message_passes_conversation_id_through_while_identity_still_comes_from_the_session(): void
+    {
+        $this->fakeSso();
+        $this->signedInMember();
+
+        $this->postJson('/assistant/messages', [
+            'message' => 'Add UPMC Hamot',
+            'conversation_id' => 31,
+            'sso_user_id' => 999,
+            'sso_company_id' => 888,
+        ])->assertOk();
+
+        Http::assertSent(function (ClientRequest $request): bool {
+            $data = $request->data();
+
+            return $request->url() === 'https://sso.test/api/internal/assistant/turn'
+                && $data['conversation_id'] === 31
+                && $data['sso_user_id'] === 7
+                && $data['sso_company_id'] === 42
+                && $data['app_slug'] === 'crew-scheduling';
+        });
+    }
+
+    public function test_message_without_a_conversation_id_sends_none(): void
+    {
+        $this->fakeSso();
+        $this->signedInMember();
+
+        $this->postJson('/assistant/messages', ['message' => 'hi'])->assertOk();
+
+        Http::assertSent(fn (ClientRequest $request): bool => ! array_key_exists('conversation_id', $request->data()));
+    }
+
+    public function test_delete_conversation_passes_the_new_thread_bootstrap_shape_back(): void
+    {
+        $bootstrap = [
+            'enabled' => true,
+            'conversation' => ['id' => 32, 'title' => null, 'started_at' => '2026-10-30T12:00:00Z', 'messages' => []],
+            'conversations' => [['id' => 31, 'title' => 'Add UPMC Hamot', 'last_activity_at' => '2026-10-29T12:00:00Z', 'message_count' => 4]],
+            'suggestions' => [['label' => 'Add a person', 'prompt' => 'Add a new person to our agency']],
+            'review' => null,
+            'notice' => null,
+        ];
+        Http::fake(['https://sso.test/api/internal/assistant/conversation*' => Http::response($bootstrap, 200)]);
+        $this->signedInMember();
+
+        $this->deleteJson('/assistant/conversation')->assertOk()->assertExactJson($bootstrap);
+
+        Http::assertSent(fn (ClientRequest $r): bool => $r->method() === 'DELETE'
+            && str_starts_with($r->url(), 'https://sso.test/api/internal/assistant/conversation')
+            && $r->data()['sso_user_id'] === 7
+            && $r->data()['sso_company_id'] === 42);
+    }
+
     public function test_message_identity_comes_from_the_session_never_the_body(): void
     {
         $this->fakeSso();

@@ -1,9 +1,9 @@
 import { ApiError, AssistantApi } from './api';
 import { BarAvoidance } from './avoid';
-import { h, icons, paragraphs, svg, timeLabel } from './dom';
+import { dayLabel, h, icons, paragraphs, svg, timeLabel } from './dom';
 import { askHelp, hasIntercom, setIntercomHidden } from './intercom';
 import { styles } from './styles';
-import type { Action, Handoff, Message, PlanChange, ReviewPlan, TurnResponse, WidgetSettings } from './types';
+import type { Action, BootstrapResponse, Conversation, ConversationSummary, Handoff, Message, PlanChange, ReviewPlan, Suggestion, TurnResponse, WidgetSettings } from './types';
 
 const COPY = {
     launcher: 'Assistant',
@@ -36,6 +36,14 @@ const COPY = {
     fileAdded: 'I added a file',
     uploading: 'Adding your file',
     enterHint: 'Enter to send, Shift+Enter for a new line',
+    conversations: 'Conversations',
+    newConversation: 'New conversation',
+    noConversations: 'No previous conversations yet.',
+    untitled: 'Untitled conversation',
+    reopened: 'Reopened',
+    thingsICanDo: 'Things I can do',
+    ideas: 'Ideas',
+    hideIdeas: 'Hide ideas',
 };
 
 const OPEN_KEY = 'unified-assistant:open';
@@ -113,6 +121,27 @@ class AssistantWidget {
 
     private pendingReview: ReviewPlan | null = null;
 
+    private conversation: Conversation | null = null;
+
+    private conversations: ConversationSummary[] = [];
+
+    private suggestions: Suggestion[] = [];
+
+    /** The Ideas link forces the pills on; otherwise they show only on an empty thread. */
+    private ideasOpen = false;
+
+    private suggestionsEl: HTMLElement | null = null;
+
+    private panel!: HTMLElement;
+
+    private panelList!: HTMLDivElement;
+
+    private panelOpen = false;
+
+    private historyButton!: HTMLButtonElement;
+
+    private reopenedBar!: HTMLDivElement;
+
     private open = false;
 
     private busy = false;
@@ -155,19 +184,13 @@ class AssistantWidget {
             return;
         }
 
-        this.messages = (bootstrap.conversation?.messages ?? []).slice();
-        this.pendingReview = bootstrap.review ?? null;
         this.booted = true;
 
         document.body.append(this.host);
-        this.renderMessages();
+        this.applyBootstrap(bootstrap);
         this.launcher.hidden = false;
         this.syncDock();
         this.avoidance.start();
-
-        if (bootstrap.notice) {
-            this.list.append(h('div', { class: 'notice' }, bootstrap.notice));
-        }
 
         let wasOpen = false;
 
@@ -248,11 +271,40 @@ class AssistantWidget {
         this.fileInput = h('input', { type: 'file', class: 'sr', tabindex: '-1', 'aria-hidden': 'true', onchange: () => void this.onFilePicked() });
         this.attachButton = h('button', { class: 'icon-btn', type: 'button', 'aria-label': COPY.attach, title: COPY.attach, onclick: () => this.fileInput.click() }, svg(icons.paperclip));
 
+        this.historyButton = h(
+            'button',
+            {
+                class: 'icon-btn history',
+                type: 'button',
+                'aria-label': COPY.conversations,
+                title: COPY.conversations,
+                'aria-expanded': 'false',
+                onclick: () => this.setPanelOpen(!this.panelOpen),
+            },
+            svg(icons.clock),
+        );
+
         const header = h(
             'header',
             { class: 'header' },
             h('div', { class: 'title-wrap' }, h('h2', { id: 'ua-title' }, svg(icons.sparkles, 16), COPY.title), h('div', { class: 'subtitle' }, COPY.subtitle)),
+            this.historyButton,
             h('button', { class: 'icon-btn', type: 'button', 'aria-label': COPY.close, onclick: () => this.setOpen(false) }, svg(icons.close)),
+        );
+
+        this.reopenedBar = h('div', { class: 'reopened', hidden: true, role: 'status' });
+
+        this.panelList = h('div', { class: 'threads' });
+        this.panel = h(
+            'section',
+            { class: 'panel', 'aria-label': COPY.conversations, hidden: true },
+            h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, COPY.conversations)),
+            h(
+                'div',
+                { class: 'panel-body' },
+                h('button', { class: 'btn secondary new-conversation', type: 'button', onclick: () => void this.newConversation() }, svg(icons.plus, 14), COPY.newConversation),
+                this.panelList,
+            ),
         );
 
         const footer = h(
@@ -263,17 +315,33 @@ class AssistantWidget {
                 'div',
                 { class: 'footer-row' },
                 h('span', {}, COPY.enterHint),
-                h('button', { class: 'link', type: 'button', onclick: () => this.askHelpInstead() }, COPY.askHelpInstead),
+                h(
+                    'span',
+                    { class: 'footer-links' },
+                    h('button', { class: 'link ideas', type: 'button', 'aria-pressed': 'false', onclick: () => this.toggleIdeas() }, COPY.ideas),
+                    h('button', { class: 'link', type: 'button', onclick: () => this.askHelpInstead() }, COPY.askHelpInstead),
+                ),
             ),
             this.fileInput,
         );
 
-        this.drawer = h('section', { class: 'drawer', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'ua-title', 'aria-hidden': 'true' }, header, this.list, footer);
+        const body = h('div', { class: 'body' }, this.reopenedBar, this.list, footer, this.panel);
+
+        this.drawer = h('section', { class: 'drawer', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'ua-title', 'aria-hidden': 'true' }, header, body);
 
         this.drawer.addEventListener('keydown', (event) => {
-            if (event.key === 'Escape') {
-                this.setOpen(false);
+            if (event.key !== 'Escape') {
+                return;
             }
+
+            if (this.panelOpen) {
+                event.stopPropagation();
+                this.setPanelOpen(false);
+
+                return;
+            }
+
+            this.setOpen(false);
         });
 
         this.root.append(style, this.launcher, this.scrim, this.drawer);
@@ -334,7 +402,154 @@ class AssistantWidget {
             this.list.append(h('div', { class: 'turn assistant' }, this.renderReview(this.pendingReview)));
         }
 
+        this.renderSuggestions();
         this.scrollToEnd();
+    }
+
+    /* Threads */
+
+    private applyBootstrap(bootstrap: BootstrapResponse): void {
+        this.messages = (bootstrap.conversation?.messages ?? []).slice();
+        this.pendingReview = bootstrap.review ?? null;
+        this.conversation = bootstrap.conversation ?? null;
+        this.conversations = (bootstrap.conversations ?? []).slice();
+        this.suggestions = (bootstrap.suggestions ?? []).filter((s) => s && typeof s.prompt === 'string' && s.prompt.trim() !== '');
+        this.ideasOpen = false;
+        this.waitingRow = null;
+        this.renderMessages();
+        this.renderThreads();
+
+        if (bootstrap.notice) {
+            this.appendNotice(bootstrap.notice);
+        }
+    }
+
+    private setPanelOpen(open: boolean): void {
+        if (open === this.panelOpen) {
+            return;
+        }
+
+        this.panelOpen = open;
+        this.panel.hidden = !open;
+        this.historyButton.setAttribute('aria-expanded', open ? 'true' : 'false');
+        this.list.setAttribute('aria-hidden', open ? 'true' : 'false');
+
+        if (open) {
+            this.renderThreads();
+            window.setTimeout(() => this.panel.querySelector<HTMLElement>('button')?.focus(), 30);
+        } else {
+            this.historyButton.focus();
+        }
+    }
+
+    private renderThreads(): void {
+        const currentId = this.conversation ? String(this.conversation.id) : null;
+        const previous = this.conversations.filter((thread) => String(thread.id) !== currentId);
+
+        this.panelList.replaceChildren();
+
+        if (previous.length === 0) {
+            this.panelList.append(h('div', { class: 'threads-empty' }, COPY.noConversations));
+
+            return;
+        }
+
+        for (const thread of previous) {
+            const count = thread.message_count === 1 ? '1 message' : `${thread.message_count} messages`;
+            const meta = [dayLabel(thread.last_activity_at), count].filter(Boolean).join(' · ');
+            const button = h(
+                'button',
+                { class: 'thread', type: 'button', 'data-conversation': String(thread.id) },
+                h('div', { class: 'thread-title' }, thread.title?.trim() || COPY.untitled),
+                h('div', { class: 'thread-meta' }, meta),
+            );
+            button.addEventListener('click', () => void this.openConversation(thread));
+            this.panelList.append(button);
+        }
+    }
+
+    private async newConversation(): Promise<void> {
+        if (this.busy) {
+            return;
+        }
+
+        this.setBusy(true);
+
+        try {
+            const bootstrap = await this.api.clear();
+            this.setBusy(false);
+            this.applyBootstrap(bootstrap);
+            this.reopenedBar.hidden = true;
+            this.setPanelOpen(false);
+            this.input.focus();
+        } catch (error) {
+            this.setBusy(false);
+            this.appendNotice(this.errorText(error));
+        }
+    }
+
+    private async openConversation(thread: ConversationSummary): Promise<void> {
+        if (this.busy) {
+            return;
+        }
+
+        this.setBusy(true);
+
+        try {
+            const bootstrap = await this.api.bootstrap(thread.id);
+            this.setBusy(false);
+
+            if (!bootstrap) {
+                return;
+            }
+
+            this.applyBootstrap(bootstrap);
+            this.reopenedBar.replaceChildren(svg(icons.clock, 14), `${COPY.reopened}: ${bootstrap.conversation?.title?.trim() || thread.title?.trim() || COPY.untitled}`);
+            this.reopenedBar.hidden = false;
+            this.setPanelOpen(false);
+        } catch (error) {
+            this.setBusy(false);
+            this.appendNotice(this.errorText(error));
+        }
+    }
+
+    /* Suggestions */
+
+    private toggleIdeas(): void {
+        this.ideasOpen = !this.ideasOpen;
+        this.renderSuggestions();
+        this.scrollToEnd();
+    }
+
+    private renderSuggestions(): void {
+        this.suggestionsEl?.remove();
+        this.suggestionsEl = null;
+
+        const ideas = this.drawer.querySelector<HTMLButtonElement>('.link.ideas');
+        const visible = this.suggestions.length > 0 && (this.ideasOpen || this.messages.length === 0);
+
+        if (ideas) {
+            ideas.hidden = this.suggestions.length === 0;
+            ideas.setAttribute('aria-pressed', this.ideasOpen ? 'true' : 'false');
+            ideas.textContent = this.ideasOpen ? COPY.hideIdeas : COPY.ideas;
+        }
+
+        if (!visible) {
+            return;
+        }
+
+        const pills = this.suggestions.map((suggestion) => {
+            const pill = h('button', { class: 'pill', type: 'button' }, suggestion.label?.trim() || suggestion.prompt);
+            pill.addEventListener('click', () => {
+                this.ideasOpen = false;
+                void this.send(suggestion.prompt);
+            });
+
+            return pill;
+        });
+
+        this.suggestionsEl = h('div', { class: 'suggestions' }, h('div', { class: 'suggestions-title' }, COPY.thingsICanDo), h('div', { class: 'pills' }, ...pills));
+        this.list.append(this.suggestionsEl);
     }
 
     private renderTurn(message: Message): HTMLElement {
@@ -596,7 +811,7 @@ class AssistantWidget {
         this.setBusy(true);
 
         try {
-            const turn = await this.api.send(text, this.setupApp);
+            const turn = await this.api.send(text, this.setupApp, this.conversation?.id ?? null);
             this.acceptTurn(turn);
         } catch (error) {
             this.push({ id: `e-${Date.now()}`, role: 'assistant', content: this.errorText(error), tone: 'error', at: new Date().toISOString() });
@@ -717,6 +932,7 @@ class AssistantWidget {
         }
 
         this.list.append(this.renderTurn(message));
+        this.renderSuggestions();
         this.scrollToEnd();
     }
 
@@ -732,6 +948,8 @@ class AssistantWidget {
             this.list.append(this.waitingRow);
             this.scrollToEnd();
         }
+
+        this.panel.querySelectorAll('button').forEach((button) => (button.disabled = busy));
     }
 
     private appendNotice(text: string): void {

@@ -132,6 +132,63 @@ p + p { margin-top: 0.5em; }
   transition: background-color var(--ua-fast) var(--ua-ease), color var(--ua-fast) var(--ua-ease);
 }
 .icon-btn:hover { background: rgb(var(--ua-bg-muted)); color: rgb(var(--ua-text)); }
+.icon-btn[aria-expanded="true"] { background: rgb(var(--ua-bg-muted)); color: rgb(var(--ua-text)); }
+
+/* Thin bar under the header while a previous thread is open */
+.reopened {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 16px; font-size: 12px;
+  background: rgb(var(--ua-primary-subtle)); color: rgb(var(--ua-text-secondary));
+  border-bottom: 1px solid rgb(var(--ua-border));
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.reopened[hidden] { display: none; }
+.reopened svg { flex: none; color: rgb(var(--ua-primary)); }
+
+/* Everything under the header; the Conversations panel covers it */
+.body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.panel {
+  position: absolute; left: 0; right: 0; bottom: 0; top: 0;
+  display: flex; flex-direction: column;
+  background: rgb(var(--ua-surface));
+  z-index: 1;
+}
+.panel[hidden] { display: none; }
+.panel-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px; border-bottom: 1px solid rgb(var(--ua-border));
+}
+.panel-title { font-size: 14px; font-weight: 600; }
+.panel-body { flex: 1; overflow-y: auto; padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 12px; background: rgb(var(--ua-bg-subtle)); }
+.new-conversation { align-self: stretch; }
+.threads { display: flex; flex-direction: column; border: 1px solid rgb(var(--ua-border)); border-radius: var(--ua-radius-lg); overflow: hidden; background: rgb(var(--ua-surface)); }
+.threads:empty { display: none; }
+.thread {
+  display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
+  width: 100%; text-align: left; padding: 10px 12px;
+  transition: background-color var(--ua-fast) var(--ua-ease);
+}
+.thread + .thread { border-top: 1px solid rgb(var(--ua-border)); }
+.thread:hover:not(:disabled) { background: rgb(var(--ua-bg-muted)); }
+.thread:focus-visible { outline-offset: -2px; }
+.thread-title { font-size: 14px; font-weight: 500; color: rgb(var(--ua-text)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.thread-meta { font-size: 12px; color: rgb(var(--ua-text-muted)); }
+.threads-empty { padding: 20px 12px; text-align: center; font-size: 13px; color: rgb(var(--ua-text-muted)); }
+
+/* "Things I can do" pills */
+.suggestions { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+.suggestions-title { font-size: 12px; font-weight: 500; color: rgb(var(--ua-text-secondary)); padding-left: 4px; }
+.pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.pill {
+  display: inline-flex; align-items: center;
+  min-height: 32px; padding: 6px 12px;
+  border-radius: 9999px; border: 1px solid rgb(var(--ua-border));
+  background: rgb(var(--ua-bg-muted)); color: rgb(var(--ua-text));
+  font-size: 13px; line-height: 1.3; text-align: left;
+  transition: border-color var(--ua-fast) var(--ua-ease), background-color var(--ua-fast) var(--ua-ease);
+}
+.pill:hover:not(:disabled), .pill:focus-visible { border-color: rgb(var(--ua-primary)); }
+.pill:active:not(:disabled) { background: rgb(var(--ua-primary-subtle)); }
 
 /* Messages */
 .list {
@@ -242,7 +299,10 @@ p + p { margin-top: 0.5em; }
 .composer .icon-btn { flex: none; }
 .composer .send { color: rgb(var(--ua-on-accent)); background: rgb(var(--ua-primary)); }
 .composer .send:hover:not(:disabled) { background: rgb(var(--ua-primary-hover)); color: rgb(var(--ua-on-accent)); }
-.footer-row { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; padding: 0 4px; font-size: 11px; color: rgb(var(--ua-text-muted)); }
+.footer-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 6px; padding: 0 4px; font-size: 11px; color: rgb(var(--ua-text-muted)); }
+.footer-links { display: inline-flex; align-items: center; gap: 10px; flex: none; }
+.link[hidden] { display: none; }
+.link[aria-pressed="true"] { color: rgb(var(--ua-primary)); }
 .link { color: rgb(var(--ua-text-secondary)); text-decoration: underline; text-underline-offset: 2px; font-size: 11px; }
 .link:hover { color: rgb(var(--ua-text)); }
 .upload-name { font-size: 11px; color: rgb(var(--ua-text-secondary)); }

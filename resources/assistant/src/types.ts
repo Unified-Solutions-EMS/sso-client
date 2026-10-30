@@ -67,10 +67,37 @@ export interface TurnResponse {
     message_id?: number | string | null;
 }
 
-/** GET /assistant/bootstrap answer. 204 means "not for this session". */
+export interface Conversation {
+    id: number | string;
+    title: string | null;
+    started_at?: string | null;
+    messages?: Message[] | null;
+}
+
+/** A previous thread as listed in the Conversations panel. */
+export interface ConversationSummary {
+    id: number | string;
+    title: string | null;
+    last_activity_at: string | null;
+    message_count: number;
+}
+
+/** A "Things I can do" pill: the label is shown, the prompt is sent. */
+export interface Suggestion {
+    label: string;
+    prompt: string;
+}
+
+/**
+ * GET /assistant/bootstrap answer (optionally ?conversation=ID to reopen a
+ * thread) and DELETE /assistant/conversation answer (a new empty thread).
+ * 204 means "not for this session".
+ */
 export interface BootstrapResponse {
     enabled: boolean;
-    conversation?: { messages?: Message[] | null } | null;
+    conversation?: Conversation | null;
+    conversations?: ConversationSummary[] | null;
+    suggestions?: Suggestion[] | null;
     review?: ReviewPlan | null;
     notice?: string | null;
 }

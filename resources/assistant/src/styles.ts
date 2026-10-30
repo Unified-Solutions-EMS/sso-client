@@ -17,6 +17,7 @@ export const styles = `
   --ua-text-secondary: 71 85 105;
   --ua-text-muted: 100 116 139;
   --ua-on-accent: 255 255 255;
+  --ua-launcher: 17 24 39;
   --ua-primary: 37 99 235;
   --ua-primary-hover: 29 78 216;
   --ua-primary-subtle: 239 246 255;
@@ -58,22 +59,31 @@ p + p { margin-top: 0.5em; }
 
 :focus-visible { outline: 2px solid rgb(var(--ua-ring)); outline-offset: 2px; }
 
-/* Launcher */
+/* Launcher: a round icon button stacked directly above the Intercom bubble
+   (which sits at its default bottom-right 20px), one column at the right edge. */
 .launcher {
-  position: fixed; right: 92px; bottom: 20px; z-index: 2147483000;
-  display: inline-flex; align-items: center; gap: 8px;
-  height: 44px; padding: 0 16px 0 14px;
+  position: fixed; right: 20px; bottom: 92px; z-index: 2147483000;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 44px; height: 44px; padding: 0;
   border-radius: 9999px;
-  background: rgb(var(--ua-primary)); color: rgb(var(--ua-on-accent));
-  font-weight: 600; font-size: 14px;
+  background: rgb(var(--ua-launcher)); color: rgb(var(--ua-on-accent));
   box-shadow: var(--ua-shadow);
   transition: background-color var(--ua-fast) var(--ua-ease), transform var(--ua-fast) var(--ua-ease);
 }
-.launcher:hover { background: rgb(var(--ua-primary-hover)); }
+.launcher:hover, .launcher:focus-visible { background: rgb(var(--ua-primary)); }
 .launcher:active { transform: translateY(1px); }
 .launcher[hidden] { display: none; }
+.launcher .tip {
+  position: absolute; right: calc(100% + 10px); top: 50%; transform: translateY(-50%);
+  padding: 4px 8px; border-radius: 6px; white-space: nowrap;
+  background: rgb(var(--ua-text)); color: rgb(var(--ua-bg-base));
+  font-size: 12px; font-weight: 600; line-height: 1.3;
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--ua-fast) var(--ua-ease);
+}
+.launcher:hover .tip, .launcher:focus-visible .tip { opacity: 1; }
 @media (max-width: 639px) {
-  .launcher { right: 84px; bottom: 16px; height: 40px; padding: 0 14px 0 12px; }
+  .launcher { right: 16px; bottom: 80px; width: 40px; height: 40px; }
 }
 
 /* Drawer */

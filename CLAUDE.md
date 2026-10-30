@@ -320,6 +320,16 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      says not an admin here) leaves the page untouched. `window.UnifiedAssistant = {open, close, ask(text),
      setSetupApp(slug)}` for an "Ask the assistant" button. While open it hides the Intercom launcher
      (`Intercom('update', {hide_default_launcher: true})`) and restores it on close / `pagehide`.
+     **Launcher layout + page padding:** the closed-state launcher is a round 44px icon-only button
+     (sparkles, `aria-label` and `title` "Assistant", hover tooltip with the word; neutral gray-900, brand
+     accent on hover) fixed at right 20px / bottom 92px so it stacks directly ABOVE the Intercom bubble
+     (default bottom-right 20px) in one column, never side by side; under 640px it is 40px at right 16px /
+     bottom 80px. While the launchers are showing (bootstrap enabled, drawer closed) the widget sets
+     `html[data-unified-assistant="docked"]` and injects one `<style id="unified-assistant-dock">` giving
+     `body` 150px bottom padding (120px under 640px) so a page's own bottom-right buttons can scroll above
+     both bubbles; the attribute is removed while the drawer is open (it hides Intercom) and never set when
+     the widget does not boot. Verified headless at 1280 and 390 (stacked column, padding present only when
+     docked).
      **Ask Help prefill** (`intercom.ts askHelp()`): the Messenger drops the text of the `showNewMessage`
      call that opens it and only inserts text once it is already showing, so the handoff restores the
      launcher, registers a one-shot `onShow`, calls `showNewMessage(question)` to open, and re-sends the

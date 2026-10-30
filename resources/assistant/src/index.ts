@@ -39,6 +39,22 @@ const COPY = {
 
 const OPEN_KEY = 'unified-assistant:open';
 
+const DOCK_ATTRIBUTE = 'data-unified-assistant';
+
+const DOCK_STYLE_ID = 'unified-assistant-dock';
+
+function ensureDockStyle(): void {
+    if (document.getElementById(DOCK_STYLE_ID)) {
+        return;
+    }
+
+    const style = document.createElement('style');
+    style.id = DOCK_STYLE_ID;
+    style.textContent = `html[${DOCK_ATTRIBUTE}="docked"] body { padding-bottom: 150px; }
+@media (max-width: 639px) { html[${DOCK_ATTRIBUTE}="docked"] body { padding-bottom: 120px; } }`;
+    document.head.append(style);
+}
+
 /**
  * SSO's review plan is an ai-core proposal: 'drafted' and 'refined' are still
  * open for the admin; 'approved' / 'executing' are being applied; 'rejected'
@@ -137,6 +153,7 @@ class AssistantWidget {
         document.body.append(this.host);
         this.renderMessages();
         this.launcher.hidden = false;
+        this.syncDock();
 
         if (bootstrap.notice) {
             this.list.append(h('div', { class: 'notice' }, bootstrap.notice));
@@ -190,9 +207,18 @@ class AssistantWidget {
 
         this.launcher = h(
             'button',
-            { class: 'launcher', type: 'button', hidden: true, 'aria-haspopup': 'dialog', 'aria-expanded': 'false', onclick: () => this.setOpen(true) },
-            svg(icons.sparkles, 18),
-            COPY.launcher,
+            {
+                class: 'launcher',
+                type: 'button',
+                hidden: true,
+                'aria-label': COPY.launcher,
+                title: COPY.launcher,
+                'aria-haspopup': 'dialog',
+                'aria-expanded': 'false',
+                onclick: () => this.setOpen(true),
+            },
+            svg(icons.sparkles, 20),
+            h('span', { class: 'tip', 'aria-hidden': 'true' }, COPY.launcher),
         );
 
         this.scrim = h('div', { class: 'scrim', onclick: () => this.setOpen(false) });
@@ -254,6 +280,7 @@ class AssistantWidget {
         this.drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
         this.launcher.setAttribute('aria-expanded', open ? 'true' : 'false');
         this.launcher.hidden = open;
+        this.syncDock();
 
         if (toggleIntercom) {
             setIntercomHidden(open);
@@ -644,6 +671,23 @@ class AssistantWidget {
         this.setOpen(false, true, false);
 
         return askHelp(question);
+    }
+
+    /**
+     * While the launchers are showing (widget enabled, drawer closed) the page
+     * gets bottom padding so its own buttons can scroll above the two bubbles.
+     * The drawer hides the Intercom bubble, so an open drawer needs none.
+     */
+    private syncDock(): void {
+        const docked = this.booted && !this.open;
+        const html = document.documentElement;
+
+        if (docked) {
+            html.setAttribute(DOCK_ATTRIBUTE, 'docked');
+            ensureDockStyle();
+        } else {
+            html.removeAttribute(DOCK_ATTRIBUTE);
+        }
     }
 
     /* Helpers */

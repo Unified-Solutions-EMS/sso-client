@@ -6,6 +6,7 @@ use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
+use Unified\SsoClient\Contracts\AssistantToolProvider;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
 use Unified\SsoClient\MasterData\Agency\AgencyProjection;
 use Unified\SsoClient\MasterData\Agency\StandardAgencyProjection;
@@ -114,6 +115,12 @@ class SsoServiceProvider extends ServiceProvider
         $this->app->singleton(Metrics::class);
         $this->app->singleton(AiUsage::class);
         $this->app->singleton(SecurityEvents::class);
+
+        // Assistant tools: the app binds the contract itself or names the
+        // class in config; with neither the catalog route answers empty.
+        if (is_string($toolProvider = config('sso.assistant.tool_provider')) && $toolProvider !== '') {
+            $this->app->bindIf(AssistantToolProvider::class, $toolProvider);
+        }
     }
 
     public function boot(): void
@@ -210,6 +217,11 @@ class SsoServiceProvider extends ServiceProvider
 
         $this->loadRoutesFrom(__DIR__.'/../routes/sso.php');
         $this->loadRoutesFrom(__DIR__.'/../routes/settings.php');
+        $this->loadRoutesFrom(__DIR__.'/../routes/assistant.php');
+
+        $this->loadViewComponentsAs('unified', [
+            Assistant\View\Components\Assistant::class,
+        ]);
 
         $router = $this->app->make('router');
         $router->aliasMiddleware('sso.session', Middleware\EnsureSsoSessionIsFresh::class);

@@ -308,11 +308,24 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      via a `panels::body.end` render hook (same as the Intercom widget). Optional `setup-app="crew-scheduling"`
      prop makes every turn carry `setup_app`. The bundle is `dist/assistant.js` (vanilla TypeScript,
      shadow DOM, no runtime deps, committed; rebuild with `npm ci && npm run build`, `npm run typecheck`
-     first) served with `Cache-Control: public, max-age=86400` + ETag. The widget boots from
+     first). **SSO is the bundle's origin.** An app's `GET /assistant/widget.js`
+     (`AssistantWidgetController`) fetches `{SSO_BASE_URL}/assistant/widget.js`, keeps body + ETag in the
+     app cache for `sso.assistant.bundle_cache_seconds` (3600) and serves it with
+     `Cache-Control: public, max-age=3600` + ETag/304; when SSO is unreachable or answers non-200 it serves
+     the committed `dist/assistant.js` instead (cached 60 s so a down SSO is not asked on every load). SSO
+     sets `'bundle_source' => 'local'` (and `proxy => false` implies it) and serves its own dist. So
+     **widget fixes ship by deploying SSO; apps pick them up within an hour; the committed dist is only the
+     fallback and SSO's copy.** The widget boots from
      `GET /assistant/bootstrap`: a **204** (no `sso_id`, no selected company) or `{enabled: false}` (SSO
      says not an admin here) leaves the page untouched. `window.UnifiedAssistant = {open, close, ask(text),
      setSetupApp(slug)}` for an "Ask the assistant" button. While open it hides the Intercom launcher
      (`Intercom('update', {hide_default_launcher: true})`) and restores it on close / `pagehide`.
+     **Ask Help prefill** (`intercom.ts askHelp()`): the Messenger drops the text of the `showNewMessage`
+     call that opens it and only inserts text once it is already showing, so the handoff restores the
+     launcher, registers a one-shot `onShow`, calls `showNewMessage(question)` to open, and re-sends the
+     same call from `onShow` (or a 900 ms timer when the Messenger was already open). Nothing may send
+     `Intercom('update', …)` after that: an update resets the composer, which is why the handoff closes
+     the drawer through `setOpen(false, true, false)` instead of the normal close.
      **Host-page event:** after a turn whose response carries actions, and after a successful undo, the
      widget dispatches `window.dispatchEvent(new CustomEvent('unified-assistant:action', {detail:
      {actions, undone?: id}}))` (`undone` is the action id that was just reversed) so pages refetch what

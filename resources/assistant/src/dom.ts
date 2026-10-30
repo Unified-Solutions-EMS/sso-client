@@ -65,6 +65,34 @@ export const icons = {
 };
 
 /** Plain text with line breaks kept; no markup is ever interpreted. */
+/**
+ * The model is asked for plain text, but **bold** still slips through; render
+ * it rather than show the asterisks. Text nodes only, never innerHTML.
+ */
+function inline(line: string): Node[] {
+    const nodes: Node[] = [];
+    const bold = /\*\*([^*\n]+?)\*\*/g;
+    let last = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = bold.exec(line)) !== null) {
+        if (match.index > last) {
+            nodes.push(document.createTextNode(line.slice(last, match.index)));
+        }
+
+        const strong = document.createElement('strong');
+        strong.textContent = match[1];
+        nodes.push(strong);
+        last = match.index + match[0].length;
+    }
+
+    if (last < line.length) {
+        nodes.push(document.createTextNode(line.slice(last)));
+    }
+
+    return nodes;
+}
+
 export function paragraphs(text: string): DocumentFragment {
     const fragment = document.createDocumentFragment();
     const blocks = text.replace(/\r\n/g, '\n').split(/\n{2,}/);
@@ -78,7 +106,7 @@ export function paragraphs(text: string): DocumentFragment {
                 p.append(document.createElement('br'));
             }
 
-            p.append(document.createTextNode(line));
+            p.append(...inline(line));
         });
 
         fragment.append(p);

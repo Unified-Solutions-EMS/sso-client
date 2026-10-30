@@ -15,9 +15,13 @@ use Illuminate\View\Component;
  */
 class Assistant extends Component
 {
+    /**
+     * @param  string|null  $setupApp  slug of the app whose setup page is open, so the turn carries setup_app
+     */
     public function __construct(
         protected ConfigRepository $config,
         protected AuthFactory $auth,
+        public ?string $setupApp = null,
     ) {}
 
     public function render(): View|string
@@ -28,17 +32,23 @@ class Assistant extends Component
 
         $base = rtrim((string) $this->config->get('sso.assistant.path', '/assistant'), '/');
 
+        $settings = [
+            'bootstrap' => $base.'/bootstrap',
+            'messages' => $base.'/messages',
+            'uploads' => $base.'/uploads',
+            'undo' => $base.'/actions/{action}/undo',
+            'review' => $base.'/review/{plan}/{verb}',
+            'conversation' => $base.'/conversation',
+            'csrf' => csrf_token(),
+        ];
+
+        if ($this->setupApp !== null && $this->setupApp !== '') {
+            $settings['setup_app'] = $this->setupApp;
+        }
+
         return view('sso::components.assistant', [
             'src' => $base.'/widget.js',
-            'settings' => [
-                'bootstrap' => $base.'/bootstrap',
-                'messages' => $base.'/messages',
-                'uploads' => $base.'/uploads',
-                'undo' => $base.'/actions/{action}/undo',
-                'review' => $base.'/review/{plan}/{verb}',
-                'conversation' => $base.'/conversation',
-                'csrf' => csrf_token(),
-            ],
+            'settings' => $settings,
         ]);
     }
 }

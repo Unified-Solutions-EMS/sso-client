@@ -34,6 +34,16 @@ class AssistantWidgetTest extends AssistantTestCase
         $this->assertStringContainsString('"csrf"', $html);
     }
 
+    public function test_component_passes_the_setup_app_through(): void
+    {
+        $this->actingAs(User::query()->create(['name' => 'Dana', 'sso_id' => '7']));
+
+        $html = Blade::render('<x-unified-assistant setup-app="crew-scheduling" />');
+
+        $this->assertStringContainsString('"setup_app":"crew-scheduling"', $html);
+        $this->assertStringNotContainsString('setup_app', Blade::render('<x-unified-assistant />'));
+    }
+
     public function test_component_renders_nothing_when_signed_out(): void
     {
         $this->assertSame('', trim(Blade::render('<x-unified-assistant />')));

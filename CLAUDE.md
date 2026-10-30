@@ -298,6 +298,81 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
       }
   }
   ```
+- **Unified Assistant** — the one platform-wide assistant that *does tasks* for agency admins (not help
+  chat; that is Fin, labelled **Help**). The model runs in SSO; this package gives every app three
+  things (`routes/assistant.php`, `src/Assistant/*`, config `sso.assistant`):
+  1. **The drawer.** `<x-unified-assistant />` renders
+     `<script src="/assistant/widget.js" defer data-unified-assistant='{…proxy paths, csrf}'>` when
+     `sso.assistant.enabled` and a user is signed in; nothing otherwise. Inertia/React apps put it in the
+     root `app.blade.php` next to `<x-intercom-widget />`; Blade apps in the main layout; Filament panels
+     via a `panels::body.end` render hook (same as the Intercom widget). Optional `setup-app="crew-scheduling"`
+     prop makes every turn carry `setup_app`. The bundle is `dist/assistant.js` (vanilla TypeScript,
+     shadow DOM, no runtime deps, committed; rebuild with `npm ci && npm run build`, `npm run typecheck`
+     first) served with `Cache-Control: public, max-age=86400` + ETag. The widget boots from
+     `GET /assistant/bootstrap`: a **204** (no `sso_id`, no selected company) or `{enabled: false}` (SSO
+     says not an admin here) leaves the page untouched. `window.UnifiedAssistant = {open, close, ask(text),
+     setSetupApp(slug)}` for an "Ask the assistant" button. While open it hides the Intercom launcher
+     (`Intercom('update', {hide_default_launcher: true})`) and restores it on close / `pagehide`.
+  2. **The same-origin proxy** `/assistant/{bootstrap, messages, uploads, actions/{id}/undo,
+     review/{plan}/{approve|remove|set-aside}, DELETE conversation}` under `sso.assistant.middleware`
+     (`['web','auth']`), registered only when `assistant.enabled && assistant.proxy`. It forwards to
+     `SSO_BASE_URL/api/internal/assistant/{conversation, turn, uploads, actions/…, review/…}` with
+     `Http::withToken(config('app.core_api_key'))` and stamps `sso_user_id` (auth user's `sso_id`),
+     `sso_company_id` (`session('selected_company_id')` → `companies.sso_company_id`), `app_slug`
+     (`sso.app_slug`) and `impersonating` (`session()->has('impersonator_id')`). **Identity never comes
+     from the request body**; anything the body says about those keys is dropped. SSO's status and JSON
+     pass straight back; an unreachable SSO is a 502 with a customer-facing line. SSO itself sets
+     `'proxy' => false` and serves the same paths in-process.
+  3. **This app's tools for SSO.** `GET /api/internal/assistant/tools?sso_user_id&sso_company_id&impersonating[&include_hidden=1]`
+     → `{app, tools: [{name, kind, definition}]}` and `POST /api/internal/assistant/tools/{name}`
+     `{sso_user_id, sso_company_id, impersonating, args}` → the tool's result, both behind
+     `ValidateCoreApiKey`. Implement `Contracts\AssistantToolProvider::tools(AssistantActor): list<AssistantTool>`
+     and bind it (`$this->app->bind(AssistantToolProvider::class, \App\Assistant\CrewAssistantTools::class)`
+     or `'tool_provider' => FQCN` in config). Nothing bound → `{app, tools: []}` (normal answer: SSO's own
+     tools, how-do-I and the Help handoff still work everywhere).
+     - **Actor preparation (package, before any provider call):** `AssistantActorResolver` finds the local
+       company by `companies.sso_company_id` and the user by `users.sso_id` (the Metrics model/column
+       config in `config/metrics.php`), checks membership (`$user->companies()` if the model has it, else
+       the `company_user` pivot), signs the user in on the default guard (`Auth::setUser`), calls
+       `loadRolesForCompany($company->id)`, sets `session('selected_company_id')`, then calls the
+       provider's `prepare(AssistantActor)` if it implements `Assistant\PreparesAssistantActor` (for apps
+       whose login establishes the tenant differently). Company or user missing locally → empty catalog /
+       404 on execute; user present but **not a member** → 404 + `SecurityEvents::warning('assistant.tool_denied')`.
+       `HasCompanyScope` therefore works inside tools exactly as it does for the signed-in UI.
+     - **`AssistantTool`:** `name()` (snake_case, unique in the app), `definition()` (`{description,
+       parameters}` JSON Schema, same shape as ai-core `Tool::definition()`; description written for the
+       model: what it does, needs, returns; fixed lists as `enum`), `kind()` (`AssistantTool::READ|WRITE`),
+       `execute(array $args, AssistantActor $actor): AssistantToolResult`. Authorize with
+       `$actor->user->can('…')` as the UI does; not allowed →
+       `AssistantToolResult::failed('You do not have permission to do that here.')`.
+     - **Results:** `AssistantToolResult::ok($content, $summary = null, $undo = null)` (`content` is what the
+       model sees, no secrets, PHI only when the job needs it; `summary` is the one customer-facing line on
+       the action chip, "Assigned John Smith to C shift (Paramedic), Sat Nov 1"; `undo` is
+       `['tool' => …, 'args' => […]]`, a single tool call that reverses the write, or null).
+       `::confirm($question, $content = [])` when the change is one the app's UI treats as needing extra
+       care (bulk, reaches every user, deletions): the model asks, then re-calls with `confirmed: true`, so
+       **every write tool's schema accepts an optional boolean `confirmed`**. `::failed($message)` with a
+       plain message, never exception text. Write tools act immediately otherwise. A tool that throws is
+       answered as `failed('That did not go through. Try again in a minute.')` and logged without `args`.
+     - **Hidden tools** (the one mechanism): implement `Assistant\HiddenAssistantTool` (a marker interface
+       extending `AssistantTool`). Hidden tools are left out of the catalog unless `?include_hidden=1` and
+       are always executable, which is how SSO replays a stored `undo` call. Use them for reverse
+       operations the model should not pick itself (`unassign_by_assignment_id`).
+     - **Never log `args`** (may carry PHI). The wire format: ok → `{ok: true, content, summary, undo}`;
+       confirm → `{ok: false, needs_confirmation: true, question, content}`; failed → `{ok: false, message}`;
+       unknown tool / not a member → 404 `{ok: false, message}`; malformed body → 422.
+  - **Wording (rendered UI, binding, DEV_GUIDELINES §2d):** the feature is **Assistant**, Intercom/Fin is
+    **Help**; never "chat", "bot", "AI", "support". Subtitle "Does tasks for you. For questions about how
+    something works, use Help." Handoff "I can't do that one, but Help can take it from here." / **Ask
+    Help**. Chips "Undo" / "Undone". No em dashes, US English, no developer words, no tenant-isolation
+    narration. Tool `summary` and `failed()` text are rendered UI too.
+  - **Tests:** `tests/Feature/Assistant/*` with `tests/Fixtures/FakeAssistantToolProvider.php` (catalog +
+    execute auth/membership/hidden/confirm/failed/exception, proxy stamping from the session never the
+    body, 204 cases, pass-through, 502, multipart upload, widget headers, component hidden when disabled /
+    signed out). An app's own test: bind its provider, seed a member, hit both routes with the core key.
+  - **Install sweep per app:** `composer update unified/sso-client --prefer-dist`; add
+    `<x-unified-assistant />` next to `<x-intercom-widget />`; confirm `SSO_APP_SLUG` and
+    `CORE_APP_API_KEY`; nothing else. Tools are optional and come later per app.
 - **`Concerns\SyncsCompanyRoles`** — `loadRolesForCompany()`, `hasRoleInCompany()`, `companyRoleNames()`
   plus staff helpers `isStaff()`, `hasStaffRole()`, `isGlobalAdmin()` reading the package-managed
   `users.staff_roles` column. Apps must delete hand-rolled copies of these.
@@ -983,6 +1058,11 @@ do not appear in the other until the branches merge.
   package adds the scheduled pull). Merge SSO first, then the package, then update apps.
   **This branch is behind `main`** — it does not contain the timezone propagation that is already
   shipped in apps' vendor copies. Rebase on `main` before merging or you will regress it.
+- `/Sites/sso-client-wt-assistant` — worktree on **`feature/unified-assistant`** (2026-10-30), paired with
+  branches of the same name in `/Sites/sso` (the assistant service + internal API) and
+  `/Sites/Crew-Scheduling` (first `AssistantToolProvider`). Ships the Unified Assistant contract, proxy,
+  widget bundle and `<x-unified-assistant />`. Merge order: this package → SSO → Crew → the install
+  sweep across every other app (`composer update unified/sso-client --prefer-dist` + mount the component).
 - `/Sites/packages/unified/sso-client` — on **`feature/device-authorization`** (Phase 2 of the
   device-authorization program). Ships the `sso.device-lock` middleware, the
   `POST /sso/device/{challenge,verify,register}` handshake proxy, `DeviceGuard`, `DeviceSessionState`,

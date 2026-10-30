@@ -212,3 +212,35 @@ capabilities:
         A whole integration failing for every agency at once points at the shared
         key or the connection between apps, not at anything the customer did.
     related: ["flow:chart-to-claim"]
+
+  - id: unified-assistant
+    name: "Assistant drawer and app tools"
+    aliases: [assistant button missing, assistant not showing, assistant can't do it in this app, assistant says it can't reach the app, undo not working]
+    what_it_does: >
+      Mounts the Assistant drawer (the one that does tasks for agency admins)
+      in every app, passes its messages to SSO with the signed-in user's
+      identity, and lets SSO run this app's own tools as that user.
+    state: live
+    entry_points: [routes/assistant.php, src/Assistant/Http/AssistantProxyController.php, src/Assistant/Http/AssistantToolsController.php, src/Assistant/AssistantActorResolver.php]
+    diagnostic_questions:
+      - "Is the Assistant button missing in one app or in every app? Every app points at the person's role, one app at that app's install."
+      - "Is the person an administrator of the agency? Only admins get the Assistant; Help is for everyone."
+      - "Did the assistant say it could not reach the app, or that it could not do the task?"
+    known_causes:
+      - >
+        No button anywhere: SSO decides who is an administrator for the agency
+        and answers "not enabled" for everyone else. That is expected for
+        non-admin users; they still have Help.
+      - >
+        No button in one app only: that app has not mounted the drawer yet, or
+        the person has no selected agency in that app. Signing in to the app
+        once usually settles the second case.
+      - >
+        "I couldn't reach {App} just now" means SSO could not call the app's
+        tool endpoint: the app is down or its shared key does not match. The
+        assistant still works for everything that does not need that app.
+      - >
+        "You do not have permission to do that here" comes from the app's own
+        permission check, the same one its screens use. The person's role in
+        that app is the fix, not the assistant.
+    related: ["sso:assistant", "sso-client:internal-api-auth"]

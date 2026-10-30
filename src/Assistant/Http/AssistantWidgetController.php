@@ -2,7 +2,6 @@
 
 namespace Unified\SsoClient\Assistant\Http;
 
-use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Routing\Controller;
@@ -88,7 +87,9 @@ class AssistantWidgetController extends Controller
 
         try {
             $response = Http::timeout(self::FETCH_TIMEOUT_SECONDS)->get($url);
-        } catch (ConnectionException) {
+        } catch (\Throwable) {
+            // Any failure to reach SSO (connection errors, an app test suite that
+            // forbids outbound HTTP, a misconfigured URL) means the committed copy.
             return null;
         }
 

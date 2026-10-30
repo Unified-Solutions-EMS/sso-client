@@ -77,6 +77,17 @@ class AssistantWidgetTest extends AssistantTestCase
         $this->assertSame(file_get_contents(__DIR__.'/../../../dist/assistant.js'), $response->getContent());
     }
 
+    public function test_app_falls_back_to_the_committed_bundle_when_outbound_http_is_forbidden(): void
+    {
+        // App suites that call Http::preventStrayRequests() throw a RuntimeException, not a
+        // ConnectionException; the committed copy must still be served.
+        Http::preventStrayRequests();
+
+        $response = $this->get('/assistant/widget.js')->assertOk();
+
+        $this->assertSame(file_get_contents(__DIR__.'/../../../dist/assistant.js'), $response->getContent());
+    }
+
     public function test_local_bundle_source_never_calls_sso(): void
     {
         config(['sso.assistant.bundle_source' => 'local']);

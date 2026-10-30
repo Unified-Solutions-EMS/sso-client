@@ -14,7 +14,22 @@ export function hasIntercom(): boolean {
 
 /** Reporting's pattern: hide the launcher while the drawer is open. */
 export function setIntercomHidden(hidden: boolean): void {
-    intercom()?.('update', { hide_default_launcher: hidden });
+    updateIntercom({ hide_default_launcher: hidden });
+}
+
+export function updateIntercom(settings: Record<string, unknown>): void {
+    intercom()?.('update', settings);
+}
+
+/** The page's `window.intercomSettings` (alignment, paddings); empty when unset. */
+export function intercomSettings(): Record<string, unknown> {
+    const settings = (window as unknown as { intercomSettings?: unknown }).intercomSettings;
+
+    return settings && typeof settings === 'object' ? (settings as Record<string, unknown>) : {};
+}
+
+export function onIntercomHide(callback: () => void): void {
+    intercom()?.('onHide', callback);
 }
 
 /**

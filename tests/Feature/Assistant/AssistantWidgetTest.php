@@ -6,6 +6,7 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Unified\SsoClient\Assistant\AssistantBundle;
 use Unified\SsoClient\Tests\Stubs\Models\User;
 
 class AssistantWidgetTest extends AssistantTestCase
@@ -119,10 +120,52 @@ class AssistantWidgetTest extends AssistantTestCase
 
         $html = Blade::render('<x-unified-assistant />');
 
-        $this->assertStringContainsString('<script src="/assistant/widget.js" defer data-unified-assistant=', $html);
+        $this->assertMatchesRegularExpression('#<script src="/assistant/widget\.js\?v=[0-9a-f]{12}" defer data-unified-assistant=#', $html);
         $this->assertStringContainsString('"bootstrap":"/assistant/bootstrap"', $html);
         $this->assertStringContainsString('"undo":"/assistant/actions/{action}/undo"', $html);
         $this->assertStringContainsString('"csrf"', $html);
+    }
+
+    public function test_component_versions_the_script_url_with_the_local_bundle_hash(): void
+    {
+        config(['sso.assistant.bundle_source' => 'local']);
+        Cache::put(AssistantBundle::CACHE_KEY, ['body' => self::SSO_BODY, 'etag' => '"'.md5(self::SSO_BODY).'"'], 3600);
+        $this->actingAs(User::query()->create(['name' => 'Dana', 'sso_id' => '7']));
+
+        $version = substr(md5((string) file_get_contents(__DIR__.'/../../../dist/assistant.js')), 0, 12);
+
+        $this->assertStringContainsString('src="/assistant/widget.js?v='.$version.'"', Blade::render('<x-unified-assistant />'));
+    }
+
+    public function test_component_versions_the_script_url_with_the_cached_sso_etag(): void
+    {
+        $this->actingAs(User::query()->create(['name' => 'Dana', 'sso_id' => '7']));
+        $ssoEtag = md5(self::SSO_BODY);
+        Cache::put(AssistantBundle::CACHE_KEY, ['body' => self::SSO_BODY, 'etag' => '"'.$ssoEtag.'"'], 3600);
+
+        $this->assertStringContainsString('src="/assistant/widget.js?v='.substr($ssoEtag, 0, 12).'"', Blade::render('<x-unified-assistant />'));
+    }
+
+    public function test_component_uses_the_local_hash_until_the_sso_bundle_is_cached(): void
+    {
+        $this->actingAs(User::query()->create(['name' => 'Dana', 'sso_id' => '7']));
+        Http::fake([self::SSO_BUNDLE => Http::response(self::SSO_BODY, 200, ['ETag' => '"'.md5(self::SSO_BODY).'"'])]);
+
+        $local = substr(md5((string) file_get_contents(__DIR__.'/../../../dist/assistant.js')), 0, 12);
+        $this->assertStringContainsString('widget.js?v='.$local.'"', Blade::render('<x-unified-assistant />'));
+        Http::assertNothingSent();
+
+        $this->get('/assistant/widget.js')->assertOk();
+
+        $this->assertStringContainsString('widget.js?v='.substr(md5(self::SSO_BODY), 0, 12).'"', Blade::render('<x-unified-assistant />'));
+    }
+
+    public function test_component_hashes_an_opaque_sso_etag(): void
+    {
+        $this->actingAs(User::query()->create(['name' => 'Dana', 'sso_id' => '7']));
+        Cache::put(AssistantBundle::CACHE_KEY, ['body' => self::SSO_BODY, 'etag' => '"sso-etag"'], 3600);
+
+        $this->assertStringContainsString('widget.js?v='.substr(md5('"sso-etag"'), 0, 12).'"', Blade::render('<x-unified-assistant />'));
     }
 
     public function test_component_passes_the_setup_app_through(): void

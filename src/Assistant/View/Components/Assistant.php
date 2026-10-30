@@ -6,6 +6,7 @@ use Illuminate\Contracts\Auth\Factory as AuthFactory;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\View\View;
 use Illuminate\View\Component;
+use Unified\SsoClient\Assistant\AssistantBundle;
 
 /**
  * <x-unified-assistant /> mounts the assistant drawer. Renders nothing when
@@ -47,7 +48,7 @@ class Assistant extends Component
         }
 
         return view('sso::components.assistant', [
-            'src' => $base.'/widget.js',
+            'src' => $base.'/widget.js?v='.AssistantBundle::version(),
             'settings' => $settings,
         ]);
     }

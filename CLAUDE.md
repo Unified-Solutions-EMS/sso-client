@@ -302,7 +302,7 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   chat; that is Fin, labelled **Help**). The model runs in SSO; this package gives every app three
   things (`routes/assistant.php`, `src/Assistant/*`, config `sso.assistant`):
   1. **The drawer.** `<x-unified-assistant />` renders
-     `<script src="/assistant/widget.js" defer data-unified-assistant='{…proxy paths, csrf}'>` when
+     `<script src="/assistant/widget.js?v=…" defer data-unified-assistant='{…proxy paths, csrf}'>` when
      `sso.assistant.enabled` and a user is signed in; nothing otherwise. Inertia/React apps put it in the
      root `app.blade.php` next to `<x-intercom-widget />`; Blade apps in the main layout; Filament panels
      via a `panels::body.end` render hook (same as the Intercom widget). Optional `setup-app="crew-scheduling"`
@@ -315,7 +315,9 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      the committed `dist/assistant.js` instead (cached 60 s so a down SSO is not asked on every load). SSO
      sets `'bundle_source' => 'local'` (and `proxy => false` implies it) and serves its own dist. So
      **widget fixes ship by deploying SSO; apps pick them up within an hour; the committed dist is only the
-     fallback and SSO's copy.** The widget boots from
+     fallback and SSO's copy.** The tag's URL carries `?v=<12-char hash>` from `AssistantBundle::version()`
+     (md5 of the committed dist in local mode; the cached SSO bundle's ETag in SSO mode, else the dist hash
+     until the first widget request warms the cache), so a changed bundle is a new URL and browsers refetch. The widget boots from
      `GET /assistant/bootstrap`: a **204** (no `sso_id`, no selected company) or `{enabled: false}` (SSO
      says not an admin here) leaves the page untouched. `window.UnifiedAssistant = {open, close, ask(text),
      setSetupApp(slug)}` for an "Ask the assistant" button. While open it hides the Intercom launcher

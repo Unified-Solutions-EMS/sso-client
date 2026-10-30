@@ -60,9 +60,11 @@ p + p { margin-top: 0.5em; }
 :focus-visible { outline: 2px solid rgb(var(--ua-ring)); outline-offset: 2px; }
 
 /* Launcher: a round icon button stacked directly above the Intercom bubble
-   (which sits at its default bottom-right 20px), one column at the right edge. */
+   (which sits at its default bottom-right 20px), one column at the right edge.
+   --ua-lift is how far the column was raised to clear a bar pinned to the
+   bottom of the viewport (see avoid.ts); Intercom gets the same lift. */
 .launcher {
-  position: fixed; right: 20px; bottom: 92px; z-index: 2147483000;
+  position: fixed; right: 20px; bottom: calc(92px + var(--ua-lift, 0px)); z-index: 2147483000;
   display: inline-flex; align-items: center; justify-content: center;
   width: 44px; height: 44px; padding: 0;
   border-radius: 9999px;
@@ -83,7 +85,7 @@ p + p { margin-top: 0.5em; }
 }
 .launcher:hover .tip, .launcher:focus-visible .tip { opacity: 1; }
 @media (max-width: 639px) {
-  .launcher { right: 16px; bottom: 80px; width: 40px; height: 40px; }
+  .launcher { right: 16px; bottom: calc(80px + var(--ua-lift, 0px)); width: 40px; height: 40px; }
 }
 
 /* Drawer */

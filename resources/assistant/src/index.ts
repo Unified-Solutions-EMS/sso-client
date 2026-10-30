@@ -1,4 +1,5 @@
 import { ApiError, AssistantApi } from './api';
+import { BarAvoidance } from './avoid';
 import { h, icons, paragraphs, svg, timeLabel } from './dom';
 import { askHelp, hasIntercom, setIntercomHidden } from './intercom';
 import { styles } from './styles';
@@ -124,6 +125,10 @@ class AssistantWidget {
 
     private lastFocus: Element | null = null;
 
+    private lifted = false;
+
+    private avoidance: BarAvoidance;
+
     constructor(settings: SettingsWithContext) {
         this.api = new AssistantApi(settings);
         this.setupApp = settings.setup_app ?? null;
@@ -131,6 +136,10 @@ class AssistantWidget {
         this.root = this.host.attachShadow({ mode: 'open' });
         this.syncTheme();
         this.build();
+        this.avoidance = new BarAvoidance(this.host, this.launcher, (lifted) => {
+            this.lifted = lifted;
+            this.syncDock();
+        });
     }
 
     async boot(): Promise<void> {
@@ -154,6 +163,7 @@ class AssistantWidget {
         this.renderMessages();
         this.launcher.hidden = false;
         this.syncDock();
+        this.avoidance.start();
 
         if (bootstrap.notice) {
             this.list.append(h('div', { class: 'notice' }, bootstrap.notice));
@@ -284,6 +294,10 @@ class AssistantWidget {
 
         if (toggleIntercom) {
             setIntercomHidden(open);
+        }
+
+        if (this.booted) {
+            this.avoidance.setActive(!open);
         }
 
         if (persist) {
@@ -668,6 +682,7 @@ class AssistantWidget {
             return false;
         }
 
+        this.avoidance.hold();
         this.setOpen(false, true, false);
 
         return askHelp(question);
@@ -676,14 +691,16 @@ class AssistantWidget {
     /**
      * While the launchers are showing (widget enabled, drawer closed) the page
      * gets bottom padding so its own buttons can scroll above the two bubbles.
-     * The drawer hides the Intercom bubble, so an open drawer needs none.
+     * The drawer hides the Intercom bubble, so an open drawer needs none; and
+     * when the column has been lifted over a pinned bar the bar already keeps
+     * the bubbles off the content, so the padding is dropped too ("lifted").
      */
     private syncDock(): void {
         const docked = this.booted && !this.open;
         const html = document.documentElement;
 
         if (docked) {
-            html.setAttribute(DOCK_ATTRIBUTE, 'docked');
+            html.setAttribute(DOCK_ATTRIBUTE, this.lifted ? 'lifted' : 'docked');
             ensureDockStyle();
         } else {
             html.removeAttribute(DOCK_ATTRIBUTE);

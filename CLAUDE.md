@@ -330,6 +330,33 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      both bubbles; the attribute is removed while the drawer is open (it hides Intercom) and never set when
      the widget does not boot. Verified headless at 1280 and 390 (stacked column, padding present only when
      docked).
+     **Pinned-bar avoidance** (`avoid.ts`, `BarAvoidance`): the body padding only helps content that
+     scrolls, so a bar pinned to the bottom of the viewport (fixed or sticky form action bars, Filament /
+     Livewire footers, modal footers) still had both bubbles on its buttons. While the launchers are showing
+     the widget measures at start, on `resize` (150 ms), after scrolling (150 ms, capture, so inner
+     scrollers count) and on body mutations (`MutationObserver`, childList + class/style/hidden, 250 ms,
+     ignoring our host and Intercom's containers). `measure()` probes `document.elementsFromPoint()` in a
+     column strip at the Intercom corner (x = edge minus `horizontal_padding` 20 / 50 / 80, y every 40px
+     from the bottom up to 160px; `window.intercomSettings` `alignment` / `horizontal_padding` /
+     `vertical_padding` are honored when set) and, for every element that is not ours, not Intercom's
+     (`#intercom-container`, `.intercom-lightweight-app`, `intercom-*` ids / classes, iframes with an
+     Intercom src) and not html/body, walks up to the nearest `position: fixed|sticky` ancestor and takes
+     the outermost element on that path whose box reaches the bottom 200px and is no taller than 40% of
+     the viewport; the smallest `rect.top` among them is the bar top. Found: the whole column lifts as one,
+     `Intercom('update', {vertical_padding: viewport height - bar top + 12})` (never below 20) so the Help
+     bubble sits 12px above the bar, the launcher follows through `--ua-lift` on its element (`bottom:
+     calc(92px + var(--ua-lift))`, 80px under 640px), and the html attribute becomes
+     `data-unified-assistant="lifted"`, which carries no body padding (the bar already keeps the bubbles off
+     the content). Not found: `vertical_padding` goes back to its base and the attribute to `docked`.
+     `Intercom('update')` is only sent when the value changes, never while the drawer is open (the drawer
+     deactivates measuring; closing re-measures) and never after the Ask Help handoff (`hold()` until
+     Intercom's `onHide` fires, because an update would wipe the prefilled question, see below). A lift
+     that would exceed 40% of the viewport height (a full-screen scrim, a right-hand slide-over) is a layer,
+     not a bar: the defaults stay and nothing is logged. Verified headless at 1280 and 390 against a 64px
+     fixed bar: one `update {vertical_padding: 76}` on load, bubble 12px above the bar and the launcher 12px
+     above the bubble, padding 0 while lifted, removing the bar sends `{vertical_padding: 20}` once and
+     restores the padding, a re-added bar lifts again, nothing is sent while the drawer is open, and a
+     full-screen overlay leaves the defaults.
      **Ask Help prefill** (`intercom.ts askHelp()`): the Messenger drops the text of the `showNewMessage`
      call that opens it and only inserts text once it is already showing, so the handoff restores the
      launcher, registers a one-shot `onShow`, calls `showNewMessage(question)` to open, and re-sends the

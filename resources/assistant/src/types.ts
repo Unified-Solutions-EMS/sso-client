@@ -8,6 +8,8 @@ export interface WidgetSettings {
     /** Template with {plan} and {verb} (approve | remove | set-aside). */
     review: string;
     conversation: string;
+    /** Older Blade components omit this; the widget derives it from `bootstrap`. */
+    intro_dismiss?: string | null;
     csrf: string | null;
 }
 
@@ -89,6 +91,18 @@ export interface Suggestion {
 }
 
 /**
+ * First-run callout above the launcher. SSO sends show=true until the admin
+ * closes it or opens the drawer (POST /assistant/intro/dismiss).
+ */
+export interface Intro {
+    show: boolean;
+    title?: string | null;
+    body?: string | null;
+    cta?: string | null;
+    badge?: number | null;
+}
+
+/**
  * GET /assistant/bootstrap answer (optionally ?conversation=ID to reopen a
  * thread) and DELETE /assistant/conversation answer (a new empty thread).
  * 204 means "not for this session".
@@ -100,6 +114,7 @@ export interface BootstrapResponse {
     suggestions?: Suggestion[] | null;
     review?: ReviewPlan | null;
     notice?: string | null;
+    intro?: Intro | null;
 }
 
 export interface UndoResponse {

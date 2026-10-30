@@ -40,6 +40,7 @@ class Assistant extends Component
             'undo' => $base.'/actions/{action}/undo',
             'review' => $base.'/review/{plan}/{verb}',
             'conversation' => $base.'/conversation',
+            'intro_dismiss' => $base.'/intro/dismiss',
             'csrf' => csrf_token(),
         ];
 

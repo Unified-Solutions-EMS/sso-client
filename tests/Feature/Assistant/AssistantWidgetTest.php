@@ -123,6 +123,7 @@ class AssistantWidgetTest extends AssistantTestCase
         $this->assertMatchesRegularExpression('#<script src="/assistant/widget\.js\?v=[0-9a-f]{12}" defer data-unified-assistant=#', $html);
         $this->assertStringContainsString('"bootstrap":"/assistant/bootstrap"', $html);
         $this->assertStringContainsString('"undo":"/assistant/actions/{action}/undo"', $html);
+        $this->assertStringContainsString('"intro_dismiss":"/assistant/intro/dismiss"', $html);
         $this->assertStringContainsString('"csrf"', $html);
     }
 

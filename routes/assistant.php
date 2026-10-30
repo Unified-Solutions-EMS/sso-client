@@ -41,6 +41,7 @@ if (config('sso.assistant.enabled', true)) {
                 Route::post('review/{plan}/remove', [AssistantProxyController::class, 'removeFromReview'])->name('sso.assistant.review.remove');
                 Route::post('review/{plan}/set-aside', [AssistantProxyController::class, 'setAsideReview'])->name('sso.assistant.review.set-aside');
                 Route::delete('conversation', [AssistantProxyController::class, 'clearConversation'])->name('sso.assistant.conversation.clear');
+                Route::post('intro/dismiss', [AssistantProxyController::class, 'dismissIntro'])->name('sso.assistant.intro.dismiss');
             });
     }
 }

@@ -82,6 +82,13 @@ export class AssistantApi {
         return (await this.json('DELETE', this.settings.conversation, {})) as BootstrapResponse;
     }
 
+    /** The admin has seen the first-run callout; SSO stops sending it. */
+    async dismissIntro(): Promise<void> {
+        const url = this.settings.intro_dismiss || this.settings.bootstrap.replace(/\/bootstrap(\?.*)?$/, '/intro/dismiss');
+
+        await this.json('POST', url, {});
+    }
+
     private async json(method: string, url: string, body: Record<string, unknown>): Promise<unknown> {
         const response = await this.request(method, url, JSON.stringify(body), 'application/json');
 

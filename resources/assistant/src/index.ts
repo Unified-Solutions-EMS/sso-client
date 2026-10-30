@@ -3,7 +3,7 @@ import { BarAvoidance } from './avoid';
 import { dayLabel, h, icons, paragraphs, svg, timeLabel } from './dom';
 import { askHelp, hasIntercom, setIntercomHidden } from './intercom';
 import { styles } from './styles';
-import type { Action, BootstrapResponse, Conversation, ConversationSummary, Handoff, Message, PlanChange, ReviewPlan, Suggestion, TurnResponse, WidgetSettings } from './types';
+import type { Action, BootstrapResponse, Conversation, ConversationSummary, Handoff, Intro, Message, PlanChange, ReviewPlan, Suggestion, TurnResponse, WidgetSettings } from './types';
 
 const COPY = {
     launcher: 'Assistant',
@@ -44,9 +44,18 @@ const COPY = {
     thingsICanDo: 'Things I can do',
     ideas: 'Ideas',
     hideIdeas: 'Hide ideas',
+    introTitle: 'Meet your Assistant',
+    introBody: 'Tell it what to do and it does it: add people, set up facilities, fill a shift, change a setting.',
+    tryIt: 'Try it',
+    dismiss: 'Dismiss',
 };
 
 const OPEN_KEY = 'unified-assistant:open';
+
+/** Set once the first-run callout is closed, so it never returns in this tab even if SSO is slow. */
+const INTRO_DISMISSED_KEY = 'unified-assistant:intro-dismissed';
+
+const INTRO_DELAY_MS = 1500;
 
 const DOCK_ATTRIBUTE = 'data-unified-assistant';
 
@@ -158,6 +167,15 @@ class AssistantWidget {
 
     private avoidance: BarAvoidance;
 
+    private badge!: HTMLSpanElement;
+
+    private callout: HTMLElement | null = null;
+
+    /** Set while the first-run intro is unseen: badge on, callout pending or showing. */
+    private introPending = false;
+
+    private introTimer: number | null = null;
+
     constructor(settings: SettingsWithContext) {
         this.api = new AssistantApi(settings);
         this.setupApp = settings.setup_app ?? null;
@@ -165,7 +183,7 @@ class AssistantWidget {
         this.root = this.host.attachShadow({ mode: 'open' });
         this.syncTheme();
         this.build();
-        this.avoidance = new BarAvoidance(this.host, this.launcher, (lifted) => {
+        this.avoidance = new BarAvoidance(this.host, (lifted) => {
             this.lifted = lifted;
             this.syncDock();
         });
@@ -202,6 +220,8 @@ class AssistantWidget {
 
         if (wasOpen) {
             this.setOpen(true, false);
+        } else if (bootstrap.intro?.show === true) {
+            this.offerIntro(bootstrap.intro);
         }
 
         window.addEventListener('pagehide', () => setIntercomHidden(false));
@@ -232,6 +252,88 @@ class AssistantWidget {
         this.setupApp = slug;
     }
 
+    /**
+     * Closes the first-run callout and badge for good: remembered in this tab
+     * at once, told to SSO once (best effort; the next bootstrap no longer
+     * carries intro.show).
+     */
+    dismissIntro(): void {
+        if (this.introTimer !== null) {
+            window.clearTimeout(this.introTimer);
+            this.introTimer = null;
+        }
+
+        this.badge.hidden = true;
+        this.hideCallout();
+
+        if (!this.introPending) {
+            return;
+        }
+
+        this.introPending = false;
+
+        try {
+            sessionStorage.setItem(INTRO_DISMISSED_KEY, '1');
+        } catch {
+            /* private mode: SSO remembers instead */
+        }
+
+        void this.api.dismissIntro().catch(() => undefined);
+    }
+
+    /* First-run callout */
+
+    private offerIntro(intro: Intro): void {
+        let dismissed = false;
+
+        try {
+            dismissed = sessionStorage.getItem(INTRO_DISMISSED_KEY) === '1';
+        } catch {
+            dismissed = false;
+        }
+
+        if (dismissed) {
+            return;
+        }
+
+        this.introPending = true;
+        this.badge.textContent = String(intro.badge ?? 1);
+        this.badge.hidden = false;
+
+        this.introTimer = window.setTimeout(() => {
+            this.introTimer = null;
+
+            if (this.introPending && !this.open) {
+                this.showCallout(intro);
+            }
+        }, INTRO_DELAY_MS);
+    }
+
+    private showCallout(intro: Intro): void {
+        this.hideCallout();
+
+        this.callout = h(
+            'div',
+            { class: 'callout', role: 'region', 'aria-labelledby': 'ua-callout-title' },
+            h(
+                'div',
+                { class: 'callout-head' },
+                h('div', { class: 'callout-title', id: 'ua-callout-title' }, intro.title?.trim() || COPY.introTitle),
+                h('button', { class: 'icon-btn dismiss', type: 'button', 'aria-label': COPY.dismiss, onclick: () => this.dismissIntro() }, svg(icons.close, 16)),
+            ),
+            h('div', { class: 'callout-body' }, intro.body?.trim() || COPY.introBody),
+            h('div', { class: 'callout-actions' }, h('button', { class: 'btn primary', type: 'button', onclick: () => this.setOpen(true) }, intro.cta?.trim() || COPY.tryIt)),
+        );
+
+        this.root.append(this.callout);
+        window.requestAnimationFrame(() => this.callout?.classList.add('in'));
+    }
+
+    private hideCallout(): void {
+        this.callout?.remove();
+        this.callout = null;
+    }
+
     /* Rendering */
 
     private build(): void {
@@ -253,6 +355,9 @@ class AssistantWidget {
             svg(icons.sparkles, 20),
             h('span', { class: 'tip', 'aria-hidden': 'true' }, COPY.launcher),
         );
+
+        this.badge = h('span', { class: 'badge', hidden: true });
+        this.launcher.append(this.badge);
 
         this.scrim = h('div', { class: 'scrim', onclick: () => this.setOpen(false) });
 
@@ -353,6 +458,11 @@ class AssistantWidget {
         }
 
         this.open = open;
+
+        if (open && this.introPending) {
+            this.dismissIntro();
+        }
+
         this.drawer.classList.toggle('open', open);
         this.scrim.classList.toggle('open', open);
         this.drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
@@ -995,6 +1105,7 @@ declare global {
             close(): void;
             ask(text: string): void;
             setSetupApp(slug: string | null): void;
+            dismissIntro(): void;
         };
     }
 }
@@ -1032,6 +1143,7 @@ function readSettings(): SettingsWithContext | null {
         close: () => widget.closeDrawer(),
         ask: (text: string) => widget.ask(text),
         setSetupApp: (slug: string | null) => widget.setSetupApp(slug),
+        dismissIntro: () => widget.dismissIntro(),
     };
 
     const start = (): void => void widget.boot();

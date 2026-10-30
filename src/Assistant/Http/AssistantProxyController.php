@@ -110,6 +110,15 @@ class AssistantProxyController extends Controller
     }
 
     /**
+     * The admin has seen the first-run callout (closed it or opened the
+     * drawer); SSO stops sending intro.show for them.
+     */
+    public function dismissIntro(Request $request): JsonResponse|Response
+    {
+        return $this->forward($request, 'post', '/intro/dismiss');
+    }
+
+    /**
      * @param  array<string, mixed>  $body
      * @param  (callable(PendingRequest): PendingRequest)|null  $attach
      */

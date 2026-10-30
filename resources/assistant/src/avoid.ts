@@ -40,7 +40,8 @@ function isPinned(element: Element): boolean {
  * column lifted above it.
  *
  * The column moves as one: Intercom gets `vertical_padding` so its bubble
- * sits GAP above the bar, and the launcher follows through `--ua-lift`.
+ * sits GAP above the bar, and the launcher (plus the first-run callout above
+ * it) follows through `--ua-lift`, set on the host so every child inherits it.
  */
 export class BarAvoidance {
     private readonly basePadding: number;
@@ -59,7 +60,6 @@ export class BarAvoidance {
 
     constructor(
         private readonly host: HTMLElement,
-        private readonly launcher: HTMLElement,
         private readonly onLift: (lifted: boolean) => void,
     ) {
         const settings = intercomSettings();
@@ -141,7 +141,7 @@ export class BarAvoidance {
         }
 
         const lift = padding - this.basePadding;
-        this.launcher.style.setProperty('--ua-lift', `${lift}px`);
+        this.host.style.setProperty('--ua-lift', `${lift}px`);
 
         const lifted = lift > 0;
 

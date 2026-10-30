@@ -346,8 +346,8 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      the outermost element on that path whose box reaches the bottom 200px and is no taller than 40% of
      the viewport; the smallest `rect.top` among them is the bar top. Found: the whole column lifts as one,
      `Intercom('update', {vertical_padding: viewport height - bar top + 12})` (never below 20) so the Help
-     bubble sits 12px above the bar, the launcher follows through `--ua-lift` on its element (`bottom:
-     calc(92px + var(--ua-lift))`, 80px under 640px), and the html attribute becomes
+     bubble sits 12px above the bar, the launcher follows through `--ua-lift` on the host element (`bottom:
+     calc(92px + var(--ua-lift))`, 80px under 640px; the first-run callout inherits the same variable), and the html attribute becomes
      `data-unified-assistant="lifted"`, which carries no body padding (the bar already keeps the bubbles off
      the content). Not found: `vertical_padding` goes back to its base and the attribute to `docked`.
      `Intercom('update')` is only sent when the value changes, never while the drawer is open (the drawer
@@ -379,15 +379,31 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      Help instead", hidden when SSO sends no suggestions, reads "Hide ideas" while on) toggles the pills at
      any time; after a reply they stay hidden unless toggled. Verified headless at 1280 and 390 against a
      mocked proxy.
+     **First-run callout (2026-10-30):** bootstrap may carry `intro: {show, title, body, cta, badge}`. With
+     `show === true` and the drawer closed, the launcher gets a brand badge ("1", or `badge`) at once and,
+     1.5 s later, a 300px speech-bubble callout (`.callout`, arrow at the launcher, title + 13px body +
+     primary **Try it** + an X with `aria-label` "Dismiss") slides in above the launcher column (fade/slide
+     gated by `prefers-reduced-motion`; under 640px it spans the width minus 16px margins each side). It
+     follows the pinned-bar lift because `--ua-lift` is now set on the HOST (`avoid.ts`), not the launcher,
+     so launcher and callout inherit it together. **Try it** opens the drawer (the pills are already there on
+     an empty thread). Opening the drawer by any route, or the X, runs `dismissIntro()`: callout and badge
+     go, `sessionStorage['unified-assistant:intro-dismissed']` keeps them away for this tab even if SSO is
+     slow, and `POST /assistant/intro/dismiss` is sent once (best effort). Nothing shows while the drawer is
+     open or when `intro.show` is false, and only the boot bootstrap is read for it (a reopened thread or a
+     new conversation never re-shows it). The only new public method is `window.UnifiedAssistant.dismissIntro()`.
+     The dismiss path comes from the component's `intro_dismiss` setting; an app whose component predates it
+     has the widget derive `/assistant/intro/dismiss` from the bootstrap path (the POST 404s there until the
+     app updates the package, harmless: the tab remembers and SSO re-sends `show` until it hears the dismiss).
+     Verified headless at 1280 and 390 against a mocked proxy.
      **Host-page event:** after a turn whose response carries actions, and after a successful undo, the
      widget dispatches `window.dispatchEvent(new CustomEvent('unified-assistant:action', {detail:
      {actions, undone?: id}}))` (`undone` is the action id that was just reversed) so pages refetch what
      changed (Crew's Scheduling page listens for it). An action whose `summary` is empty is not an
      action: no chip, not announced.
   2. **The same-origin proxy** `/assistant/{bootstrap, messages, uploads, actions/{id}/undo,
-     review/{plan}/{approve|remove|set-aside}, DELETE conversation}` under `sso.assistant.middleware`
+     review/{plan}/{approve|remove|set-aside}, intro/dismiss, DELETE conversation}` under `sso.assistant.middleware`
      (`['web','auth']`), registered only when `assistant.enabled && assistant.proxy`. It forwards to
-     `SSO_BASE_URL/api/internal/assistant/{conversation, turn, uploads, actions/…, review/…}` with
+     `SSO_BASE_URL/api/internal/assistant/{conversation, turn, uploads, actions/…, review/…, intro/dismiss}` with
      `Http::withToken(config('app.core_api_key'))` and stamps `sso_user_id` (auth user's `sso_id`),
      `sso_company_id` (`session('selected_company_id')` → `companies.sso_company_id`), `app_slug`
      (`sso.app_slug`) and `impersonating` (`session()->has('impersonator_id')`). **Identity never comes

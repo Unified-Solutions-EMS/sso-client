@@ -257,6 +257,36 @@ class AssistantProxyTest extends AssistantTestCase
         Http::assertSent(fn (ClientRequest $r): bool => $r->method() === 'DELETE' && str_starts_with($r->url(), 'https://sso.test/api/internal/assistant/conversation'));
     }
 
+    public function test_dismiss_intro_forwards_with_identity_from_the_session_never_the_body(): void
+    {
+        Http::fake(['https://sso.test/api/internal/assistant/intro/dismiss' => Http::response(['ok' => true], 200)]);
+        $this->signedInMember();
+
+        $this->postJson('/assistant/intro/dismiss', ['sso_user_id' => 999, 'sso_company_id' => 888, 'app_slug' => 'sso'])
+            ->assertOk()
+            ->assertExactJson(['ok' => true]);
+
+        Http::assertSent(fn (ClientRequest $r): bool => $r->method() === 'POST'
+            && $r->url() === 'https://sso.test/api/internal/assistant/intro/dismiss'
+            && $r->hasHeader('Authorization', 'Bearer core-key')
+            && $r->data()['sso_user_id'] === 7
+            && $r->data()['sso_company_id'] === 42
+            && $r->data()['app_slug'] === 'crew-scheduling'
+            && $r->data()['impersonating'] === false);
+    }
+
+    public function test_dismiss_intro_is_204_without_a_vouched_session_and_401_signed_out(): void
+    {
+        $this->fakeSso();
+
+        $this->postJson('/assistant/intro/dismiss')->assertUnauthorized();
+
+        [$member] = $this->seedMember();
+        $this->actingAs($member)->postJson('/assistant/intro/dismiss')->assertNoContent();
+
+        Http::assertNothingSent();
+    }
+
     public function test_upload_forwards_the_file_as_multipart_with_identity(): void
     {
         $this->fakeSso();

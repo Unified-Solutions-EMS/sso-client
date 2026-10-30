@@ -39,6 +39,24 @@ const COPY = {
 
 const OPEN_KEY = 'unified-assistant:open';
 
+/** Host pages listen for this to refetch what the assistant just changed. */
+const ACTION_EVENT = 'unified-assistant:action';
+
+/** An action with no summary is not an action: nothing to show, nothing to announce. */
+function realActions(actions: Action[] | null | undefined): Action[] {
+    return (actions ?? []).filter((action) => typeof action.summary === 'string' && action.summary.trim() !== '');
+}
+
+function announceActions(actions: Action[], undone?: number): void {
+    const detail: { actions: Action[]; undone?: number } = { actions };
+
+    if (undone !== undefined) {
+        detail.undone = undone;
+    }
+
+    window.dispatchEvent(new CustomEvent(ACTION_EVENT, { detail }));
+}
+
 interface SettingsWithContext extends WidgetSettings {
     setup_app?: string | null;
 }
@@ -280,8 +298,10 @@ class AssistantWidget {
             turn.append(bubble);
         }
 
-        if (message.actions && message.actions.length > 0) {
-            turn.append(h('div', { class: 'chips' }, ...message.actions.map((action) => this.renderChip(action))));
+        const actions = realActions(message.actions);
+
+        if (actions.length > 0) {
+            turn.append(h('div', { class: 'chips' }, ...actions.map((action) => this.renderChip(action))));
         }
 
         if (message.review) {
@@ -335,6 +355,7 @@ class AssistantWidget {
             action.undone_at = result.undone_at ?? new Date().toISOString();
             chip.classList.add('undone');
             button.replaceWith(h('span', { class: 'status' }, COPY.undone));
+            announceActions([action], action.id);
         } catch (error) {
             button.disabled = false;
             button.textContent = COPY.undo;
@@ -536,13 +557,15 @@ class AssistantWidget {
     }
 
     private acceptTurn(turn: TurnResponse): void {
+        const actions = realActions(turn.actions);
+
         const message: Message = {
             id: turn.message_id ?? `a-${Date.now()}`,
             role: 'assistant',
             content: turn.reply ?? '',
             at: new Date().toISOString(),
             activity: turn.activity ?? null,
-            actions: turn.actions ?? null,
+            actions,
             review: turn.review ?? null,
             handoff: turn.handoff ?? null,
         };
@@ -562,6 +585,10 @@ class AssistantWidget {
 
         if (turn.notice) {
             this.appendNotice(turn.notice);
+        }
+
+        if (actions.length > 0) {
+            announceActions(actions);
         }
     }
 

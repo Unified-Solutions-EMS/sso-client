@@ -313,6 +313,11 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      says not an admin here) leaves the page untouched. `window.UnifiedAssistant = {open, close, ask(text),
      setSetupApp(slug)}` for an "Ask the assistant" button. While open it hides the Intercom launcher
      (`Intercom('update', {hide_default_launcher: true})`) and restores it on close / `pagehide`.
+     **Host-page event:** after a turn whose response carries actions, and after a successful undo, the
+     widget dispatches `window.dispatchEvent(new CustomEvent('unified-assistant:action', {detail:
+     {actions, undone?: id}}))` (`undone` is the action id that was just reversed) so pages refetch what
+     changed (Crew's Scheduling page listens for it). An action whose `summary` is empty is not an
+     action: no chip, not announced.
   2. **The same-origin proxy** `/assistant/{bootstrap, messages, uploads, actions/{id}/undo,
      review/{plan}/{approve|remove|set-aside}, DELETE conversation}` under `sso.assistant.middleware`
      (`['web','auth']`), registered only when `assistant.enabled && assistant.proxy`. It forwards to

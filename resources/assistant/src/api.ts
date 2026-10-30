@@ -21,9 +21,18 @@ const UNREACHABLE = 'The assistant is not reachable right now. Try again in a mi
 export class AssistantApi {
     constructor(private settings: WidgetSettings) {}
 
-    /** Null when the server answered 204: this session gets no assistant. */
-    async bootstrap(): Promise<BootstrapResponse | null> {
-        const response = await this.request('GET', this.settings.bootstrap);
+    /**
+     * Null when the server answered 204: this session gets no assistant.
+     * With a conversation id the server reopens that thread instead of the
+     * current one.
+     */
+    async bootstrap(conversationId: number | string | null = null): Promise<BootstrapResponse | null> {
+        const url =
+            conversationId === null
+                ? this.settings.bootstrap
+                : `${this.settings.bootstrap}${this.settings.bootstrap.includes('?') ? '&' : '?'}conversation=${encodeURIComponent(String(conversationId))}`;
+
+        const response = await this.request('GET', url);
 
         if (response.status === 204) {
             return null;
@@ -32,7 +41,7 @@ export class AssistantApi {
         return (await this.read(response)) as BootstrapResponse;
     }
 
-    async send(message: string, setupApp: string | null): Promise<TurnResponse> {
+    async send(message: string, setupApp: string | null, conversationId: number | string | null = null): Promise<TurnResponse> {
         const body: Record<string, unknown> = {
             message,
             page: { url: location.href, title: document.title },
@@ -40,6 +49,10 @@ export class AssistantApi {
 
         if (setupApp) {
             body.setup_app = setupApp;
+        }
+
+        if (conversationId !== null) {
+            body.conversation_id = conversationId;
         }
 
         return (await this.json('POST', this.settings.messages, body)) as TurnResponse;
@@ -64,8 +77,9 @@ export class AssistantApi {
         return (await this.json('POST', url, body)) as ReviewResponse;
     }
 
-    async clear(): Promise<void> {
-        await this.request('DELETE', this.settings.conversation);
+    /** Ends the current thread; the answer is the bootstrap shape with a new empty one. */
+    async clear(): Promise<BootstrapResponse> {
+        return (await this.json('DELETE', this.settings.conversation, {})) as BootstrapResponse;
     }
 
     private async json(method: string, url: string, body: Record<string, unknown>): Promise<unknown> {

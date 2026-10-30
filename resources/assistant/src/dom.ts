@@ -62,6 +62,8 @@ export const icons = {
     paperclip: 'M21 12.5l-8.5 8.5a5.5 5.5 0 01-7.8-7.8l9.2-9.2a3.5 3.5 0 015 5l-9.2 9.2a1.5 1.5 0 01-2.1-2.1l8.5-8.5',
     copy: 'M9 9h10v12H9zM5 15V3h10',
     check: 'M5 12l5 5L20 7',
+    clock: 'M12 7v5l3 2M21 12a9 9 0 11-18 0 9 9 0 0118 0z',
+    plus: 'M12 5v14M5 12h14',
 };
 
 /** Plain text with line breaks kept; no markup is ever interpreted. */
@@ -113,6 +115,39 @@ export function paragraphs(text: string): DocumentFragment {
     });
 
     return fragment;
+}
+
+/** "Today", "Yesterday", "Oct 28", or "Oct 28, 2025" when it is another year. */
+export function dayLabel(iso: string | null | undefined): string {
+    if (!iso) {
+        return '';
+    }
+
+    const date = new Date(iso);
+
+    if (Number.isNaN(date.getTime())) {
+        return '';
+    }
+
+    const now = new Date();
+    const startOf = (d: Date): number => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const days = Math.round((startOf(now) - startOf(date)) / 86400000);
+
+    if (days === 0) {
+        return 'Today';
+    }
+
+    if (days === 1) {
+        return 'Yesterday';
+    }
+
+    const options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
+
+    if (date.getFullYear() !== now.getFullYear()) {
+        options.year = 'numeric';
+    }
+
+    return date.toLocaleDateString(undefined, options);
 }
 
 export function timeLabel(iso: string | null | undefined): string {

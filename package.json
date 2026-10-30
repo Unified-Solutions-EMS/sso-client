@@ -1,0 +1,14 @@
+{
+  "name": "@unified/sso-client-assistant-widget",
+  "private": true,
+  "description": "Vanilla TypeScript widget for the Unified Assistant, built to dist/assistant.js (committed).",
+  "scripts": {
+    "build": "esbuild resources/assistant/src/index.ts --bundle --minify --format=iife --target=es2019 --outfile=dist/assistant.js --legal-comments=none",
+    "watch": "npm run build -- --watch",
+    "typecheck": "tsc --noEmit -p resources/assistant/tsconfig.json"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.3"
+  }
+}

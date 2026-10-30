@@ -326,6 +326,39 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Unified Assistant
+    |--------------------------------------------------------------------------
+    |
+    | The one platform-wide assistant that does tasks for agency admins. The
+    | model runs in SSO; this package mounts the drawer (<x-unified-assistant />),
+    | proxies the widget's same-origin calls to SSO with CORE_APP_API_KEY and
+    | the identity from this app's session, and serves this app's tools to
+    | SSO from the bound AssistantToolProvider.
+    |
+    | enabled        launcher, widget bundle and proxy routes
+    | proxy          SSO sets false: it is the host and serves /assistant/*
+    |                itself, in-process
+    | middleware     for the proxy routes (a signed-in web session)
+    | timeout        seconds to wait for SSO on a turn (tool calls fan out)
+    | tool_provider  FQCN implementing Contracts\AssistantToolProvider, or
+    |                bind the interface in AppServiceProvider instead
+    | path           URL prefix for the widget bundle and proxy routes
+    |
+    | The local user and company rows are found through the same model
+    | classes and sso id columns Metrics uses (config/metrics.php).
+    |
+    */
+    'assistant' => [
+        'enabled' => env('SSO_ASSISTANT_ENABLED', true),
+        'proxy' => true,
+        'middleware' => ['web', 'auth'],
+        'timeout' => (int) env('SSO_ASSISTANT_TIMEOUT', 120),
+        'tool_provider' => null,
+        'path' => '/assistant',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Routes
     |--------------------------------------------------------------------------
     |

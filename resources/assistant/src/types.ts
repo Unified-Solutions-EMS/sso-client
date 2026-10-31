@@ -67,6 +67,12 @@ export interface TurnResponse {
     error?: string | null;
     notice?: string | null;
     message_id?: number | string | null;
+    /**
+     * Whether the exchange is finished or the admin's answer is next (the
+     * reply asks something, a tool stopped to confirm, a review list is open).
+     * Missing from an older SSO: treated as complete.
+     */
+    turn_state?: 'complete' | 'awaiting_user' | null;
 }
 
 export interface Conversation {
@@ -102,9 +108,15 @@ export interface Intro {
     badge?: number | null;
 }
 
-/** One walkthrough turn: a short assistant-style line plus the pills to try under it. */
+/**
+ * One walkthrough turn: a short assistant-style line plus the pills to try
+ * under it. A `question` step moves on after a complete reply; an `action`
+ * step only once a reply carries a change (an action chip or an approved
+ * review). Missing kind: question.
+ */
 export interface TourStep {
     text: string;
+    kind?: 'question' | 'action' | null;
     suggestions: Suggestion[];
 }
 

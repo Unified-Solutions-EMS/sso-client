@@ -408,9 +408,16 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      bubble, secondary text, a small sparkles "Walkthrough" label above, never persisted) with the step's
      pills under it (`.tour-pills`); the regular "Things I can do" pills and the Ideas link are hidden while
      the tour is active. A tour pill, a typed message, or anything else that reaches `send()` is a normal
-     turn; when the reply lands (`advanceTour()` after `acceptTurn()`, not on an error) the used pills go
-     and the next step is appended; after the last step's reply the `closing` bubble is appended and the
-     tour ends (Ideas works again). Progress lives in `sessionStorage['unified-assistant:<viewer>:tour:<conversation
+     turn. **Pacing (2026-10-30):** a pill click removes the step's pills at once (one click per step) and
+     never advances by itself; `advanceTour(turn)` runs after the reply renders and moves on only when the
+     exchange is finished: a `question` step (`steps[].kind`, SSO sends `question` for steps 1 and 3,
+     `action` for step 2; missing = question) needs `turn_state === "complete"` (SSO's verdict on the
+     turn: `awaiting_user` when the reply asks something, a tool stopped to confirm, or a review list is
+     open; missing = complete) and no open review; an `action` step needs a reply with at least one action
+     chip or an approved review (approving a card counts), whatever `turn_state` says. Otherwise the step
+     waits, the admin's typed answers flow as normal turns, and the next reply is checked again. The next
+     step is appended 600 ms after the reply (`TOUR_ADVANCE_DELAY_MS`); after the last step the `closing`
+     bubble is appended and the tour ends (Ideas works again). Progress lives in `sessionStorage['unified-assistant:<viewer>:tour:<conversation
      id>']` as `{step, tour}` (the steps too, because the bootstrap stops carrying `tour` once
      `intro.show` is false) so a page change inside the app resumes at the same step; it is cleared when the
      tour ends and by **New conversation** (`clearStoredTour()` before the new thread is applied). Verified

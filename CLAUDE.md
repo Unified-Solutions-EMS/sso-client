@@ -390,7 +390,11 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      the admin actually does something** (James, 2026-10-30): the widget never calls `intro/dismiss`. SSO
      keeps `intro.show` true until it records the admin's first real turn, and the widget only hides per
      tab: the X, or the first message sent in this tab, runs `dismissIntro()` (callout + badge go,
-     `sessionStorage['unified-assistant:intro-dismissed']` keeps them away for the tab). Opening the drawer
+     `sessionStorage['unified-assistant:<viewer>:intro-dismissed']` keeps them away for the tab). **Every
+     sessionStorage key (`intro-dismissed`, `open`, `tour:<conversation id>`) is scoped to the bootstrap's
+     `viewer`** (SSO's opaque hash of the user id + their latest login, 2026-10-30): a new login or another
+     user in the same tab starts clean, boot prunes keys left by other viewers, and an SSO that sends no
+     `viewer` falls back to the unscoped names. Opening the drawer
      hides the callout (the drawer covers that corner) and closing it before any message brings the callout
      back at once; the badge stays on the launcher until the first message. `intro.show === false` shows
      nothing, and only the boot bootstrap is read for it (a reopened thread or a new conversation never
@@ -406,7 +410,7 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      the tour is active. A tour pill, a typed message, or anything else that reaches `send()` is a normal
      turn; when the reply lands (`advanceTour()` after `acceptTurn()`, not on an error) the used pills go
      and the next step is appended; after the last step's reply the `closing` bubble is appended and the
-     tour ends (Ideas works again). Progress lives in `sessionStorage['unified-assistant:tour:<conversation
+     tour ends (Ideas works again). Progress lives in `sessionStorage['unified-assistant:<viewer>:tour:<conversation
      id>']` as `{step, tour}` (the steps too, because the bootstrap stops carrying `tour` once
      `intro.show` is false) so a page change inside the app resumes at the same step; it is cleared when the
      tour ends and by **New conversation** (`clearStoredTour()` before the new thread is applied). Verified

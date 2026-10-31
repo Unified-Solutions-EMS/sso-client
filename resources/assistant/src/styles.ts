@@ -250,6 +250,14 @@ p + p { margin-top: 0.5em; }
 }
 .assistant .bubble.error { border-color: rgb(var(--ua-danger) / 0.4); background: rgb(var(--ua-danger-subtle)); color: rgb(var(--ua-danger)); }
 .assistant .bubble.info { background: rgb(var(--ua-primary-subtle)); }
+/* Walkthrough bubbles: assistant look, a small label above, the step's pills under */
+.turn.tour .bubble { color: rgb(var(--ua-text-secondary)); }
+.tour-label {
+  display: inline-flex; align-items: center; gap: 4px; padding-left: 4px;
+  font-size: 11px; font-weight: 500; color: rgb(var(--ua-text-muted));
+}
+.tour-label svg { color: rgb(var(--ua-primary)); }
+.tour-pills { display: flex; flex-wrap: wrap; gap: 8px; max-width: 88%; }
 .activity { font-size: 12px; color: rgb(var(--ua-text-muted)); padding-left: 4px; }
 .activity div + div { margin-top: 2px; }
 .time { font-size: 11px; color: rgb(var(--ua-text-muted)); padding: 0 4px; }

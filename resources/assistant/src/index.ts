@@ -72,6 +72,9 @@ const INTRO_HIDDEN_NAME = 'intro-dismissed';
 
 const INTRO_DELAY_MS = 1500;
 
+/** The next walkthrough step follows the reply after a beat, so it reads as a follow-up. */
+const TOUR_ADVANCE_DELAY_MS = 600;
+
 /**
  * Walkthrough progress per thread (`tour:<conversation id>`), so a page change
  * inside the app resumes at the same step. Holds the steps too: once the
@@ -127,6 +130,7 @@ function validTour(tour: Tour | null | undefined): Tour | null {
         .filter((step): step is TourStep => Boolean(step) && typeof step.text === 'string' && step.text.trim() !== '')
         .map((step) => ({
             text: step.text,
+            kind: (step.kind === 'action' ? 'action' : 'question') as TourStep['kind'],
             suggestions: (Array.isArray(step.suggestions) ? step.suggestions : []).filter((s) => s && typeof s.prompt === 'string' && s.prompt.trim() !== ''),
         }));
 
@@ -156,6 +160,7 @@ function ensureDockStyle(): void {
  */
 const OPEN_PLAN_STATUSES = ['drafted', 'refined', 'proposed', 'draft', 'pending'];
 const SET_ASIDE_PLAN_STATUSES = ['rejected', 'set_aside'];
+const APPLIED_PLAN_STATUSES = ['approved', 'executing', 'applied', 'completed'];
 
 /** Host pages listen for this to refetch what the assistant just changed. */
 const ACTION_EVENT = 'unified-assistant:action';
@@ -266,6 +271,9 @@ class AssistantWidget {
     private tourStep = 0;
 
     private tourPillsEl: HTMLElement | null = null;
+
+    /** The pause before the next step is appended; cleared when the tour ends. */
+    private tourAdvanceTimer: number | null = null;
 
     constructor(settings: SettingsWithContext) {
         this.api = new AssistantApi(settings);
@@ -471,7 +479,16 @@ class AssistantWidget {
         }
     }
 
+    private cancelTourAdvance(): void {
+        if (this.tourAdvanceTimer !== null) {
+            window.clearTimeout(this.tourAdvanceTimer);
+            this.tourAdvanceTimer = null;
+        }
+    }
+
     private clearStoredTour(): void {
+        this.cancelTourAdvance();
+
         const key = this.tourKey();
 
         if (!key) {
@@ -526,7 +543,13 @@ class AssistantWidget {
         const step = this.tour.steps[this.tourStep];
         const pills = step.suggestions.map((suggestion) => {
             const pill = h('button', { class: 'pill', type: 'button' }, suggestion.label?.trim() || suggestion.prompt);
-            pill.addEventListener('click', () => void this.send(suggestion.prompt));
+            pill.addEventListener('click', () => {
+                // One click per step: the pills go at once and never come back, while the
+                // step itself waits for a reply that finishes the exchange.
+                this.tourPillsEl?.remove();
+                this.tourPillsEl = null;
+                void this.send(suggestion.prompt);
+            });
 
             return pill;
         });
@@ -543,8 +566,39 @@ class AssistantWidget {
         return h('div', { class: 'turn assistant tour' }, h('div', { class: 'tour-label' }, svg(icons.sparkles, 12), COPY.walkthrough), bubble, pills);
     }
 
-    /** A turn went through during the walkthrough: next step, or the closing line. */
-    private advanceTour(): void {
+    /**
+     * A reply landed during the walkthrough. The step moves on only when the
+     * exchange it started is finished: a `question` step after a reply SSO
+     * marks complete (not a question, no confirmation gate) with no review
+     * list open; an `action` step only once the reply carries a change (an
+     * action chip or an approved review). Otherwise the step waits: the admin's
+     * answers keep flowing as normal turns and the next complete reply is
+     * checked again. The next step follows after a short pause.
+     */
+    private advanceTour(turn: TurnResponse): void {
+        if (!this.tourActive || !this.tour || this.tourAdvanceTimer !== null) {
+            return;
+        }
+
+        const step = this.tour.steps[this.tourStep];
+        const reviewOpen = this.pendingReview !== null && OPEN_PLAN_STATUSES.includes(this.pendingReview.status);
+        const applied = turn.review !== null && turn.review !== undefined && APPLIED_PLAN_STATUSES.includes(turn.review.status);
+        const finished =
+            step.kind === 'action'
+                ? realActions(turn.actions).length > 0 || applied
+                : (turn.turn_state ?? 'complete') === 'complete' && !reviewOpen;
+
+        if (!finished) {
+            return;
+        }
+
+        this.tourAdvanceTimer = window.setTimeout(() => {
+            this.tourAdvanceTimer = null;
+            this.nextTourStep();
+        }, TOUR_ADVANCE_DELAY_MS);
+    }
+
+    private nextTourStep(): void {
         if (!this.tourActive || !this.tour) {
             return;
         }
@@ -570,6 +624,7 @@ class AssistantWidget {
 
     private endTour(): void {
         this.clearStoredTour();
+        this.cancelTourAdvance();
         this.tourActive = false;
         this.tourPillsEl?.remove();
         this.tourPillsEl = null;
@@ -1126,6 +1181,11 @@ class AssistantWidget {
                 card.append(h('div', { class: 'hint' }, doneText ?? COPY.applying));
             }
 
+            if (verb === 'approve') {
+                // Approving the list is the change an action step waited for.
+                this.advanceTour({ review: result.review ?? { ...plan, status: 'approved' }, turn_state: 'complete' });
+            }
+
             if (result.reply) {
                 this.push({ id: `r-${Date.now()}`, role: 'assistant', content: result.reply, at: new Date().toISOString() });
             }
@@ -1172,7 +1232,7 @@ class AssistantWidget {
         try {
             const turn = await this.api.send(text, this.setupApp, this.conversation?.id ?? null);
             this.acceptTurn(turn);
-            this.advanceTour();
+            this.advanceTour(turn);
         } catch (error) {
             this.push({ id: `e-${Date.now()}`, role: 'assistant', content: this.errorText(error), tone: 'error', at: new Date().toISOString() });
         } finally {

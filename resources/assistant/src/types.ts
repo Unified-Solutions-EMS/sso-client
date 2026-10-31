@@ -124,6 +124,13 @@ export interface Tour {
  */
 export interface BootstrapResponse {
     enabled: boolean;
+    /**
+     * Opaque token for the signed-in person and their current login (SSO hashes
+     * the user id with their latest sign-in). The widget scopes its
+     * sessionStorage keys to it so one tab serves a new login or another user
+     * with a clean slate. Absent from an older SSO: keys are then unscoped.
+     */
+    viewer?: string | null;
     conversation?: Conversation | null;
     conversations?: ConversationSummary[] | null;
     suggestions?: Suggestion[] | null;

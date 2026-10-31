@@ -51,24 +51,67 @@ const COPY = {
     walkthrough: 'Walkthrough',
 };
 
-const OPEN_KEY = 'unified-assistant:open';
+/**
+ * Everything the widget keeps in sessionStorage sits under this prefix, scoped
+ * to the bootstrap's `viewer` (`unified-assistant:<viewer>:<name>`): SSO
+ * changes `viewer` for every user and every login, so a different person, or
+ * the same person after signing in again, starts clean in the same tab. An SSO
+ * that sends no `viewer` gets the unscoped names (`unified-assistant:<name>`).
+ */
+const STORAGE_PREFIX = 'unified-assistant:';
+
+const OPEN_NAME = 'open';
 
 /**
  * Set when the admin closes the first-run callout (X) or sends a first message,
- * so callout and badge stay away for this tab. SSO keeps sending `intro.show`
- * until the admin's first real turn, which it records itself; the widget never
- * tells SSO to stop.
+ * so callout and badge stay away for this tab and login. SSO keeps sending
+ * `intro.show` until the admin's first real turn, which it records itself; the
+ * widget never tells SSO to stop.
  */
-const INTRO_HIDDEN_KEY = 'unified-assistant:intro-dismissed';
+const INTRO_HIDDEN_NAME = 'intro-dismissed';
 
 const INTRO_DELAY_MS = 1500;
 
 /**
- * Walkthrough progress per thread (`...:<conversation id>`), so a page change
+ * Walkthrough progress per thread (`tour:<conversation id>`), so a page change
  * inside the app resumes at the same step. Holds the steps too: once the
  * callout is dismissed SSO stops sending `tour`.
  */
-const TOUR_KEY_PREFIX = 'unified-assistant:tour:';
+const TOUR_NAME_PREFIX = 'tour:';
+
+const UNSCOPED_NAMES = [OPEN_NAME, INTRO_HIDDEN_NAME];
+
+function viewerOf(bootstrap: BootstrapResponse): string | null {
+    return typeof bootstrap.viewer === 'string' && bootstrap.viewer.trim() !== '' ? bootstrap.viewer.trim() : null;
+}
+
+/** Whether a stored key (minus the prefix) belongs to this viewer's set of names. */
+function belongsToViewer(rest: string, viewer: string | null): boolean {
+    if (viewer !== null) {
+        return rest.startsWith(`${viewer}:`);
+    }
+
+    return UNSCOPED_NAMES.includes(rest) || rest.startsWith(TOUR_NAME_PREFIX);
+}
+
+/** Drops what earlier viewers (other people, earlier logins) left in this tab. */
+function pruneStorage(viewer: string | null): void {
+    try {
+        const stale: string[] = [];
+
+        for (let i = 0; i < sessionStorage.length; i++) {
+            const key = sessionStorage.key(i);
+
+            if (key !== null && key.startsWith(STORAGE_PREFIX) && !belongsToViewer(key.slice(STORAGE_PREFIX.length), viewer)) {
+                stale.push(key);
+            }
+        }
+
+        stale.forEach((key) => sessionStorage.removeItem(key));
+    } catch {
+        /* private mode: nothing stored to prune */
+    }
+}
 
 interface StoredTour {
     step: number;
@@ -214,6 +257,9 @@ class AssistantWidget {
     /** The walkthrough SSO offered with this boot's intro; only Try it starts it. */
     private tour: Tour | null = null;
 
+    /** SSO's opaque per-user, per-login token that scopes this tab's storage; null from an older SSO. */
+    private viewer: string | null = null;
+
     private tourActive = false;
 
     /** Index of the step whose pills are showing (awaiting the admin's turn). */
@@ -248,6 +294,8 @@ class AssistantWidget {
         }
 
         this.booted = true;
+        this.viewer = viewerOf(bootstrap);
+        pruneStorage(this.viewer);
         this.tour = bootstrap.intro?.show === true ? validTour(bootstrap.tour) : null;
 
         document.body.append(this.host);
@@ -259,7 +307,7 @@ class AssistantWidget {
         let wasOpen = false;
 
         try {
-            wasOpen = sessionStorage.getItem(OPEN_KEY) === '1';
+            wasOpen = sessionStorage.getItem(this.storageKey(OPEN_NAME)) === '1';
         } catch {
             wasOpen = false;
         }
@@ -301,9 +349,10 @@ class AssistantWidget {
     }
 
     /**
-     * Hides the first-run callout and badge for this tab (the X, or the first
-     * message sent). SSO is not told: it keeps `intro.show` on until it sees
-     * the admin's first turn, so a new login shows the callout again until then.
+     * Hides the first-run callout and badge for this tab and login (the X, or
+     * the first message sent). SSO is not told: it keeps `intro.show` on until
+     * it sees the admin's first turn, so a new login shows the callout again
+     * until then.
      */
     dismissIntro(): void {
         if (this.introTimer !== null) {
@@ -322,7 +371,7 @@ class AssistantWidget {
         this.intro = null;
 
         try {
-            sessionStorage.setItem(INTRO_HIDDEN_KEY, '1');
+            sessionStorage.setItem(this.storageKey(INTRO_HIDDEN_NAME), '1');
         } catch {
             /* private mode: the callout returns on the next page */
         }
@@ -334,7 +383,7 @@ class AssistantWidget {
         let hidden = false;
 
         try {
-            hidden = sessionStorage.getItem(INTRO_HIDDEN_KEY) === '1';
+            hidden = sessionStorage.getItem(this.storageKey(INTRO_HIDDEN_NAME)) === '1';
         } catch {
             hidden = false;
         }
@@ -400,8 +449,12 @@ class AssistantWidget {
         this.saveTour();
     }
 
+    private storageKey(name: string): string {
+        return this.viewer === null ? `${STORAGE_PREFIX}${name}` : `${STORAGE_PREFIX}${this.viewer}:${name}`;
+    }
+
     private tourKey(): string | null {
-        return this.conversation ? `${TOUR_KEY_PREFIX}${String(this.conversation.id)}` : null;
+        return this.conversation ? this.storageKey(`${TOUR_NAME_PREFIX}${String(this.conversation.id)}`) : null;
     }
 
     private saveTour(): void {
@@ -671,7 +724,7 @@ class AssistantWidget {
 
         if (persist) {
             try {
-                sessionStorage.setItem(OPEN_KEY, open ? '1' : '0');
+                sessionStorage.setItem(this.storageKey(OPEN_NAME), open ? '1' : '0');
             } catch {
                 /* private mode: the drawer simply reopens closed */
             }

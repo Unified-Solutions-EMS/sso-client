@@ -8,7 +8,7 @@ export interface WidgetSettings {
     /** Template with {plan} and {verb} (approve | remove | set-aside). */
     review: string;
     conversation: string;
-    /** Older Blade components omit this; the widget derives it from `bootstrap`. */
+    /** Still sent by the Blade component; the widget no longer calls it (SSO records the first turn itself). */
     intro_dismiss?: string | null;
     csrf: string | null;
 }
@@ -91,8 +91,8 @@ export interface Suggestion {
 }
 
 /**
- * First-run callout above the launcher. SSO sends show=true until the admin
- * closes it or opens the drawer (POST /assistant/intro/dismiss).
+ * First-run callout above the launcher. SSO sends show=true on every login
+ * until the admin sends a first message; the widget only hides it per tab.
  */
 export interface Intro {
     show: boolean;
@@ -100,6 +100,21 @@ export interface Intro {
     body?: string | null;
     cta?: string | null;
     badge?: number | null;
+}
+
+/** One walkthrough turn: a short assistant-style line plus the pills to try under it. */
+export interface TourStep {
+    text: string;
+    suggestions: Suggestion[];
+}
+
+/**
+ * Curated walkthrough SSO sends alongside intro.show. Only "Try it" on the
+ * callout starts it; the widget never starts it by itself.
+ */
+export interface Tour {
+    steps: TourStep[];
+    closing: string;
 }
 
 /**
@@ -115,6 +130,7 @@ export interface BootstrapResponse {
     review?: ReviewPlan | null;
     notice?: string | null;
     intro?: Intro | null;
+    tour?: Tour | null;
 }
 
 export interface UndoResponse {

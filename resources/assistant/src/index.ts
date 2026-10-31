@@ -3,7 +3,7 @@ import { BarAvoidance } from './avoid';
 import { dayLabel, h, icons, paragraphs, svg, timeLabel } from './dom';
 import { askHelp, hasIntercom, setIntercomHidden } from './intercom';
 import { styles } from './styles';
-import type { Action, BootstrapResponse, Conversation, ConversationSummary, Handoff, Intro, Message, PlanChange, ReviewPlan, Suggestion, TurnResponse, WidgetSettings } from './types';
+import type { Action, BootstrapResponse, Conversation, ConversationSummary, Handoff, Intro, Message, PlanChange, ReviewPlan, Suggestion, Tour, TourStep, TurnResponse, WidgetSettings } from './types';
 
 const COPY = {
     launcher: 'Assistant',
@@ -48,14 +48,47 @@ const COPY = {
     introBody: 'Tell it what to do and it does it: add people, set up facilities, fill a shift, change a setting.',
     tryIt: 'Try it',
     dismiss: 'Dismiss',
+    walkthrough: 'Walkthrough',
 };
 
 const OPEN_KEY = 'unified-assistant:open';
 
-/** Set once the first-run callout is closed, so it never returns in this tab even if SSO is slow. */
-const INTRO_DISMISSED_KEY = 'unified-assistant:intro-dismissed';
+/**
+ * Set when the admin closes the first-run callout (X) or sends a first message,
+ * so callout and badge stay away for this tab. SSO keeps sending `intro.show`
+ * until the admin's first real turn, which it records itself; the widget never
+ * tells SSO to stop.
+ */
+const INTRO_HIDDEN_KEY = 'unified-assistant:intro-dismissed';
 
 const INTRO_DELAY_MS = 1500;
+
+/**
+ * Walkthrough progress per thread (`...:<conversation id>`), so a page change
+ * inside the app resumes at the same step. Holds the steps too: once the
+ * callout is dismissed SSO stops sending `tour`.
+ */
+const TOUR_KEY_PREFIX = 'unified-assistant:tour:';
+
+interface StoredTour {
+    step: number;
+    tour: Tour;
+}
+
+function validTour(tour: Tour | null | undefined): Tour | null {
+    if (!tour || !Array.isArray(tour.steps)) {
+        return null;
+    }
+
+    const steps = tour.steps
+        .filter((step): step is TourStep => Boolean(step) && typeof step.text === 'string' && step.text.trim() !== '')
+        .map((step) => ({
+            text: step.text,
+            suggestions: (Array.isArray(step.suggestions) ? step.suggestions : []).filter((s) => s && typeof s.prompt === 'string' && s.prompt.trim() !== ''),
+        }));
+
+    return steps.length > 0 ? { steps, closing: typeof tour.closing === 'string' ? tour.closing : '' } : null;
+}
 
 const DOCK_ATTRIBUTE = 'data-unified-assistant';
 
@@ -174,7 +207,19 @@ class AssistantWidget {
     /** Set while the first-run intro is unseen: badge on, callout pending or showing. */
     private introPending = false;
 
+    private intro: Intro | null = null;
+
     private introTimer: number | null = null;
+
+    /** The walkthrough SSO offered with this boot's intro; only Try it starts it. */
+    private tour: Tour | null = null;
+
+    private tourActive = false;
+
+    /** Index of the step whose pills are showing (awaiting the admin's turn). */
+    private tourStep = 0;
+
+    private tourPillsEl: HTMLElement | null = null;
 
     constructor(settings: SettingsWithContext) {
         this.api = new AssistantApi(settings);
@@ -203,6 +248,7 @@ class AssistantWidget {
         }
 
         this.booted = true;
+        this.tour = bootstrap.intro?.show === true ? validTour(bootstrap.tour) : null;
 
         document.body.append(this.host);
         this.applyBootstrap(bootstrap);
@@ -218,10 +264,12 @@ class AssistantWidget {
             wasOpen = false;
         }
 
+        if (bootstrap.intro?.show === true) {
+            this.offerIntro(bootstrap.intro);
+        }
+
         if (wasOpen) {
             this.setOpen(true, false);
-        } else if (bootstrap.intro?.show === true) {
-            this.offerIntro(bootstrap.intro);
         }
 
         window.addEventListener('pagehide', () => setIntercomHidden(false));
@@ -253,9 +301,9 @@ class AssistantWidget {
     }
 
     /**
-     * Closes the first-run callout and badge for good: remembered in this tab
-     * at once, told to SSO once (best effort; the next bootstrap no longer
-     * carries intro.show).
+     * Hides the first-run callout and badge for this tab (the X, or the first
+     * message sent). SSO is not told: it keeps `intro.show` on until it sees
+     * the admin's first turn, so a new login shows the callout again until then.
      */
     dismissIntro(): void {
         if (this.introTimer !== null) {
@@ -271,31 +319,31 @@ class AssistantWidget {
         }
 
         this.introPending = false;
+        this.intro = null;
 
         try {
-            sessionStorage.setItem(INTRO_DISMISSED_KEY, '1');
+            sessionStorage.setItem(INTRO_HIDDEN_KEY, '1');
         } catch {
-            /* private mode: SSO remembers instead */
+            /* private mode: the callout returns on the next page */
         }
-
-        void this.api.dismissIntro().catch(() => undefined);
     }
 
     /* First-run callout */
 
     private offerIntro(intro: Intro): void {
-        let dismissed = false;
+        let hidden = false;
 
         try {
-            dismissed = sessionStorage.getItem(INTRO_DISMISSED_KEY) === '1';
+            hidden = sessionStorage.getItem(INTRO_HIDDEN_KEY) === '1';
         } catch {
-            dismissed = false;
+            hidden = false;
         }
 
-        if (dismissed) {
+        if (hidden) {
             return;
         }
 
+        this.intro = intro;
         this.introPending = true;
         this.badge.textContent = String(intro.badge ?? 1);
         this.badge.hidden = false;
@@ -322,7 +370,7 @@ class AssistantWidget {
                 h('button', { class: 'icon-btn dismiss', type: 'button', 'aria-label': COPY.dismiss, onclick: () => this.dismissIntro() }, svg(icons.close, 16)),
             ),
             h('div', { class: 'callout-body' }, intro.body?.trim() || COPY.introBody),
-            h('div', { class: 'callout-actions' }, h('button', { class: 'btn primary', type: 'button', onclick: () => this.setOpen(true) }, intro.cta?.trim() || COPY.tryIt)),
+            h('div', { class: 'callout-actions' }, h('button', { class: 'btn primary', type: 'button', onclick: () => this.tryIt() }, intro.cta?.trim() || COPY.tryIt)),
         );
 
         this.root.append(this.callout);
@@ -332,6 +380,147 @@ class AssistantWidget {
     private hideCallout(): void {
         this.callout?.remove();
         this.callout = null;
+    }
+
+    /* Walkthrough */
+
+    /** The callout's button (SSO's `intro.cta`): open the drawer and, when SSO sent a tour, begin it. */
+    private tryIt(): void {
+        this.setOpen(true);
+
+        if (!this.tour || this.tourActive || this.busy) {
+            return;
+        }
+
+        this.tourActive = true;
+        this.tourStep = 0;
+        this.ideasOpen = false;
+        this.renderSuggestions();
+        this.renderTourStep();
+        this.saveTour();
+    }
+
+    private tourKey(): string | null {
+        return this.conversation ? `${TOUR_KEY_PREFIX}${String(this.conversation.id)}` : null;
+    }
+
+    private saveTour(): void {
+        const key = this.tourKey();
+
+        if (!key || !this.tour) {
+            return;
+        }
+
+        try {
+            sessionStorage.setItem(key, JSON.stringify({ step: this.tourStep, tour: this.tour } satisfies StoredTour));
+        } catch {
+            /* private mode: the walkthrough lasts this page only */
+        }
+    }
+
+    private clearStoredTour(): void {
+        const key = this.tourKey();
+
+        if (!key) {
+            return;
+        }
+
+        try {
+            sessionStorage.removeItem(key);
+        } catch {
+            /* nothing stored */
+        }
+    }
+
+    /** After a bootstrap: pick the walkthrough up where this thread left it. */
+    private resumeTour(): void {
+        this.tourActive = false;
+        this.tourPillsEl = null;
+
+        const key = this.tourKey();
+
+        if (!key) {
+            return;
+        }
+
+        let stored: StoredTour | null = null;
+
+        try {
+            const raw = sessionStorage.getItem(key);
+            stored = raw ? (JSON.parse(raw) as StoredTour) : null;
+        } catch {
+            stored = null;
+        }
+
+        const tour = validTour(stored?.tour);
+
+        if (!tour || typeof stored?.step !== 'number' || stored.step < 0 || stored.step >= tour.steps.length) {
+            return;
+        }
+
+        this.tour = tour;
+        this.tourActive = true;
+        this.tourStep = stored.step;
+        this.renderSuggestions();
+        this.renderTourStep();
+    }
+
+    private renderTourStep(): void {
+        if (!this.tour) {
+            return;
+        }
+
+        const step = this.tour.steps[this.tourStep];
+        const pills = step.suggestions.map((suggestion) => {
+            const pill = h('button', { class: 'pill', type: 'button' }, suggestion.label?.trim() || suggestion.prompt);
+            pill.addEventListener('click', () => void this.send(suggestion.prompt));
+
+            return pill;
+        });
+
+        this.tourPillsEl = pills.length > 0 ? h('div', { class: 'tour-pills' }, ...pills) : null;
+        this.list.append(this.renderTourBubble(step.text, this.tourPillsEl));
+        this.scrollToEnd();
+    }
+
+    private renderTourBubble(text: string, pills: HTMLElement | null): HTMLElement {
+        const bubble = h('div', { class: 'bubble' });
+        bubble.append(paragraphs(text));
+
+        return h('div', { class: 'turn assistant tour' }, h('div', { class: 'tour-label' }, svg(icons.sparkles, 12), COPY.walkthrough), bubble, pills);
+    }
+
+    /** A turn went through during the walkthrough: next step, or the closing line. */
+    private advanceTour(): void {
+        if (!this.tourActive || !this.tour) {
+            return;
+        }
+
+        this.tourPillsEl?.remove();
+        this.tourPillsEl = null;
+        this.tourStep += 1;
+
+        if (this.tourStep < this.tour.steps.length) {
+            this.renderTourStep();
+            this.saveTour();
+
+            return;
+        }
+
+        if (this.tour.closing.trim() !== '') {
+            this.list.append(this.renderTourBubble(this.tour.closing, null));
+        }
+
+        this.endTour();
+        this.scrollToEnd();
+    }
+
+    private endTour(): void {
+        this.clearStoredTour();
+        this.tourActive = false;
+        this.tourPillsEl?.remove();
+        this.tourPillsEl = null;
+        this.renderSuggestions();
     }
 
     /* Rendering */
@@ -459,8 +648,10 @@ class AssistantWidget {
 
         this.open = open;
 
-        if (open && this.introPending) {
-            this.dismissIntro();
+        if (open) {
+            this.hideCallout();
+        } else if (this.introPending && this.intro && this.introTimer === null) {
+            this.showCallout(this.intro);
         }
 
         this.drawer.classList.toggle('open', open);
@@ -526,7 +717,10 @@ class AssistantWidget {
         this.suggestions = (bootstrap.suggestions ?? []).filter((s) => s && typeof s.prompt === 'string' && s.prompt.trim() !== '');
         this.ideasOpen = false;
         this.waitingRow = null;
+        this.tourActive = false;
+        this.tourPillsEl = null;
         this.renderMessages();
+        this.resumeTour();
         this.renderThreads();
 
         if (bootstrap.notice) {
@@ -588,6 +782,7 @@ class AssistantWidget {
         try {
             const bootstrap = await this.api.clear();
             this.setBusy(false);
+            this.clearStoredTour();
             this.applyBootstrap(bootstrap);
             this.reopenedBar.hidden = true;
             this.setPanelOpen(false);
@@ -636,10 +831,10 @@ class AssistantWidget {
         this.suggestionsEl = null;
 
         const ideas = this.drawer.querySelector<HTMLButtonElement>('.link.ideas');
-        const visible = this.suggestions.length > 0 && (this.ideasOpen || this.messages.length === 0);
+        const visible = this.suggestions.length > 0 && !this.tourActive && (this.ideasOpen || this.messages.length === 0);
 
         if (ideas) {
-            ideas.hidden = this.suggestions.length === 0;
+            ideas.hidden = this.suggestions.length === 0 || this.tourActive;
             ideas.setAttribute('aria-pressed', this.ideasOpen ? 'true' : 'false');
             ideas.textContent = this.ideasOpen ? COPY.hideIdeas : COPY.ideas;
         }
@@ -918,11 +1113,13 @@ class AssistantWidget {
         }
 
         this.push({ id: `u-${Date.now()}`, role: 'user', content: text, at: new Date().toISOString() });
+        this.dismissIntro();
         this.setBusy(true);
 
         try {
             const turn = await this.api.send(text, this.setupApp, this.conversation?.id ?? null);
             this.acceptTurn(turn);
+            this.advanceTour();
         } catch (error) {
             this.push({ id: `e-${Date.now()}`, role: 'assistant', content: this.errorText(error), tone: 'error', at: new Date().toISOString() });
         } finally {

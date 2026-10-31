@@ -385,16 +385,34 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      primary **Try it** + an X with `aria-label` "Dismiss") slides in above the launcher column (fade/slide
      gated by `prefers-reduced-motion`; under 640px it spans the width minus 16px margins each side). It
      follows the pinned-bar lift because `--ua-lift` is now set on the HOST (`avoid.ts`), not the launcher,
-     so launcher and callout inherit it together. **Try it** opens the drawer (the pills are already there on
-     an empty thread). Opening the drawer by any route, or the X, runs `dismissIntro()`: callout and badge
-     go, `sessionStorage['unified-assistant:intro-dismissed']` keeps them away for this tab even if SSO is
-     slow, and `POST /assistant/intro/dismiss` is sent once (best effort). Nothing shows while the drawer is
-     open or when `intro.show` is false, and only the boot bootstrap is read for it (a reopened thread or a
-     new conversation never re-shows it). The only new public method is `window.UnifiedAssistant.dismissIntro()`.
-     The dismiss path comes from the component's `intro_dismiss` setting; an app whose component predates it
-     has the widget derive `/assistant/intro/dismiss` from the bootstrap path (the POST 404s there until the
-     app updates the package, harmless: the tab remembers and SSO re-sends `show` until it hears the dismiss).
-     Verified headless at 1280 and 390 against a mocked proxy.
+     so launcher and callout inherit it together. The button reads SSO's `intro.cta` (SSO sends "Click
+     here"; "Try it" is only the fallback when none is sent). **The callout comes back on every login until
+     the admin actually does something** (James, 2026-10-30): the widget never calls `intro/dismiss`. SSO
+     keeps `intro.show` true until it records the admin's first real turn, and the widget only hides per
+     tab: the X, or the first message sent in this tab, runs `dismissIntro()` (callout + badge go,
+     `sessionStorage['unified-assistant:intro-dismissed']` keeps them away for the tab). Opening the drawer
+     hides the callout (the drawer covers that corner) and closing it before any message brings the callout
+     back at once; the badge stays on the launcher until the first message. `intro.show === false` shows
+     nothing, and only the boot bootstrap is read for it (a reopened thread or a new conversation never
+     re-shows it). `window.UnifiedAssistant.dismissIntro()` is the session-hide helper. The proxy route
+     `POST /assistant/intro/dismiss` and the component's `intro_dismiss` setting still exist (nothing in
+     the widget sends it). Verified headless at 1280 and 390 against a mocked proxy.
+     **Walkthrough (2026-10-30):** with `intro.show`, bootstrap may also carry `tour: {steps: [{text,
+     suggestions: [{label, prompt}]}], closing} | null` (SSO curates 3 steps, 2 pills each, per app). Only
+     the callout button starts it (never the launcher, never on its own; `tour: null` means the button just
+     opens the drawer as before). Each step is a local assistant-style bubble (`.turn.assistant.tour`, same
+     bubble, secondary text, a small sparkles "Walkthrough" label above, never persisted) with the step's
+     pills under it (`.tour-pills`); the regular "Things I can do" pills and the Ideas link are hidden while
+     the tour is active. A tour pill, a typed message, or anything else that reaches `send()` is a normal
+     turn; when the reply lands (`advanceTour()` after `acceptTurn()`, not on an error) the used pills go
+     and the next step is appended; after the last step's reply the `closing` bubble is appended and the
+     tour ends (Ideas works again). Progress lives in `sessionStorage['unified-assistant:tour:<conversation
+     id>']` as `{step, tour}` (the steps too, because the bootstrap stops carrying `tour` once
+     `intro.show` is false) so a page change inside the app resumes at the same step; it is cleared when the
+     tour ends and by **New conversation** (`clearStoredTour()` before the new thread is applied). Verified
+     headless at 1280 and 390 against a mocked proxy: step 1 + 2 pills + no regular pills, pill and typed
+     message each advance, reload resumes at the same step, closing bubble then Ideas reveals the pills, New
+     conversation clears it, `tour: null` and the launcher never start it.
      **Host-page event:** after a turn whose response carries actions, and after a successful undo, the
      widget dispatches `window.dispatchEvent(new CustomEvent('unified-assistant:action', {detail:
      {actions, undone?: id}}))` (`undone` is the action id that was just reversed) so pages refetch what

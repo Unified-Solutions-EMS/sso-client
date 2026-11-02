@@ -18,6 +18,10 @@ const MUTATION_MS = 250;
 
 const INTERCOM_SELECTOR = '#intercom-container, .intercom-lightweight-app, [id^="intercom-"], [class*="intercom-"]';
 
+/** Marks the element the dock padding goes on; `--ua-scroller-padding` carries its own padding. */
+export const SCROLLER_ATTRIBUTE = 'data-unified-assistant-scroller';
+export const SCROLLER_PADDING_VAR = '--ua-scroller-padding';
+
 function isIntercomElement(element: Element): boolean {
     if (element.closest(INTERCOM_SELECTOR)) {
         return true;
@@ -30,6 +34,21 @@ function isPinned(element: Element): boolean {
     const position = getComputedStyle(element).position;
 
     return position === 'fixed' || position === 'sticky';
+}
+
+function isScroller(element: Element): boolean {
+    const overflow = getComputedStyle(element).overflowY;
+
+    return overflow === 'auto' || overflow === 'scroll';
+}
+
+/** A page whose html or body clips overflow scrolls somewhere inside, never on the body. */
+function bodyScrolls(): boolean {
+    return [document.documentElement, document.body].every((element) => {
+        const overflow = getComputedStyle(element).overflowY;
+
+        return overflow !== 'hidden' && overflow !== 'clip';
+    });
 }
 
 /**
@@ -49,6 +68,8 @@ export class BarAvoidance {
     private padding: number;
 
     private lifted = false;
+
+    private scroller: HTMLElement | null = null;
 
     private active = false;
 
@@ -132,6 +153,74 @@ export class BarAvoidance {
         }
 
         this.apply(padding);
+        this.markScroller(viewportWidth, viewportHeight);
+    }
+
+    /**
+     * The dock padding (see `ensureDockStyle`) goes on the element that scrolls
+     * the page, not on the body: every Unified app shell is a fixed-height body
+     * with its own scrolling <main>, so body padding only shrank the shell and
+     * cut the page off 150px above the fold (CloudPCR, 2026-11-01). The mark
+     * follows the page: a swapped <main> (wire:navigate, Inertia) is re-marked
+     * on the next measure.
+     */
+    private markScroller(viewportWidth: number, viewportHeight: number): void {
+        const scroller = this.findScroller(viewportWidth, viewportHeight);
+
+        if (scroller === this.scroller) {
+            return;
+        }
+
+        if (this.scroller) {
+            this.scroller.removeAttribute(SCROLLER_ATTRIBUTE);
+            this.scroller.style.removeProperty(SCROLLER_PADDING_VAR);
+        }
+
+        this.scroller = scroller;
+
+        const own = parseFloat(getComputedStyle(scroller).paddingBottom);
+
+        scroller.style.setProperty(SCROLLER_PADDING_VAR, `${Number.isFinite(own) ? own : 0}px`);
+        scroller.setAttribute(SCROLLER_ATTRIBUTE, '');
+    }
+
+    /**
+     * The body when the page scrolls on it. Otherwise the outermost scrolling
+     * ancestor of whatever sits under the bubble column (a pinned toast or bar
+     * on top of it is skipped; the main area beneath is still in the stack),
+     * then a scrolling <main>, then the body as a last resort.
+     */
+    private findScroller(viewportWidth: number, viewportHeight: number): HTMLElement {
+        if (bodyScrolls()) {
+            return document.body;
+        }
+
+        for (const [x, y] of this.probePoints(viewportWidth, viewportHeight)) {
+            for (const element of document.elementsFromPoint(x, y)) {
+                if (!this.isForeign(element)) {
+                    continue;
+                }
+
+                let found: HTMLElement | null = null;
+                let node: Element | null = element;
+
+                while (node && node !== document.body) {
+                    if (node instanceof HTMLElement && isScroller(node)) {
+                        found = node;
+                    }
+
+                    node = node.parentElement;
+                }
+
+                if (found) {
+                    return found;
+                }
+            }
+        }
+
+        const main = document.querySelector('main');
+
+        return main instanceof HTMLElement && isScroller(main) ? main : document.body;
     }
 
     private apply(padding: number): void {
@@ -151,43 +240,48 @@ export class BarAvoidance {
         }
     }
 
-    private findBarTop(viewportWidth: number, viewportHeight: number): number | null {
+    /** The column strip at the Intercom corner, every point inside the viewport. */
+    private probePoints(viewportWidth: number, viewportHeight: number): Array<[number, number]> {
         const settings = intercomSettings();
         const horizontal = Number(settings.horizontal_padding);
         const inset = Number.isFinite(horizontal) && horizontal >= 0 ? horizontal : DEFAULT_PADDING;
         const fromLeft = settings.alignment === 'left';
         const xs = [inset, inset + INTERCOM_SIZE / 2, inset + INTERCOM_SIZE].map((offset) => (fromLeft ? offset : viewportWidth - offset));
-        const ys: number[] = [];
+        const points: Array<[number, number]> = [];
 
-        for (let depth = 1; depth <= PROBE_DEPTH; depth += PROBE_STEP) {
-            ys.push(viewportHeight - depth);
+        for (const x of xs) {
+            for (let depth = 1; depth <= PROBE_DEPTH; depth += PROBE_STEP) {
+                const y = viewportHeight - depth;
+
+                if (x >= 0 && y >= 0 && x < viewportWidth && y < viewportHeight) {
+                    points.push([x, y]);
+                }
+            }
         }
 
+        return points;
+    }
+
+    private findBarTop(viewportWidth: number, viewportHeight: number): number | null {
         const seen = new Set<Element>();
         let top: number | null = null;
 
-        for (const x of xs) {
-            for (const y of ys) {
-                if (x < 0 || y < 0 || x >= viewportWidth || y >= viewportHeight) {
+        for (const [x, y] of this.probePoints(viewportWidth, viewportHeight)) {
+            for (const element of document.elementsFromPoint(x, y)) {
+                if (seen.has(element)) {
                     continue;
                 }
 
-                for (const element of document.elementsFromPoint(x, y)) {
-                    if (seen.has(element)) {
-                        continue;
-                    }
+                seen.add(element);
 
-                    seen.add(element);
+                if (!this.isForeign(element)) {
+                    continue;
+                }
 
-                    if (!this.isForeign(element)) {
-                        continue;
-                    }
+                const barRect = this.pinnedBarRect(element, viewportHeight);
 
-                    const barRect = this.pinnedBarRect(element, viewportHeight);
-
-                    if (barRect && (top === null || barRect.top < top)) {
-                        top = barRect.top;
-                    }
+                if (barRect && (top === null || barRect.top < top)) {
+                    top = barRect.top;
                 }
             }
         }

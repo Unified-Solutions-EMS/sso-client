@@ -328,10 +328,18 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      (default bottom-right 20px) in one column, never side by side; under 640px it is 40px at right 16px /
      bottom 80px. While the launchers are showing (bootstrap enabled, drawer closed) the widget sets
      `html[data-unified-assistant="docked"]` and injects one `<style id="unified-assistant-dock">` giving
-     `body` 150px bottom padding (120px under 640px) so a page's own bottom-right buttons can scroll above
-     both bubbles; the attribute is removed while the drawer is open (it hides Intercom) and never set when
-     the widget does not boot. Verified headless at 1280 and 390 (stacked column, padding present only when
-     docked).
+     **the element that scrolls the page** 150px of extra bottom padding (120px under 640px) so a page's own
+     bottom-right buttons can scroll above both bubbles; the attribute is removed while the drawer is open
+     (it hides Intercom) and never set when the widget does not boot. `BarAvoidance` marks that element with
+     `data-unified-assistant-scroller` on every measure: the body when html and body scroll, otherwise the
+     outermost `overflow-y: auto|scroll` ancestor under the bubble column, then a scrolling `<main>`, then
+     the body. The rule is `calc(var(--ua-scroller-padding) + 150px) !important`, the variable holding the
+     element's own computed padding (app shells set safe-area insets inline), and a swapped `<main>`
+     (wire:navigate, Inertia) is re-marked on the next measure. It was body padding until 2026-11-01: every
+     Unified app shell is a fixed-height `overflow-hidden` body with its own scrolling `<main>`, so the
+     padding shrank the shell instead and cut every list page off 150px above the fold (CloudPCR, James).
+     Verified headless at 1280 and 390 (stacked column, padding on `<main>` only when docked, none while
+     lifted or open, re-marked after a main swap, body padding on a body-scrolling page).
      **Pinned-bar avoidance** (`avoid.ts`, `BarAvoidance`): the body padding only helps content that
      scrolls, so a bar pinned to the bottom of the viewport (fixed or sticky form action bars, Filament /
      Livewire footers, modal footers) still had both bubbles on its buttons. While the launchers are showing

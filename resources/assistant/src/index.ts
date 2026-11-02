@@ -1,5 +1,5 @@
 import { ApiError, AssistantApi } from './api';
-import { BarAvoidance } from './avoid';
+import { BarAvoidance, SCROLLER_ATTRIBUTE, SCROLLER_PADDING_VAR } from './avoid';
 import { dayLabel, h, icons, paragraphs, svg, timeLabel } from './dom';
 import { askHelp, hasIntercom, setIntercomHidden } from './intercom';
 import { styles } from './styles';
@@ -148,8 +148,11 @@ function ensureDockStyle(): void {
 
     const style = document.createElement('style');
     style.id = DOCK_STYLE_ID;
-    style.textContent = `html[${DOCK_ATTRIBUTE}="docked"] body { padding-bottom: 150px; }
-@media (max-width: 639px) { html[${DOCK_ATTRIBUTE}="docked"] body { padding-bottom: 120px; } }`;
+    const target = `html[${DOCK_ATTRIBUTE}="docked"] [${SCROLLER_ATTRIBUTE}]`;
+    const padding = (extra: number): string => `padding-bottom: calc(var(${SCROLLER_PADDING_VAR}, 0px) + ${extra}px) !important;`;
+
+    style.textContent = `${target} { ${padding(150)} }
+@media (max-width: 639px) { ${target} { ${padding(120)} } }`;
     document.head.append(style);
 }
 
@@ -1324,8 +1327,11 @@ class AssistantWidget {
     }
 
     /**
-     * While the launchers are showing (widget enabled, drawer closed) the page
-     * gets bottom padding so its own buttons can scroll above the two bubbles.
+     * While the launchers are showing (widget enabled, drawer closed) the page's
+     * scroll container (marked by BarAvoidance; the body only when the body
+     * scrolls) gets bottom padding so its own buttons can scroll above the two
+     * bubbles. The rule is !important because app shells set the container's
+     * padding inline (safe-area insets); that value is carried in the variable.
      * The drawer hides the Intercom bubble, so an open drawer needs none; and
      * when the column has been lifted over a pinned bar the bar already keeps
      * the bubbles off the content, so the padding is dropped too ("lifted").

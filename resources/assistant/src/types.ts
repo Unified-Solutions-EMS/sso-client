@@ -169,5 +169,6 @@ export interface ReviewResponse {
 export interface UploadResponse {
     ok?: boolean;
     name?: string | null;
+    upload?: { id: number } | null;
     error?: string | null;
 }

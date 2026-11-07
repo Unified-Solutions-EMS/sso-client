@@ -446,7 +446,13 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      (`sso.app_slug`) and `impersonating` (`session()->has('impersonator_id')`). **Identity never comes
      from the request body**; anything the body says about those keys is dropped. Bootstrap forwards the
      optional `conversation` query parameter (integer, 422 otherwise) and a turn passes `conversation_id`
-     through; both are thread selectors, not identity. SSO's status and JSON
+     through; both are thread selectors, not identity. An upload forwards `setup_app` and the page as the
+     flat multipart fields `page[url]` / `page[title]` (nested arrays become `page[]` in Laravel's multipart
+     encoder), and the widget sends them with every file, so SSO files the upload under the app whose setup
+     page is open rather than the agency's first app (Val's 2026-11-01 roster test: files landed on the
+     Analytics session while the turns ran for CloudPCR, so the model was told no file existed). The widget's
+     follow-up message carries the file number from the upload reply ("I added a file (file 17): name.csv")
+     so the model never guesses it. SSO's status and JSON
      pass straight back; an unreachable SSO is a 502 with a customer-facing line. SSO itself sets
      `'proxy' => false` and serves the same paths in-process.
   3. **This app's tools for SSO.** `GET /api/internal/assistant/tools?sso_user_id&sso_company_id&impersonating[&include_hidden=1]`

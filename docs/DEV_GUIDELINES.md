@@ -207,7 +207,7 @@ This rule is about the **ePCR form specifically** — not other CloudPCR forms (
 
 - Never emit an `<?xml ?>` declaration on EMS/DEM XML output. NEMSIS consumers reject it.
 - Use the `NEMSIS-v3.5.0-EMS-BILLING` template for full exports (includes signatures and file attachments).
-- `dem_personnel.is_ems_personnel = false` rows are non-clinical attendants (volunteer-FD crew, dispatch, billing). They are selectable on the PCR crew picker for visibility but **must be excluded** from both the DEM `dPersonnel` registry and the per-PCR `eCrew` section. Don't reintroduce them into either export — see `cloudpcr/app/Services/Nemsis/DemXmlBuilder.php` and `EmsXmlBuilder::buildRepeatingSection()`.
+- `dem_personnel.is_ems_personnel = false` rows are non-clinical attendants (dispatch, billing, office staff; anyone who rides on calls, including drivers without a certification, is EMS personnel). They are selectable on the PCR crew picker for visibility but **must be excluded** from both the DEM `dPersonnel` registry and the per-PCR `eCrew` section. Don't reintroduce them into either export — see `cloudpcr/app/Services/Nemsis/DemXmlBuilder.php` and `EmsXmlBuilder::buildRepeatingSection()`.
 
 ---
 

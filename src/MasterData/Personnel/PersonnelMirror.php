@@ -7,6 +7,7 @@ namespace Unified\SsoClient\MasterData\Personnel;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
@@ -178,7 +179,33 @@ class PersonnelMirror implements EntityMirror, FetchesSnapshot, SeedsSso
         return $this->projection->childTables();
     }
 
+    /**
+     * Every login and SSO-authenticated API call asks this, and the schema
+     * check is two information_schema queries per table. Only a positive
+     * answer is kept, so an app that installs the mirror is seen at once; a
+     * rollback is seen within a day.
+     */
     public function isInstalled(): bool
+    {
+        $key = 'sso:master-data:installed:'.DB::connection()->getName().':'.$this->table().':'.md5(implode(',', array_map(
+            fn (PersonnelChildTable $child): string => $child->table(),
+            $this->childTables(),
+        )));
+
+        if (Cache::get($key) === true) {
+            return true;
+        }
+
+        $installed = $this->schemaInstalled();
+
+        if ($installed) {
+            Cache::put($key, true, now()->addDay());
+        }
+
+        return $installed;
+    }
+
+    private function schemaInstalled(): bool
     {
         if (! Schema::hasTable($this->table())
             || ! Schema::hasColumns($this->table(), [self::SSO_ID_COLUMN, $this->activeColumn(), self::SSO_UPDATED_AT_COLUMN, self::LINK_PENDING_COLUMN])) {

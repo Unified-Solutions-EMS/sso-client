@@ -62,6 +62,16 @@ abstract class CodeListMirror extends CatalogMirror implements ContinuesPush, Se
     /** Columns holding lists, stored as JSON text so stored values compare as sent. */
     protected const LIST_COLUMNS = ['levels', 'member_levels', 'only_states'];
 
+    /**
+     * The company's mirror rows read once for a resync or a batch, so each
+     * record is matched from memory instead of two lookups per row. A record
+     * whose row changed during the run (same id or code twice in one batch)
+     * is looked up again.
+     *
+     * @var array{company: int, linked: array<int, object>, unlinked_by_code: array<string, list<object>>, touched_ids: array<int, true>, touched_codes: array<string, true>}|null
+     */
+    private ?array $preloaded = null;
+
     public function __construct(
         LocalTenantResolver $tenants,
         MasterDataClient $client,
@@ -381,9 +391,89 @@ abstract class CodeListMirror extends CatalogMirror implements ContinuesPush, Se
             return null;
         }
 
+        $codeKey = mb_strtolower($code);
+
+        if ($this->isPreloaded($localCompanyId) && ! isset($this->preloaded['touched_codes'][$codeKey])) {
+            $candidates = $this->preloaded['unlinked_by_code'][$codeKey] ?? [];
+
+            return count($candidates) === 1 ? $candidates[0] : null;
+        }
+
         $candidates = $this->scoped($localCompanyId)->whereNull($this->ssoIdColumn())->where('code', $code)->get();
 
         return $candidates->count() === 1 ? $candidates->first() : null;
+    }
+
+    protected function findLinked(int $localCompanyId, int $ssoId): ?object
+    {
+        if ($this->isPreloaded($localCompanyId) && ! isset($this->preloaded['touched_ids'][$ssoId])) {
+            return $this->preloaded['linked'][$ssoId] ?? null;
+        }
+
+        return parent::findLinked($localCompanyId, $ssoId);
+    }
+
+    public function upsert(int $localCompanyId, array $record, bool $delivery = false): string
+    {
+        $result = parent::upsert($localCompanyId, $record, $delivery);
+
+        if ($this->isPreloaded($localCompanyId)) {
+            $this->preloaded['touched_ids'][(int) $record['id']] = true;
+
+            $code = self::text($record['code'] ?? null);
+            if ($result === 'linked' && $code !== null) {
+                $this->preloaded['touched_codes'][mb_strtolower($code)] = true;
+            }
+        }
+
+        return $result;
+    }
+
+    #[\Override]
+    protected function reconcileCatalog(int $localCompanyId, array $records): array
+    {
+        return $this->withPreloadedRows($localCompanyId, fn (): array => parent::reconcileCatalog($localCompanyId, $records));
+    }
+
+    /**
+     * @template T
+     *
+     * @param  \Closure(): T  $callback
+     * @return T
+     */
+    private function withPreloadedRows(int $localCompanyId, \Closure $callback): mixed
+    {
+        $linked = [];
+        $unlinkedByCode = [];
+
+        foreach ($this->scoped($localCompanyId)->orderBy('id')->get() as $row) {
+            $ssoId = $row->{$this->ssoIdColumn()};
+
+            if ($ssoId !== null) {
+                $linked[(int) $ssoId] = $row;
+            } elseif (is_string($row->code) && $row->code !== '') {
+                $unlinkedByCode[mb_strtolower($row->code)][] = $row;
+            }
+        }
+
+        $this->preloaded = [
+            'company' => $localCompanyId,
+            'linked' => $linked,
+            'unlinked_by_code' => $unlinkedByCode,
+            'touched_ids' => [],
+            'touched_codes' => [],
+        ];
+
+        try {
+            return $callback();
+        } finally {
+            $this->preloaded = null;
+        }
+    }
+
+    private function isPreloaded(int $localCompanyId): bool
+    {
+        return $this->preloaded !== null && $this->preloaded['company'] === $localCompanyId;
     }
 
     /**
@@ -410,7 +500,7 @@ abstract class CodeListMirror extends CatalogMirror implements ContinuesPush, Se
     #[\Override]
     protected function applyBatch(int $localCompanyId, array $records): array
     {
-        $result = parent::applyBatch($localCompanyId, $records);
+        $result = $this->withPreloadedRows($localCompanyId, fn (): array => parent::applyBatch($localCompanyId, $records));
 
         if ($result['counts']['created'] + $result['counts']['updated'] > 0) {
             $this->project($localCompanyId);

@@ -202,6 +202,33 @@ class RotationMirrorTest extends MasterDataTestCase
         $this->assertSame([], $reader->windows($this->companyId, '2026-01-05', '2026-01-07', 'America/New_York'));
     }
 
+    public function test_all_reads_every_rotation_of_one_company_in_three_queries_and_probes_the_schema_once(): void
+    {
+        foreach ([301 => 'C Shift', 302 => 'A Shift', 303 => 'B Shift'] as $id => $name) {
+            $this->deliver('rotation.created', $this->rotation($id, $name));
+        }
+        $this->deliver('rotation.deactivated', $this->rotation(303, 'B Shift', ['is_active' => false, 'updated_at' => '2026-10-16T13:00:00+00:00']));
+        $this->deliver('rotation.created', $this->rotation(311, 'Other agency'), 71);
+
+        $reader = app(MirroredRotations::class);
+        $reader->available();
+
+        DB::enableQueryLog();
+        DB::flushQueryLog();
+        $all = $reader->all($this->companyId);
+        $this->assertCount(3, DB::getQueryLog(), 'One query for the rotations, one for their blocks, one for their assignments.');
+
+        $this->assertSame(['A Shift', 'C Shift'], array_column($all, 'name'));
+        $this->assertSame($reader->rotation($this->companyId, 301), $all[1]);
+        $this->assertSame(['A Shift', 'B Shift', 'C Shift'], array_column($reader->all($this->companyId, activeOnly: false), 'name'));
+
+        DB::flushQueryLog();
+        $reader->available();
+        $reader->options($this->companyId);
+        $reader->rotation($this->companyId, 301);
+        $this->assertCount(4, DB::getQueryLog(), 'options() is one query and rotation() three; neither probes the schema again.');
+    }
+
     public function test_the_push_sends_the_projection_rows_and_links_through_it(): void
     {
         config(['sso.master_data.rotations' => false]);

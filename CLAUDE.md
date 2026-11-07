@@ -1126,7 +1126,10 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   - `Rotations\MirroredRotations` reads the mirror for one local company: `options()` (picker rows with
     SSO's pattern summary), `rotation()`, `windows($company, $from, $to, $tz, unit|user|rotation)` (active
     rotations and assignments only, SSO ids on every window) and `patternWindows()` (a rotation run with a
-    start day of the caller's own, Crew templates). It returns nothing while the entity is off.
+    start day of the caller's own, Crew templates), plus `all($company)` (every rotation in `rotation()`'s
+    shape in three queries, for callers that would otherwise loop `rotation()`). It returns nothing while
+    the entity is off. `available()` probes the schema once per instance (UNI-1378: a per-rotation loop
+    paid four information_schema queries per call).
   - Trial purge: `rotations` is cleaned before `units`; sample rotations are deleted with their children.
   - Calendar tint (UNI-1226): the contract carries `color` (`#rrggbb` or null; anything else is stored as
     null) and `show_on_calendar` (bool, absent = false). The standard projection maps both onto

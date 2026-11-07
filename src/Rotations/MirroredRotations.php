@@ -28,14 +28,18 @@ use Unified\SsoClient\MasterData\Rotations\RotationMirror;
  */
 class MirroredRotations
 {
+    private ?bool $installed = null;
+
     public function __construct(private readonly MasterDataRegistry $registry) {}
 
     /**
-     * Whether the app mirrors rotations here (flag on, migration run).
+     * Whether the app mirrors rotations here (flag on, migration run). The
+     * schema probe runs once per instance, since every reader calls this
+     * and callers loop over rotations (UNI-1378).
      */
     public function available(): bool
     {
-        return $this->registry->enabled('rotations') && $this->mirror()->isInstalled();
+        return $this->registry->enabled('rotations') && ($this->installed ??= $this->mirror()->isInstalled());
     }
 
     /**
@@ -71,6 +75,27 @@ class MirroredRotations
             ])
             ->values()
             ->all();
+    }
+
+    /**
+     * Every rotation of the company in rotation()'s shape, by sort order
+     * then name, read in three queries however many there are.
+     *
+     * @return list<array{sso_id: int, name: string, pattern: string|null, is_active: bool, cycle_days: int, anchor_date: string, color: string|null, show_on_calendar: bool, blocks: list<array{day_index: int, start_time: string, duration_minutes: int, label: string|null}>, assignments: list<array{sso_id: int, assignable_type: string, unit_id: int|null, user_id: int|null, name: string|null, start_day_index: int, starts_on: string|null, ends_on: string|null, is_active: bool}>}>
+     */
+    public function all(int $localCompanyId, bool $activeOnly = true): array
+    {
+        if (! $this->available()) {
+            return [];
+        }
+
+        return $this->load($this->rotations($localCompanyId)
+            ->whereNotNull(RotationMirror::SSO_ID_COLUMN)
+            ->when($activeOnly, fn (Builder $query) => $query->where('is_active', true))
+            ->orderBy('sort_order')
+            ->orderBy('name')
+            ->get()
+            ->all());
     }
 
     /**

@@ -58,9 +58,19 @@ export class AssistantApi {
         return (await this.json('POST', this.settings.messages, body)) as TurnResponse;
     }
 
-    async upload(file: File): Promise<UploadResponse> {
+    /**
+     * The file goes with the same setup app and page the turns carry, so SSO
+     * files it under the app whose setup page is open, not the agency's first app.
+     */
+    async upload(file: File, setupApp: string | null): Promise<UploadResponse> {
         const form = new FormData();
         form.append('file', file, file.name);
+        form.append('page[url]', location.href);
+        form.append('page[title]', document.title);
+
+        if (setupApp) {
+            form.append('setup_app', setupApp);
+        }
 
         const response = await this.request('POST', this.settings.uploads, form);
 

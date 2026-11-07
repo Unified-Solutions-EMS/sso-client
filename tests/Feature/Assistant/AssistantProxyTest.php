@@ -292,7 +292,11 @@ class AssistantProxyTest extends AssistantTestCase
         $this->fakeSso();
         $this->signedInMember();
 
-        $this->post('/assistant/uploads', ['file' => UploadedFile::fake()->createWithContent('roster.csv', "name,email\nJohn,j@x.test\n")], ['Accept' => 'application/json'])
+        $this->post('/assistant/uploads', [
+            'file' => UploadedFile::fake()->createWithContent('roster.csv', "name,email\nJohn,j@x.test\n"),
+            'setup_app' => 'cloudpcr',
+            'page' => ['url' => 'https://crew.test/setup', 'title' => 'Setup'],
+        ], ['Accept' => 'application/json'])
             ->assertOk();
 
         Http::assertSent(function (ClientRequest $request): bool {
@@ -300,13 +304,30 @@ class AssistantProxyTest extends AssistantTestCase
                 return false;
             }
 
+            $fields = collect($request->data())->mapWithKeys(fn (array $part): array => [$part['name'] => $part['contents'] ?? null]);
+
+            return $fields->has(['file', 'sso_user_id', 'sso_company_id', 'app_slug'])
+                && $fields->get('setup_app') === 'cloudpcr'
+                && $fields->get('page[url]') === 'https://crew.test/setup'
+                && $fields->get('page[title]') === 'Setup'
+                && $request->hasFile('file', "name,email\nJohn,j@x.test\n", 'roster.csv');
+        });
+    }
+
+    public function test_upload_without_a_setup_app_or_page_forwards_only_the_file_and_identity(): void
+    {
+        $this->fakeSso();
+        $this->signedInMember();
+
+        $this->post('/assistant/uploads', ['file' => UploadedFile::fake()->createWithContent('roster.csv', "a,b\n")], ['Accept' => 'application/json'])
+            ->assertOk();
+
+        Http::assertSent(function (ClientRequest $request): bool {
             $names = array_column($request->data(), 'name');
 
-            return in_array('file', $names, true)
-                && in_array('sso_user_id', $names, true)
-                && in_array('sso_company_id', $names, true)
-                && in_array('app_slug', $names, true)
-                && $request->hasFile('file', "name,email\nJohn,j@x.test\n", 'roster.csv');
+            return $request->isMultipart()
+                && ! in_array('setup_app', $names, true)
+                && ! in_array('page[url]', $names, true);
         });
     }
 }

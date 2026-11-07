@@ -1290,14 +1290,16 @@ class AssistantWidget {
         this.setBusy(true, COPY.uploading);
 
         try {
-            const result = await this.api.upload(file);
+            const result = await this.api.upload(file, this.setupApp);
 
             if (result.ok === false || result.error) {
                 throw new ApiError(200, result.error || 'That file did not go through.');
             }
 
             this.setBusy(false);
-            await this.send(`${COPY.fileAdded}: ${file.name}`);
+            // The model reads a file by its number; the name alone leaves it guessing.
+            const label = result.upload?.id ? `${COPY.fileAdded} (file ${result.upload.id})` : COPY.fileAdded;
+            await this.send(`${label}: ${file.name}`);
         } catch (error) {
             this.setBusy(false);
             this.push({ id: `e-${Date.now()}`, role: 'assistant', content: this.errorText(error), tone: 'error', at: new Date().toISOString() });

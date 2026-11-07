@@ -52,15 +52,28 @@ class AssistantProxyController extends Controller
 
     public function upload(Request $request): JsonResponse|Response
     {
-        $request->validate(['file' => ['required', 'file', 'max:20480']]);
+        $body = $request->validate([
+            'file' => ['required', 'file', 'max:20480'],
+            'page' => ['sometimes', 'array'],
+            'page.url' => ['sometimes', 'nullable', 'string', 'max:2048'],
+            'page.title' => ['sometimes', 'nullable', 'string', 'max:512'],
+            'setup_app' => ['sometimes', 'nullable', 'string', 'max:64'],
+        ]);
 
         $file = $request->file('file');
+
+        // Multipart fields are flat, so the page goes as page[url] / page[title].
+        $fields = array_filter([
+            'setup_app' => $body['setup_app'] ?? null,
+            'page[url]' => $body['page']['url'] ?? null,
+            'page[title]' => $body['page']['title'] ?? null,
+        ], fn (mixed $v): bool => is_string($v) && $v !== '');
 
         return $this->forward(
             $request,
             'post',
             '/uploads',
-            [],
+            $fields,
             fn (PendingRequest $http): PendingRequest => $http->attach(
                 'file',
                 (string) file_get_contents($file->getRealPath()),

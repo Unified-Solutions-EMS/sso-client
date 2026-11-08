@@ -328,6 +328,9 @@ p + p { margin-top: 0.5em; }
 .change .remove { color: rgb(var(--ua-text-muted)); }
 .change .remove:hover { color: rgb(var(--ua-danger)); }
 .card.done { opacity: 0.8; }
+.feedback-card { gap: 8px; }
+.feedback-card .question { font-weight: 500; color: rgb(var(--ua-text)); }
+.feedback-card.answered { opacity: 0.85; }
 
 /* Footer */
 .footer { border-top: 1px solid rgb(var(--ua-border)); padding: 10px 12px 10px; background: rgb(var(--ua-surface)); }

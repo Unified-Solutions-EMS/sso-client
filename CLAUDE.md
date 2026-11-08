@@ -437,10 +437,24 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      {actions, undone?: id}}))` (`undone` is the action id that was just reversed) so pages refetch what
      changed (Crew's Scheduling page listens for it). An action whose `summary` is empty is not an
      action: no chip, not announced.
+     **"Did I handle that correctly?" (2026-11-08, James: a simple survey for a while, not forever):** when
+     SSO's bootstrap carries `feedback: {ask: true}` (SSO's `ASSISTANT_FEEDBACK_ENABLED`, default on) and the
+     component sends the `feedback` / `feedback_follow_up` settings, every completed task (a `complete` turn
+     whose reply made a change, i.e. real action chips or an applied review; approving a review card counts)
+     is followed by a small `.card.feedback-card` with Yes / No. Yes → `POST /assistant/feedback {conversation_id,
+     message_id?, helpful: true}`, "Thanks for letting me know." and the card goes after 4 s. No → the same
+     POST with `helpful: false` (SSO snapshots the conversation and queues the review email to the staff
+     address), then "Sorry about that. Our team will look at this conversation." and one more question,
+     "Would you like someone from our team to follow up with you?" with Yes, please / No thanks →
+     `POST /assistant/feedback/{id}/follow-up {follow_up}` → "Thanks. We'll be in touch." / "Thanks for
+     letting us know.". One card at a time: the next message or the next task replaces an unanswered one;
+     a reopened thread or new conversation shows none; any failure removes the card silently, the question
+     must never block the work. An older SSO (no `feedback` in bootstrap) or an older component (no
+     settings) never shows it. SSO keeps the score and the review list at `/admin/assistant-feedback`.
   2. **The same-origin proxy** `/assistant/{bootstrap, messages, uploads, actions/{id}/undo,
-     review/{plan}/{approve|remove|set-aside}, intro/dismiss, DELETE conversation}` under `sso.assistant.middleware`
+     review/{plan}/{approve|remove|set-aside}, intro/dismiss, feedback, feedback/{id}/follow-up, DELETE conversation}` under `sso.assistant.middleware`
      (`['web','auth']`), registered only when `assistant.enabled && assistant.proxy`. It forwards to
-     `SSO_BASE_URL/api/internal/assistant/{conversation, turn, uploads, actions/…, review/…, intro/dismiss}` with
+     `SSO_BASE_URL/api/internal/assistant/{conversation, turn, uploads, actions/…, review/…, intro/dismiss, feedback, feedback/{id}/follow-up}` with
      `Http::withToken(config('app.core_api_key'))` and stamps `sso_user_id` (auth user's `sso_id`),
      `sso_company_id` (`session('selected_company_id')` → `companies.sso_company_id`), `app_slug`
      (`sso.app_slug`) and `impersonating` (`session()->has('impersonator_id')`). **Identity never comes

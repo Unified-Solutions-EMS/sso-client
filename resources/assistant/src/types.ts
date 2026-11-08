@@ -10,6 +10,10 @@ export interface WidgetSettings {
     conversation: string;
     /** Still sent by the Blade component; the widget no longer calls it (SSO records the first turn itself). */
     intro_dismiss?: string | null;
+    /** POST: "Did I handle that correctly?" answers. Absent from an older component: the card is never shown. */
+    feedback?: string | null;
+    /** Template with {feedback}: the follow-up answer after a no. */
+    feedback_follow_up?: string | null;
     csrf: string | null;
 }
 
@@ -150,6 +154,11 @@ export interface BootstrapResponse {
     notice?: string | null;
     intro?: Intro | null;
     tour?: Tour | null;
+    /**
+     * Whether to ask "Did I handle that correctly?" after a completed task.
+     * Absent from an older SSO: never asked.
+     */
+    feedback?: { ask: boolean } | null;
 }
 
 export interface UndoResponse {
@@ -170,5 +179,14 @@ export interface UploadResponse {
     ok?: boolean;
     name?: string | null;
     upload?: { id: number } | null;
+    error?: string | null;
+}
+
+/** POST /assistant/feedback and …/feedback/{id}/follow-up answer. */
+export interface FeedbackResponse {
+    ok?: boolean;
+    id?: number | null;
+    helpful?: boolean | null;
+    follow_up?: boolean | null;
     error?: string | null;
 }

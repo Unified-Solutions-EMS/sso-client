@@ -148,6 +148,47 @@ class AssistantProxyTest extends AssistantTestCase
         });
     }
 
+    public function test_feedback_forwards_the_answer_with_the_session_identity(): void
+    {
+        Http::fake(['https://sso.test/api/internal/assistant/feedback' => Http::response(['ok' => true, 'id' => 5, 'helpful' => false], 200)]);
+        $this->signedInMember();
+
+        $this->postJson('/assistant/feedback', [
+            'conversation_id' => 31,
+            'message_id' => 12,
+            'helpful' => false,
+            'sso_user_id' => 999,
+        ])->assertOk()->assertJsonPath('id', 5);
+
+        Http::assertSent(function (ClientRequest $request): bool {
+            $data = $request->data();
+
+            return $request->url() === 'https://sso.test/api/internal/assistant/feedback'
+                && $data['conversation_id'] === 31
+                && $data['message_id'] === 12
+                && $data['helpful'] === false
+                && $data['sso_user_id'] === 7
+                && $data['sso_company_id'] === 42;
+        });
+
+        $this->postJson('/assistant/feedback', ['conversation_id' => 31])->assertUnprocessable();
+    }
+
+    public function test_feedback_follow_up_forwards_to_the_answer_route(): void
+    {
+        Http::fake(['https://sso.test/api/internal/assistant/feedback/5/follow-up' => Http::response(['ok' => true, 'id' => 5, 'follow_up' => true], 200)]);
+        $this->signedInMember();
+
+        $this->postJson('/assistant/feedback/5/follow-up', ['follow_up' => true])->assertOk()->assertJsonPath('follow_up', true);
+
+        Http::assertSent(fn (ClientRequest $request): bool => $request->url() === 'https://sso.test/api/internal/assistant/feedback/5/follow-up'
+            && $request->data()['follow_up'] === true
+            && $request->data()['sso_user_id'] === 7);
+
+        $this->postJson('/assistant/feedback/5/follow-up', [])->assertUnprocessable();
+        $this->postJson('/assistant/feedback/abc/follow-up', ['follow_up' => true])->assertNotFound();
+    }
+
     public function test_message_without_a_conversation_id_sends_none(): void
     {
         $this->fakeSso();

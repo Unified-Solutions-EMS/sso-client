@@ -42,6 +42,8 @@ if (config('sso.assistant.enabled', true)) {
                 Route::post('review/{plan}/set-aside', [AssistantProxyController::class, 'setAsideReview'])->name('sso.assistant.review.set-aside');
                 Route::delete('conversation', [AssistantProxyController::class, 'clearConversation'])->name('sso.assistant.conversation.clear');
                 Route::post('intro/dismiss', [AssistantProxyController::class, 'dismissIntro'])->name('sso.assistant.intro.dismiss');
+                Route::post('feedback', [AssistantProxyController::class, 'feedback'])->name('sso.assistant.feedback');
+                Route::post('feedback/{feedback}/follow-up', [AssistantProxyController::class, 'feedbackFollowUp'])->whereNumber('feedback')->name('sso.assistant.feedback.follow-up');
             });
     }
 }

@@ -41,6 +41,8 @@ class Assistant extends Component
             'review' => $base.'/review/{plan}/{verb}',
             'conversation' => $base.'/conversation',
             'intro_dismiss' => $base.'/intro/dismiss',
+            'feedback' => $base.'/feedback',
+            'feedback_follow_up' => $base.'/feedback/{feedback}/follow-up',
             'csrf' => csrf_token(),
         ];
 

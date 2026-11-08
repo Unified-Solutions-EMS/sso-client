@@ -1,5 +1,6 @@
 import type {
     BootstrapResponse,
+    FeedbackResponse,
     ReviewResponse,
     TurnResponse,
     UndoResponse,
@@ -85,6 +86,34 @@ export class AssistantApi {
         const url = this.settings.review.replace('{plan}', encodeURIComponent(planId)).replace('{verb}', verb);
 
         return (await this.json('POST', url, body)) as ReviewResponse;
+    }
+
+    /** Whether this app's component sends the feedback routes (an older sso-client does not). */
+    canRecordFeedback(): boolean {
+        return Boolean(this.settings.feedback && this.settings.feedback_follow_up);
+    }
+
+    /** "Did I handle that correctly?" Null when this component has no feedback route. */
+    async feedback(conversationId: number | string, messageId: number | string | null, helpful: boolean): Promise<FeedbackResponse | null> {
+        if (!this.settings.feedback) {
+            return null;
+        }
+
+        const body: Record<string, unknown> = { conversation_id: conversationId, helpful };
+
+        if (messageId !== null && typeof messageId === 'number') {
+            body.message_id = messageId;
+        }
+
+        return (await this.json('POST', this.settings.feedback, body)) as FeedbackResponse;
+    }
+
+    async feedbackFollowUp(feedbackId: number, wantsFollowUp: boolean): Promise<FeedbackResponse | null> {
+        if (!this.settings.feedback_follow_up) {
+            return null;
+        }
+
+        return (await this.json('POST', this.settings.feedback_follow_up.replace('{feedback}', String(feedbackId)), { follow_up: wantsFollowUp })) as FeedbackResponse;
     }
 
     /** Ends the current thread; the answer is the bootstrap shape with a new empty one. */

@@ -132,6 +132,30 @@ class AssistantProxyController extends Controller
     }
 
     /**
+     * "Did I handle that correctly?" The thread and reply ids are selectors SSO
+     * checks against the stamped identity, never identity themselves.
+     */
+    public function feedback(Request $request): JsonResponse|Response
+    {
+        $body = $request->validate([
+            'conversation_id' => ['required', 'integer'],
+            'message_id' => ['sometimes', 'nullable', 'integer'],
+            'helpful' => ['required', 'boolean'],
+        ]);
+
+        return $this->forward($request, 'post', '/feedback', $body);
+    }
+
+    public function feedbackFollowUp(Request $request, int $feedback): JsonResponse|Response
+    {
+        $body = $request->validate([
+            'follow_up' => ['required', 'boolean'],
+        ]);
+
+        return $this->forward($request, 'post', "/feedback/{$feedback}/follow-up", $body);
+    }
+
+    /**
      * @param  array<string, mixed>  $body
      * @param  (callable(PendingRequest): PendingRequest)|null  $attach
      */

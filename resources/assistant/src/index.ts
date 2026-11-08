@@ -49,7 +49,20 @@ const COPY = {
     tryIt: 'Try it',
     dismiss: 'Dismiss',
     walkthrough: 'Walkthrough',
+    feedbackQuestion: 'Did I handle that correctly?',
+    yes: 'Yes',
+    no: 'No',
+    feedbackThanks: 'Thanks for letting me know.',
+    feedbackSorry: 'Sorry about that. Our team will look at this conversation.',
+    feedbackFollowUp: 'Would you like someone from our team to follow up with you?',
+    followUpYes: 'Yes, please',
+    followUpNo: 'No thanks',
+    feedbackWillContact: "Thanks. We'll be in touch.",
+    feedbackNoted: 'Thanks for letting us know.',
 };
+
+/** How long the thank-you after a yes stays before the card goes. */
+const FEEDBACK_THANKS_MS = 4000;
 
 /**
  * Everything the widget keeps in sessionStorage sits under this prefix, scoped
@@ -278,6 +291,12 @@ class AssistantWidget {
     /** The pause before the next step is appended; cleared when the tour ends. */
     private tourAdvanceTimer: number | null = null;
 
+    /** SSO's say on whether to ask "Did I handle that correctly?" after a completed task. */
+    private askFeedback = false;
+
+    /** The one feedback card showing; a new task or a new message replaces it. */
+    private feedbackCard: HTMLElement | null = null;
+
     constructor(settings: SettingsWithContext) {
         this.api = new AssistantApi(settings);
         this.setupApp = settings.setup_app ?? null;
@@ -307,6 +326,7 @@ class AssistantWidget {
         this.booted = true;
         this.viewer = viewerOf(bootstrap);
         pruneStorage(this.viewer);
+        this.askFeedback = bootstrap.feedback?.ask === true && Boolean(this.api.canRecordFeedback());
         this.tour = bootstrap.intro?.show === true ? validTour(bootstrap.tour) : null;
 
         document.body.append(this.host);
@@ -830,6 +850,7 @@ class AssistantWidget {
         this.waitingRow = null;
         this.tourActive = false;
         this.tourPillsEl = null;
+        this.feedbackCard = null;
         this.renderMessages();
         this.resumeTour();
         this.renderThreads();
@@ -1187,6 +1208,10 @@ class AssistantWidget {
             if (verb === 'approve') {
                 // Approving the list is the change an action step waited for.
                 this.advanceTour({ review: result.review ?? { ...plan, status: 'approved' }, turn_state: 'complete' });
+
+                if (!result.review || APPLIED_PLAN_STATUSES.includes(result.review.status)) {
+                    this.offerFeedback(null);
+                }
             }
 
             if (result.reply) {
@@ -1228,6 +1253,7 @@ class AssistantWidget {
             this.autosize();
         }
 
+        this.dropFeedbackCard();
         this.push({ id: `u-${Date.now()}`, role: 'user', content: text, at: new Date().toISOString() });
         this.dismissIntro();
         this.setBusy(true);
@@ -1277,6 +1303,118 @@ class AssistantWidget {
         if (actions.length > 0) {
             announceActions(actions);
         }
+
+        const applied = turn.review !== null && turn.review !== undefined && APPLIED_PLAN_STATUSES.includes(turn.review.status);
+
+        if ((turn.turn_state ?? 'complete') === 'complete' && (actions.length > 0 || applied)) {
+            this.offerFeedback(typeof turn.message_id === 'number' ? turn.message_id : null);
+        }
+    }
+
+    /* "Did I handle that correctly?" */
+
+    /**
+     * Asked once per completed task (a reply that made a change, or an
+     * approved review list). A yes is recorded and thanked; a no is recorded,
+     * sent to the team, and followed by one more question: do they want
+     * someone to follow up. Any failure just removes the card: the question
+     * must never get in the way of the work.
+     */
+    private offerFeedback(messageId: number | null): void {
+        const conversationId = this.conversation?.id ?? null;
+
+        if (!this.askFeedback || conversationId === null) {
+            return;
+        }
+
+        this.dropFeedbackCard();
+
+        const card = h('div', { class: 'card feedback-card' });
+        const turn = h('div', { class: 'turn assistant feedback' }, card);
+        this.feedbackCard = turn;
+
+        const ask = (helpful: boolean) => {
+            card.querySelectorAll('button').forEach((button) => (button.disabled = true));
+
+            void this.api
+                .feedback(conversationId, messageId, helpful)
+                .then((result) => {
+                    if (!result || result.ok === false) {
+                        this.dropFeedbackCard();
+
+                        return;
+                    }
+
+                    if (helpful) {
+                        this.showFeedbackClosing(card, COPY.feedbackThanks, true);
+
+                        return;
+                    }
+
+                    this.askFollowUp(card, typeof result.id === 'number' ? result.id : null);
+                })
+                .catch(() => this.dropFeedbackCard());
+        };
+
+        card.append(
+            h('div', { class: 'question' }, COPY.feedbackQuestion),
+            h(
+                'div',
+                { class: 'row-actions' },
+                h('button', { class: 'btn secondary sm', type: 'button', onclick: () => ask(true) }, COPY.yes),
+                h('button', { class: 'btn secondary sm', type: 'button', onclick: () => ask(false) }, COPY.no),
+            ),
+        );
+
+        this.list.append(turn);
+        this.scrollToEnd();
+    }
+
+    private askFollowUp(card: HTMLElement, feedbackId: number | null): void {
+        if (feedbackId === null) {
+            this.showFeedbackClosing(card, COPY.feedbackNoted, false);
+
+            return;
+        }
+
+        const answer = (wantsFollowUp: boolean) => {
+            card.querySelectorAll('button').forEach((button) => (button.disabled = true));
+
+            void this.api
+                .feedbackFollowUp(feedbackId, wantsFollowUp)
+                .then(() => this.showFeedbackClosing(card, wantsFollowUp ? COPY.feedbackWillContact : COPY.feedbackNoted, false))
+                .catch(() => this.showFeedbackClosing(card, COPY.feedbackNoted, false));
+        };
+
+        card.replaceChildren(
+            h('div', { class: 'hint' }, COPY.feedbackSorry),
+            h('div', { class: 'question' }, COPY.feedbackFollowUp),
+            h(
+                'div',
+                { class: 'row-actions' },
+                h('button', { class: 'btn primary sm', type: 'button', onclick: () => answer(true) }, COPY.followUpYes),
+                h('button', { class: 'btn secondary sm', type: 'button', onclick: () => answer(false) }, COPY.followUpNo),
+            ),
+        );
+        this.scrollToEnd();
+    }
+
+    private showFeedbackClosing(card: HTMLElement, text: string, fade: boolean): void {
+        card.replaceChildren(h('div', { class: 'hint' }, text));
+        card.classList.add('answered');
+
+        if (fade) {
+            window.setTimeout(() => {
+                if (this.feedbackCard?.contains(card)) {
+                    this.dropFeedbackCard();
+                }
+            }, FEEDBACK_THANKS_MS);
+        }
+    }
+
+    private dropFeedbackCard(): void {
+        this.feedbackCard?.remove();
+        this.feedbackCard = null;
     }
 
     private async onFilePicked(): Promise<void> {

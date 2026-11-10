@@ -215,6 +215,22 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   because apps' global `ConvertEmptyStringsToNull` would otherwise turn `""` into a clear.
   `atomic()` on a group (pay-period frequency + start date) tells the renderer to save the group's keys
   in one PATCH behind an explicit Save instead of per-field autosave; package validation stays per key.
+  **`table` settings** (`SettingType::Table`) are a list of rows the agency manages from SSO (CloudPCR's
+  Non-Agency Crew): `->table('non_agency_crew', 'Non-Agency Crew')->columns([['key' => 'last_name',
+  'label' => 'Last name', 'type' => 'text'|'select'|'toggle', 'required' => bool, 'max' => int (text, default
+  255), 'options' => [{value, label}] | 'options_from_values' => true], ...])` (`Settings\TableColumn`; keys
+  are `[A-Za-z0-9_]`, `id` is reserved). Schema `toArray()` adds `columns: [{key, label, type, required,
+  options, options_from_values, max}]` and `description` (the AI assistant's text: "A list of rows. Each row
+  has an id and these columns: ...") to the usual fields; other types are unchanged. The default is
+  `{rows: [], options: []}`. `values()` returns `{rows: [{id, <column>...}], options: {<column>: [{value,
+  label}]}}` (`options` only for `options_from_values` columns: that company's choices) and GET passes it
+  through. PATCH `{<key>: {rows: [{id?, <column>...}]}}` sends only the rows that change: the package reads
+  `values()` once, validates each row (a row without `id` is a create and needs every `required` column; a
+  row with `id` is an update and only the columns it sends are checked; selects must be in the static or
+  that company's options; toggles boolean; text max), and `apply()` gets `{rows: [...]}` with `id` as int,
+  only declared columns, `""` as null and toggles as bool. One bad row makes the whole key `invalid`
+  ("Row 2: The selected Level is invalid.") and none of it is applied; other keys still apply. The package
+  never deletes rows: turning one off is the app's `is_active` toggle column, if it declares one.
   `apply()` must call the app's own services so observers, webhooks and metrics still fire.
 
   ```php
@@ -586,7 +602,8 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   `SSO_MASTER_DATA_QUALIFICATIONS`, `SSO_MASTER_DATA_DIVISIONS`, `SSO_MASTER_DATA_LOCATIONS`, `SSO_MASTER_DATA_VEHICLES`,
   `SSO_MASTER_DATA_FACILITIES`, `SSO_MASTER_DATA_MEDICATIONS`, `SSO_MASTER_DATA_PROCEDURES`,
   `SSO_MASTER_DATA_PERSONNEL`, `SSO_MASTER_DATA_AGENCY`, `SSO_MASTER_DATA_CONTACTS`, `SSO_MASTER_DATA_DEVICES`,
-  `SSO_MASTER_DATA_STATE_CONFIGURATIONS`, `SSO_MASTER_DATA_UNITS`, all default false).
+  `SSO_MASTER_DATA_STATE_CONFIGURATIONS`, `SSO_MASTER_DATA_UNITS`, `SSO_MASTER_DATA_ROTATIONS`,
+  `SSO_MASTER_DATA_OTHER_AGENCIES`, all default false).
   `mergeConfigFrom()` is shallow, so an app whose own `config/sso.php` defines `master_data` replaces the
   package's whole array. That is safe: every reader defaults per key (`MasterDataRegistry::enabled()` reads
   `config("sso.master_data.{$entity}", false)`, `schedule_resync` defaults true, `timeout` 120), so an app may
@@ -600,7 +617,8 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   subclass), `MasterDataWebhookHandler` (the webhook controller's `match` sends `qualification.*`,
   `user.qualifications_changed`, `division.*`, `user.division_changed`, `location.*`, `vehicle.*`, `facility.*`, `medication.*`,
   `procedure.*`, `person.updated|deactivated`, `agency.*`, `contact.*`, `device.created|updated|deactivated|batch_updated`
-  (not `device.revoked`, which is the sessions handler), `state_configuration.*` and `unit.*` here; a disabled entity, an unmigrated mirror, or an unknown company is a 200 ack, except that an event a
+  (not `device.revoked`, which is the sessions handler), `state_configuration.*`, `unit.*`, `rotation.*` and
+  `other_agency.*` here; a disabled entity, an unmigrated mirror, or an unknown company is a 200 ack, except that an event a
   mirror lists in `Contracts\ContinuesPush::pushEvents()` (the code lists' `review_completed`) is applied while the entity is
   still off, because it finishes the push), `MasterDataClient` (`GET {SSO_BASE_URL}/api/internal/companies/{id}/{entity}`,
   bearer `CORE_APP_API_KEY`), `sso:resync-master-data {entity} {--company=} {--link-by-name}` and the
@@ -1162,6 +1180,31 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     skips files already present, so only the new stub lands), then `sso:resync-master-data rotations` to
     fill the new columns. A new rotation column always ships as a new stub under the same tag; never edit
     the published create stub expecting apps to see it.
+- **Other agencies mirror** (`MasterData\OtherAgencies\OtherAgencyMirror` on `ProjectedMirror`, modeled on
+  contacts; Non-Agency Crew work, Pine Grove 2026-11). SSO's agency-owned list of the agencies its crews work
+  with (mutual aid, intercepts), picked from the state's agency list or added by hand, edited in SSO
+  `/system` > Agency lists > Other agencies. Registry key `other_agencies`, flag
+  `SSO_MASTER_DATA_OTHER_AGENCIES`, publish tag `sso-master-data-other-agencies`, link column
+  `sso_other_agency_id`, `SettingEntity::OtherAgencies` -> `/system/other-agencies`.
+  - Snapshot `GET .../other_agencies` -> `{company, other_agencies: [{id, uuid, name, state, state_agency_id,
+    agency_number, service_type, is_active, sort_order, updated_at, source}]}` (`source` is `state_list` when
+    `state_agency_id` is set, else `manual`; not stored). Events `other_agency.created|updated|deactivated`
+    (`{company, other_agency: {...}, updated_at}`) and `other_agency.batch_updated` (`{company,
+    other_agencies: [...], updated_at}`, like `facility.batch_updated`). Push `POST .../other_agencies/import` `{app_slug, other_agencies:
+    [{local_id, is_active, name, state, state_agency_id, agency_number, service_type, uuid}]}`.
+  - Adoption and SSO's import dedupe both key on name + state (trimmed, ignoring case): a row with the same
+    name in another state is a different agency.
+  - The package binds `StandardOtherAgencyProjection` on `sso_other_agencies` (`company_id`,
+    `sso_other_agency_id`, `uuid`, `name` 200, `state` 2, `state_agency_id` 50, `agency_number` 50,
+    `service_type` 10, `is_active`, `sort_order`, `sso_updated_at`, `sso_link_pending`, timestamps). CloudPCR
+    uses it as is (no `dem_` table); its Non-Agency Crew rows point at it.
+  - **`OtherAgencyMirror::pushRow(int $localCompanyId, int $localId): ?int`** pushes ONE row the app created
+    itself (a chart picks an agency from the state list before SSO has it) through the same import endpoint
+    and applies the returned mapping. Returns the SSO id (or the existing one when already linked, without a
+    request), or null when the row is not that company's, the company has no `sso_company_id`, SSO is
+    unreachable or answers an error (15 s timeout), or the link is refused (another row holds that SSO id).
+    It never throws; it logs a warning and leaves the row unlinked, and the next resync adopts it by name +
+    state. Call it after the local row is committed, never inside the chart save transaction.
 
 ## Release discipline
 

@@ -21,6 +21,7 @@ enum SettingEntity: string
     case StateConfigurations = 'state_configurations';
     case Units = 'units';
     case Rotations = 'rotations';
+    case OtherAgencies = 'other_agencies';
 
     public function settingsPath(): string
     {
@@ -36,6 +37,7 @@ enum SettingEntity: string
             self::StateConfigurations => '/system/state-configuration',
             self::Units => '/system/units',
             self::Rotations => '/system/rotations',
+            self::OtherAgencies => '/system/other-agencies',
         };
     }
 

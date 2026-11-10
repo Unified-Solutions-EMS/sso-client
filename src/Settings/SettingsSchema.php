@@ -15,9 +15,9 @@ use LogicException;
  *           ->requires('alerts.pre_pickup');
  *
  * atomic() marks the current group as saved-together.
- * Setting methods (text, toggle, select, ...) add to the current group;
- * modifier methods (help, default, rules, requires, danger, secret) change the
- * setting declared just before them.
+ * Setting methods (text, toggle, select, table, ...) add to the current group;
+ * modifier methods (help, default, rules, requires, danger, secret, columns)
+ * change the setting declared just before them.
  */
 final class SettingsSchema
 {
@@ -102,6 +102,29 @@ final class SettingsSchema
     public function entity(string $key, string $label, SettingEntity|string $entity): self
     {
         return $this->add($key, SettingType::Entity, $label, entity: is_string($entity) ? SettingEntity::from($entity) : $entity);
+    }
+
+    /**
+     * A list of rows the agency manages (people, codes): declare the row's
+     * columns with columns() right after. See SettingType::Table.
+     */
+    public function table(string $key, string $label): self
+    {
+        return $this->add($key, SettingType::Table, $label);
+    }
+
+    /**
+     * The columns of the table setting declared just before:
+     * `[['key' => 'last_name', 'label' => 'Last name', 'type' => 'text', 'required' => true], ...]`
+     * (TableColumn has the full shape).
+     *
+     * @param  array<int, array<string, mixed>>  $columns
+     */
+    public function columns(array $columns): self
+    {
+        $this->currentSetting()->setColumns($columns);
+
+        return $this;
     }
 
     public function help(string $help): self

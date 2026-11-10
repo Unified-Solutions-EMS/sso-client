@@ -25,6 +25,7 @@ abstract class DemographicsTestCase extends TestCase
         'contacts' => '2026_10_14_100100_create_or_extend_contacts_mirror.php',
         'devices' => '2026_10_14_100200_create_or_extend_devices_mirror.php',
         'state_configurations' => '2026_10_14_100300_create_or_extend_state_configurations_mirror.php',
+        'other_agencies' => '2026_11_10_100000_create_or_extend_other_agencies_mirror.php',
     ];
 
     protected function defineEnvironment($app): void

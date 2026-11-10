@@ -14,6 +14,13 @@ enum SettingType: string
     case Entity = 'entity';
 
     /**
+     * A list of rows with declared columns (TableColumn). The value is
+     * `{rows: [{id, <column>...}], options: {<column>: [{value, label}]}}`;
+     * a patch is `{rows: [...]}` with only the rows that change.
+     */
+    case Table = 'table';
+
+    /**
      * @return array<int, string>
      */
     public function baseRules(): array
@@ -22,7 +29,7 @@ enum SettingType: string
             self::Text, self::Textarea => ['string'],
             self::Number => ['numeric'],
             self::Toggle => ['boolean'],
-            self::MultiSelect => ['array'],
+            self::MultiSelect, self::Table => ['array'],
             self::Time => ['date_format:H:i'],
             self::Select, self::Entity => [],
         };

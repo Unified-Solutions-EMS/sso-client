@@ -46,11 +46,13 @@ class SettingsController extends Controller
             return $this->unsupported(['results' => (object) []]);
         }
 
-        if ($provider->values($ssoCompanyId) === null) {
+        $values = $provider->values($ssoCompanyId);
+
+        if ($values === null) {
             return $this->notProvisioned(['results' => (object) []]);
         }
 
-        [$accepted, $results] = $validator->validate($provider->schema(), $request->settingsPatch());
+        [$accepted, $results] = $validator->validate($provider->schema(), $request->settingsPatch(), $values);
 
         if ($accepted !== []) {
             $this->mergeProviderResults(

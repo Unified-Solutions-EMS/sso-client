@@ -21,6 +21,8 @@ use Unified\SsoClient\MasterData\Locations\TextAddressLocationProjection;
 use Unified\SsoClient\MasterData\MasterDataRegistry;
 use Unified\SsoClient\MasterData\Medications\MedicationProjection;
 use Unified\SsoClient\MasterData\Medications\MirrorOnlyMedicationProjection;
+use Unified\SsoClient\MasterData\OtherAgencies\OtherAgencyProjection;
+use Unified\SsoClient\MasterData\OtherAgencies\StandardOtherAgencyProjection;
 use Unified\SsoClient\MasterData\Personnel\PersonnelProjection;
 use Unified\SsoClient\MasterData\Personnel\StandardPersonnelProjection;
 use Unified\SsoClient\MasterData\Procedures\MirrorOnlyProcedureProjection;
@@ -96,6 +98,11 @@ class SsoServiceProvider extends ServiceProvider
         // blocks and assignments). Crew Scheduling extends the projection to
         // push its template rotations up.
         $this->app->bindIf(RotationProjection::class, StandardRotationProjection::class);
+
+        // Other agencies (the agencies an agency's crews work with) land in
+        // the package's sso_other_agencies read model unless the app binds
+        // its own projection.
+        $this->app->bindIf(OtherAgencyProjection::class, StandardOtherAgencyProjection::class);
 
         // Trial purge: what happens to a mirrored sample row SSO deleted.
         // Apps bind their own policy to veto deletes the database cannot see.
@@ -191,6 +198,7 @@ class SsoServiceProvider extends ServiceProvider
                 '2026_10_17_100000_create_or_extend_rotations_mirror.php',
                 '2026_10_27_100000_add_color_and_calendar_to_rotations_mirror.php',
             ],
+            'other-agencies' => '2026_11_10_100000_create_or_extend_other_agencies_mirror.php',
         ] as $tag => $files) {
             $this->publishesMigrations(collect((array) $files)->mapWithKeys(fn (string $file): array => [
                 __DIR__.'/../database/master-data/'.$file => database_path('migrations/'.$file),

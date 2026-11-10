@@ -3,6 +3,8 @@
 namespace Unified\SsoClient\Settings;
 
 use Illuminate\Validation\Rule;
+use InvalidArgumentException;
+use LogicException;
 use Stringable;
 
 /**
@@ -24,6 +26,9 @@ final class Setting
     private bool $danger = false;
 
     private bool $secret = false;
+
+    /** @var array<string, TableColumn> */
+    private array $columns = [];
 
     /**
      * @param  array<int, array{value: string|int, label: string}>  $options
@@ -73,6 +78,40 @@ final class Setting
         $this->secret = $secret;
     }
 
+    /**
+     * @param  array<int, array<string, mixed>>  $columns
+     */
+    public function setColumns(array $columns): void
+    {
+        if ($this->type !== SettingType::Table) {
+            throw new LogicException("columns() only applies to a table setting; [{$this->key}] is a {$this->type->value}.");
+        }
+
+        if ($columns === []) {
+            throw new InvalidArgumentException("Table setting [{$this->key}] needs at least one column.");
+        }
+
+        $this->columns = [];
+
+        foreach ($columns as $column) {
+            $column = TableColumn::fromArray($this->key, (array) $column);
+
+            if (isset($this->columns[$column->key])) {
+                throw new InvalidArgumentException("Table setting [{$this->key}] declares column [{$column->key}] twice.");
+            }
+
+            $this->columns[$column->key] = $column;
+        }
+    }
+
+    /**
+     * @return array<string, TableColumn>
+     */
+    public function columns(): array
+    {
+        return $this->columns;
+    }
+
     public function isSecret(): bool
     {
         return $this->secret;
@@ -84,7 +123,11 @@ final class Setting
      */
     public function default(): mixed
     {
-        return $this->secret ? null : $this->default;
+        if ($this->secret) {
+            return null;
+        }
+
+        return $this->type === SettingType::Table ? ($this->default ?? ['rows' => [], 'options' => []]) : $this->default;
     }
 
     public function isDanger(): bool
@@ -130,10 +173,37 @@ final class Setting
     }
 
     /**
+     * What the AI setup assistant reads about a table setting: its columns
+     * and how a change is sent. Null for every other type (the label, help
+     * and options already say it).
+     */
+    public function description(): ?string
+    {
+        if ($this->type !== SettingType::Table) {
+            return null;
+        }
+
+        $columns = implode('; ', array_map(fn (TableColumn $column): string => $column->describe(), array_values($this->columns)));
+        $active = $this->columns['is_active'] ?? null;
+        $off = $active !== null && $active->type === 'toggle'
+            ? "Rows are never deleted: set {$active->label} (is_active) to false to turn one off."
+            : 'Rows are never deleted.';
+
+        return "A list of rows. Each row has an id and these columns: {$columns}. "
+            .'To change it, send {"rows": [...]} with only the rows that change: a row without an id adds one, '
+            .'a row with an id changes that row and only the columns it sends. '.$off;
+    }
+
+    /**
      * @return array<string, mixed>
      */
     public function toArray(): array
     {
+        $table = $this->type === SettingType::Table ? [
+            'columns' => array_values(array_map(fn (TableColumn $column): array => $column->toArray(), $this->columns)),
+            'description' => $this->description(),
+        ] : [];
+
         return [
             'key' => $this->key,
             'type' => $this->type->value,
@@ -147,7 +217,7 @@ final class Setting
             'danger' => $this->danger,
             'secret' => $this->secret,
             'group' => $this->group,
-        ];
+        ] + $table;
     }
 
     /**

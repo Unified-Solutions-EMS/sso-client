@@ -11,8 +11,7 @@ use Illuminate\Support\Facades\Log;
  * division.*, user.division_changed, location.*, vehicle.*, facility.*,
  * medication.*, procedure.*, person.updated, person.deactivated, agency.*,
  * contact.*, device.* other than device.revoked, state_configuration.*, unit.*,
- * rotation.*) to
- * the matching mirror.
+ * rotation.*, other_agency.*) to the matching mirror.
  *
  * Every outcome other than a handler crash is a 200 acknowledgement: an entity
  * the app has not opted into, a mirror migration that has not run yet, or a

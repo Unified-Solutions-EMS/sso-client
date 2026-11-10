@@ -313,6 +313,11 @@ return [
         // read it with Unified\SsoClient\Rotations\MirroredRotations. Turn
         // units on first: assignments name units by SSO id.
         'rotations' => env('SSO_MASTER_DATA_ROTATIONS', false),
+        // Other agencies (the agencies an agency's crews work with, from the
+        // state's agency list or added by hand). Read model
+        // sso_other_agencies; OtherAgencyMirror::pushRow() sends one row the
+        // app created itself up to SSO.
+        'other_agencies' => env('SSO_MASTER_DATA_OTHER_AGENCIES', false),
 
         // Daily `sso:resync-master-data <entity>` for every enabled entity,
         // so assignments dropped by early-arriving webhooks (user not yet

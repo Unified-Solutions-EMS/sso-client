@@ -55,6 +55,7 @@ return new class extends Migration
                 $blueprint->text('service_areas')->nullable();
                 $blueprint->text('year_stats')->nullable();
                 $blueprint->text('custom_values')->nullable();
+                $blueprint->text('licenses')->nullable();
                 $blueprint->text('not_values')->nullable();
                 $blueprint->timestamps();
             });

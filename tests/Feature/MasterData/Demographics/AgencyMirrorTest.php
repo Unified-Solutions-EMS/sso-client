@@ -2,9 +2,11 @@
 
 namespace Unified\SsoClient\Tests\Feature\MasterData\Demographics;
 
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Testing\TestResponse;
 use Unified\SsoClient\Trial\TrialMirrorCleaner;
 
@@ -105,6 +107,44 @@ class AgencyMirrorTest extends DemographicsTestCase
         $this->assertSame('9876543210', $this->row()->npi);
         $this->assertNull($this->row()->service_areas);
         $this->assertSame(1, DB::table('sso_agency_profiles')->count());
+    }
+
+    public function test_the_licenses_land_as_json_and_the_push_sends_them_back(): void
+    {
+        $licenses = [
+            ['state' => '47', 'state_agency_id' => '9925', 'agency_number' => '9925', 'is_primary' => true, 'reporting_rule' => 'all_charts'],
+            ['state' => '51', 'state_agency_id' => '750', 'agency_number' => '750', 'is_primary' => false, 'reporting_rule' => 'scene_in_state'],
+        ];
+
+        $this->deliverAgency('agency.updated', $this->agency(31, ['state' => '47', 'state_agency_id' => '9925', 'agency_number' => '9925', 'licenses' => $licenses]))
+            ->assertOk()->assertJson(['result' => 'created']);
+
+        $this->assertSame($licenses, json_decode($this->row()->licenses, true));
+
+        config(['sso.master_data.agency' => false]);
+        Http::fake(['sso.test/api/internal/companies/70/agency/import' => Http::response([
+            'created' => 0, 'matched' => 1, 'conflicts' => [],
+            'mapping' => [(string) $this->row()->id => ['sso_id' => 31, 'updated_at' => '2026-10-14T12:00:00+00:00']],
+        ])]);
+
+        $this->artisan('sso:push-master-data', ['entity' => 'agency', '--company' => '70'])->assertSuccessful();
+
+        Http::assertSent(fn (Request $request): bool => $request['agency']['licenses'] === $licenses);
+    }
+
+    public function test_the_upgrade_stub_adds_licenses_to_a_table_published_before_it(): void
+    {
+        Schema::table('sso_agency_profiles', function (Blueprint $table): void {
+            $table->dropColumn('licenses');
+        });
+        DB::table('sso_agency_profiles')->insert(['company_id' => $this->companyId, 'sso_agency_id' => 31, 'npi' => 'kept', 'created_at' => now(), 'updated_at' => now()]);
+
+        $stub = require __DIR__.'/../../../../database/master-data/2026_11_13_100000_add_licenses_to_agency_mirror.php';
+        $stub->up();
+        $stub->up();
+
+        $this->assertTrue(Schema::hasColumn('sso_agency_profiles', 'licenses'));
+        $this->assertSame(['kept', null], [$this->row()->npi, $this->row()->licenses]);
     }
 
     public function test_the_companys_only_row_is_adopted_pending_and_another_companys_row_is_untouched(): void

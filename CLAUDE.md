@@ -1056,6 +1056,12 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     `{app_slug, agency: {local_id, ...}}`, one request (`ImportBatcher` never splits an object with `local_id`);
     SSO is fill-only and answers `conflicts: [{local_id, name, field, local_value, sso_value}]`, printed as the
     field table. A company with no agency row prints "no local agency to send" and sends nothing.
+    `licenses` (UNI-1597, multi-state reporting) is every state the agency reports to: `[{state (2-digit FIPS),
+    state_agency_id, agency_number, is_primary, reporting_rule: all_charts|scene_in_state}]`, primary first and
+    equal to `state`/`state_agency_id`/`agency_number`, `[]` with no state; `reporting_states` stays as the
+    non-primary states. The standard table keeps it as JSON (`2026_11_13_100000_add_licenses_to_agency_mirror`
+    adds the column to an older table); CloudPCR writes `dem_agency_state_licenses` rows keyed by state (the stub
+    shows how) and sends them back in `toSso()`.
   - **contacts** `GET .../contacts` -> `{company, contacts: [{id, type, nemsis_type, name, first_name,
     middle_name, last_name, title, is_primary, phones: [{number, type}], emails: [{address, type}], address,
     website, medical_director, fellowship_status, sso_user_id, <field>_nv, pending?, is_active, sort_order,

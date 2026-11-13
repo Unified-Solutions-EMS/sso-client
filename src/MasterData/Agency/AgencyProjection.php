@@ -22,13 +22,19 @@ use Unified\SsoClient\MasterData\Contracts\RecordProjection;
  * app maps to its own code (CloudPCR's dAgency.23). written() writes what
  * lives outside the row: `service_areas` [{id, state, county, zip,
  * sort_order}], `year_stats` [{id, year, ...the dAgency.15-.22 values}]
- * and `custom_values` {element_id: {value, nv}}. toSso() sends the same
- * fields back, children included, for `POST .../agency/import`.
+ * and `custom_values` {element_id: {value, nv}}. fromSso() and written()
+ * may also use `licenses` [{state, state_agency_id, agency_number,
+ * is_primary, reporting_rule}]: every state the agency reports to (state =
+ * 2-digit FIPS, reporting_rule `all_charts` | `scene_in_state`), the
+ * primary first and equal to `state` / `state_agency_id` /
+ * `agency_number`; `[]` when the profile has no state. toSso() sends the
+ * same fields back, children and `licenses` included, for
+ * `POST .../agency/import`.
  *
  * The package binds StandardAgencyProjection (`sso_agency_profiles`).
  * CloudPCR binds one over `dem_agencies` + `dem_agency_service_areas` +
- * `dem_agency_year_stats` + `dem_custom_values`, keeping its
- * DemAgencyObserver firing; tests/Stubs/DemAgencyProjection.php is the
- * template.
+ * `dem_agency_year_stats` + `dem_custom_values` +
+ * `dem_agency_state_licenses`, keeping its DemAgencyObserver firing;
+ * tests/Stubs/DemAgencyProjection.php is the template.
  */
 interface AgencyProjection extends RecordProjection {}

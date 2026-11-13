@@ -14,7 +14,8 @@ use Unified\SsoClient\Tests\Stubs\DemAgencyProjection;
 /**
  * agency into CloudPCR's shape (DemAgencyProjection): `dem_agencies` with
  * its service areas and yearly statistics as child rows written in place
- * from SSO's lists.
+ * from SSO's lists, and the states it reports to as license rows keyed by
+ * state.
  */
 class AgencyCloudPcrShapeTest extends DemographicsTestCase
 {
@@ -67,6 +68,20 @@ class AgencyCloudPcrShapeTest extends DemographicsTestCase
             $table->integer('dagency_20')->nullable();
             $table->integer('sort_order')->default(0);
             $table->timestamps();
+        });
+
+        Schema::create('dem_agency_state_licenses', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('company_id');
+            $table->foreignId('dem_agency_id')->constrained('dem_agencies')->cascadeOnDelete();
+            $table->string('state', 2);
+            $table->string('dagency_01')->nullable();
+            $table->string('dagency_02')->nullable();
+            $table->boolean('is_primary')->default(false);
+            $table->string('reporting_rule')->default('all_charts');
+            $table->integer('sort_order')->default(0);
+            $table->timestamps();
+            $table->unique(['company_id', 'state']);
         });
     }
 
@@ -132,6 +147,47 @@ class AgencyCloudPcrShapeTest extends DemographicsTestCase
         $this->assertSame(1, DB::table('dem_agency_year_stats')->where('dem_agency_id', $agency->id)->count());
     }
 
+    /**
+     * @return list<array{0: string, 1: string|null, 2: bool, 3: string}>
+     */
+    private function licenses(): array
+    {
+        return DB::table('dem_agency_state_licenses')->where('company_id', $this->companyId)->orderBy('sort_order')->get()
+            ->map(fn (object $license): array => [$license->state, $license->dagency_01, (bool) $license->is_primary, $license->reporting_rule])->all();
+    }
+
+    public function test_the_licenses_land_as_rows_keyed_by_state(): void
+    {
+        $this->deliverAgency($this->agency([
+            'state' => '47',
+            'state_agency_id' => '9925',
+            'agency_number' => '9925',
+            'licenses' => [
+                ['state' => '47', 'state_agency_id' => '9925', 'agency_number' => '9925', 'is_primary' => true, 'reporting_rule' => 'all_charts'],
+                ['state' => '51', 'state_agency_id' => '750', 'agency_number' => '750', 'is_primary' => false, 'reporting_rule' => 'scene_in_state'],
+            ],
+        ]))->assertOk()->assertJson(['result' => 'created']);
+
+        $agencyId = (int) DB::table('dem_agencies')->where('company_id', $this->companyId)->value('id');
+        $this->assertSame([['47', '9925', true, 'all_charts'], ['51', '750', false, 'scene_in_state']], $this->licenses());
+        $this->assertSame(2, DB::table('dem_agency_state_licenses')->where('dem_agency_id', $agencyId)->count());
+        $tennessee = (int) DB::table('dem_agency_state_licenses')->where('state', '47')->value('id');
+
+        $this->deliverAgency($this->agency([
+            'state' => '47',
+            'state_agency_id' => '9925',
+            'agency_number' => '9925',
+            'licenses' => [
+                ['state' => '47', 'state_agency_id' => '9925', 'agency_number' => '9925', 'is_primary' => true, 'reporting_rule' => 'scene_in_state'],
+                ['state' => '13', 'state_agency_id' => null, 'agency_number' => null, 'is_primary' => false, 'reporting_rule' => 'scene_in_state'],
+            ],
+            'updated_at' => '2026-10-14T13:00:00+00:00',
+        ]))->assertJson(['result' => 'updated']);
+
+        $this->assertSame([['47', '9925', true, 'scene_in_state'], ['13', null, false, 'scene_in_state']], $this->licenses(), 'A state SSO removed is dropped and a new one added.');
+        $this->assertSame($tennessee, (int) DB::table('dem_agency_state_licenses')->where('state', '47')->value('id'), 'A state that stays keeps its row.');
+    }
+
     public function test_a_soft_deleted_row_is_not_the_companys_agency_and_a_pending_adoption_keeps_its_children(): void
     {
         DB::table('dem_agencies')->insert(['company_id' => $this->companyId, 'dagency_01' => 'deleted', 'deleted_at' => now()]);
@@ -180,5 +236,27 @@ class AgencyCloudPcrShapeTest extends DemographicsTestCase
             'year_stats' => [['year' => 2025, 'call_center_volume' => null, 'transport_volume' => 3100]],
         ]);
         $this->assertSame(31, (int) DB::table('dem_agencies')->where('id', $local)->value('sso_agency_id'));
+    }
+
+    public function test_the_push_sends_the_licenses(): void
+    {
+        config(['sso.master_data.agency' => false]);
+        $local = (int) DB::table('dem_agencies')->insertGetId(['company_id' => $this->companyId, 'dagency_01' => '9925', 'dagency_04' => '47']);
+        DB::table('dem_agency_state_licenses')->insert([
+            ['company_id' => $this->companyId, 'dem_agency_id' => $local, 'state' => '51', 'dagency_01' => '750', 'dagency_02' => '750', 'is_primary' => false, 'reporting_rule' => 'scene_in_state', 'sort_order' => 1],
+            ['company_id' => $this->companyId, 'dem_agency_id' => $local, 'state' => '47', 'dagency_01' => '9925', 'dagency_02' => null, 'is_primary' => true, 'reporting_rule' => 'all_charts', 'sort_order' => 0],
+        ]);
+
+        Http::fake(['sso.test/api/internal/companies/70/agency/import' => Http::response([
+            'created' => 0, 'matched' => 1, 'conflicts' => [],
+            'mapping' => [(string) $local => ['sso_id' => 31, 'updated_at' => '2026-10-14T12:00:00+00:00']],
+        ])]);
+
+        $this->artisan('sso:push-master-data', ['entity' => 'agency', '--company' => '70'])->assertSuccessful();
+
+        Http::assertSent(fn (Request $request): bool => $request['agency']['licenses'] === [
+            ['state' => '47', 'state_agency_id' => '9925', 'agency_number' => null, 'is_primary' => true, 'reporting_rule' => 'all_charts'],
+            ['state' => '51', 'state_agency_id' => '750', 'agency_number' => '750', 'is_primary' => false, 'reporting_rule' => 'scene_in_state'],
+        ]);
     }
 }

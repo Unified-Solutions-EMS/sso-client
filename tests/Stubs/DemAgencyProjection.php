@@ -16,6 +16,12 @@ use Unified\SsoClient\MasterData\Support\ChildRows;
  * yearly statistics in `dem_agency_year_stats` (dagency_15 year, 18 call
  * centre volume, 20 transports). The name is the company's name.
  *
+ * The states the agency reports to land in `dem_agency_state_licenses`
+ * (state FIPS, dagency_01, dagency_02, is_primary, reporting_rule), one
+ * row per state, matched by state rather than position because the real
+ * table is unique on (company_id, state). The primary row repeats the
+ * dem_agencies values.
+ *
  * The children are a pure copy of SSO's lists once the Agency page is
  * read-only, so ChildRows::sync() deletes the extras. A starting point for
  * the real one, which also maps the company's time zone to dAgency.23 and
@@ -78,6 +84,34 @@ class DemAgencyProjection implements AgencyProjection
                 'dagency_20' => $year['transport_volume'] ?? null,
             ], array_values(array_filter($record['year_stats'], 'is_array'))));
         }
+
+        if (is_array($record['licenses'] ?? null)) {
+            $this->writeLicenses($localCompanyId, $localId, array_values(array_filter($record['licenses'], 'is_array')));
+        }
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $licenses
+     */
+    private function writeLicenses(int $localCompanyId, int $localId, array $licenses): void
+    {
+        $states = array_map(fn (array $license): string => (string) $license['state'], $licenses);
+
+        DB::table('dem_agency_state_licenses')->where('company_id', $localCompanyId)->whereNotIn('state', $states)->delete();
+
+        foreach ($licenses as $index => $license) {
+            DB::table('dem_agency_state_licenses')->updateOrInsert(
+                ['company_id' => $localCompanyId, 'state' => (string) $license['state']],
+                [
+                    'dem_agency_id' => $localId,
+                    'dagency_01' => $license['state_agency_id'] ?? null,
+                    'dagency_02' => $license['agency_number'] ?? null,
+                    'is_primary' => (bool) ($license['is_primary'] ?? false),
+                    'reporting_rule' => $license['reporting_rule'] ?? 'all_charts',
+                    'sort_order' => $index,
+                ],
+            );
+        }
     }
 
     public function pushColumns(): array
@@ -98,6 +132,8 @@ class DemAgencyProjection implements AgencyProjection
                 ->map(fn (object $area): array => ['state' => $area->dagency_05, 'county' => $area->dagency_06, 'zip' => $area->dagency_08])->all(),
             'year_stats' => DB::table('dem_agency_year_stats')->where('dem_agency_id', $row->id)->orderBy('sort_order')->get()
                 ->map(fn (object $year): array => ['year' => (int) $year->dagency_15, 'call_center_volume' => $year->dagency_18 === null ? null : (int) $year->dagency_18, 'transport_volume' => $year->dagency_20 === null ? null : (int) $year->dagency_20])->all(),
+            'licenses' => DB::table('dem_agency_state_licenses')->where('company_id', $localCompanyId)->orderBy('sort_order')->get()
+                ->map(fn (object $license): array => ['state' => $license->state, 'state_agency_id' => $license->dagency_01, 'agency_number' => $license->dagency_02, 'is_primary' => (bool) $license->is_primary, 'reporting_rule' => $license->reporting_rule])->all(),
         ], fn (mixed $value): bool => $value !== null && $value !== []);
     }
 }

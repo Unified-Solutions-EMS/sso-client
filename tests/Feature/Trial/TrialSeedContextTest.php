@@ -2,6 +2,7 @@
 
 namespace Unified\SsoClient\Tests\Feature\Trial;
 
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Unified\SsoClient\Tests\Stubs\StubPlainTrialDataSeeder;
@@ -76,10 +77,12 @@ class TrialSeedContextTest extends TrialTestCase
 
         $this->postTrialWebhook('trial.seed_data', 77, $this->payload())
             ->assertOk()
-            ->assertExactJson(['status' => 'ok', 'action' => 'trial.seed_data']);
+            ->assertExactJson(['status' => 'ok', 'action' => 'trial.seed_data', 'seed_status' => 'pending']);
 
         $this->assertSeededWithoutContext();
-        Http::assertNothingSent();
+        Http::assertSentCount(1);
+        Http::assertSent(fn (Request $request): bool => str_ends_with($request->url(), '/api/internal/companies/77/trial-seed-status')
+            && $request['status'] === 'seeded');
     }
 
     public function test_a_three_argument_job_still_seeds_after_the_mirror_sync(): void

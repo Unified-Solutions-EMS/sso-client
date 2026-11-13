@@ -3,7 +3,9 @@
 namespace Unified\SsoClient\Tests\Feature\Trial;
 
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use PHPUnit\Framework\Attributes\PreserveGlobalState;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
@@ -72,8 +74,16 @@ class TrialContextJobSeedTest extends TestCase
 
         $this->artisan('queue:work', ['connection' => 'database', '--once' => true])->assertSuccessful();
 
-        $this->assertSame(0, DB::table('jobs')->count());
+        $this->assertSame(1, DB::table('jobs')->count(), 'the chained seed-status report waits behind the seeder');
         $this->assertCount(1, StubTrialDataSeeder::$calls);
+
+        config(['sso.base_url' => 'https://sso.test', 'app.core_api_key' => 'core-key', 'sso.app_slug' => 'crew-scheduling']);
+        Http::fake();
+        $this->artisan('queue:work', ['connection' => 'database', '--once' => true])->assertSuccessful();
+
+        $this->assertSame(0, DB::table('jobs')->count());
+        Http::assertSent(fn (Request $request): bool => str_ends_with($request->url(), '/api/internal/companies/77/trial-seed-status')
+            && $request['status'] === 'seeded');
     }
 
     public function test_the_context_round_trips_through_the_queue_payload_to_the_seeder(): void

@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Unified\SsoClient\Trial;
 
+use Illuminate\Support\Facades\Bus;
 use Unified\SsoClient\Contracts\ReceivesTrialContext;
+use Unified\SsoClient\Trial\Jobs\ReportTrialSeedStatus;
 
 /**
  * Runs the app's own trial seeder and purger the way the webhook always has:
@@ -17,6 +19,12 @@ use Unified\SsoClient\Contracts\ReceivesTrialContext;
  * argument: a `RunTrialSeeder` whose constructor takes three ignores it
  * (PHP drops extra arguments), one with a fourth `?TrialContext $context`
  * parameter passes it on to the seeder itself.
+ *
+ * SSO's trial welcome modal shows a setup bar until every app has seeded,
+ * so `seed()` also tells SSO how it went ({@see TrialSeedStatusReporter}):
+ * a queued job is chained with a "seeded" report and a "failed" one if the
+ * chain breaks; a seeder run in this process is reported as soon as it
+ * returns or throws.
  */
 class AppTrialJobs
 {
@@ -32,13 +40,29 @@ class AppTrialJobs
      * Queued, so the app's job keeps its own retry settings.
      *
      * @param  array<string>  $userSsoIds
+     * @return string `pending` when the seeder was queued (SSO hears the outcome
+     *                later), `seeded` when it ran here
      */
-    public function seed(mixed $company, array $userSsoIds, string $adminSsoId, ?TrialContext $context = null): void
+    public function seed(mixed $company, array $userSsoIds, string $adminSsoId, ?TrialContext $context = null): string
     {
-        if (class_exists(self::SEEDER_JOB)) {
-            (self::SEEDER_JOB)::dispatch($company, $userSsoIds, $adminSsoId, $context);
+        $ssoCompanyId = $company->sso_company_id ?? null;
 
-            return;
+        if (class_exists(self::SEEDER_JOB)) {
+            $job = new (self::SEEDER_JOB)($company, $userSsoIds, $adminSsoId, $context);
+
+            if ($ssoCompanyId === null || ! method_exists($job, 'chain')) {
+                dispatch($job);
+
+                return 'pending';
+            }
+
+            Bus::chain([$job, new ReportTrialSeedStatus($ssoCompanyId, TrialSeedStatusReporter::SEEDED)])
+                ->catch(function () use ($ssoCompanyId): void {
+                    app(TrialSeedStatusReporter::class)->report($ssoCompanyId, TrialSeedStatusReporter::FAILED);
+                })
+                ->dispatch();
+
+            return 'pending';
         }
 
         $seeder = app(self::SEEDER);
@@ -47,7 +71,24 @@ class AppTrialJobs
             $seeder->withTrialContext($context);
         }
 
-        $seeder->seed($company, $userSsoIds, $adminSsoId);
+        try {
+            $seeder->seed($company, $userSsoIds, $adminSsoId);
+        } catch (\Throwable $e) {
+            $this->reportIfLinked($ssoCompanyId, TrialSeedStatusReporter::FAILED);
+
+            throw $e;
+        }
+
+        $this->reportIfLinked($ssoCompanyId, TrialSeedStatusReporter::SEEDED);
+
+        return 'seeded';
+    }
+
+    private function reportIfLinked(int|string|null $ssoCompanyId, string $status): void
+    {
+        if ($ssoCompanyId !== null) {
+            app(TrialSeedStatusReporter::class)->report($ssoCompanyId, $status);
+        }
     }
 
     public function purge(mixed $company, string $adminSsoId): void

@@ -121,6 +121,21 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     its own retry settings) or call `App\Services\TrialDataSeeder`. It fails closed: the seeder never runs
     on lists SSO has not delivered. On a sync queue there is no retry; the throw makes the webhook answer
     500 and SSO records the delivery as failed.
+  - **Seed status for SSO's setup bar (2026-11-13).** A trial admin's first dashboard load comes while the
+    apps are still seeding, so SSO's welcome modal shows a setup bar and stays open until every app has
+    reported. The webhook answer carries `seed_status`: `pending` when a seeder was queued (both the
+    `master_data: syncing` path and a direct `RunTrialSeeder` dispatch), `seeded` when the seeder ran in the
+    request, `skipped` when the app has none. A queued seeder is dispatched as a chain
+    (`AppTrialJobs::seed()`): `RunTrialSeeder` then `Trial\Jobs\ReportTrialSeedStatus`, with a `catch`
+    that reports `failed`, so SSO hears the outcome when the job really finishes;
+    `SeedTrialAfterMasterDataSync::failed()` reports `failed` too. The report is
+    `Trial\TrialSeedStatusReporter::report($ssoCompanyId, seeded|failed|skipped)` ->
+    `POST {SSO_BASE_URL}/api/internal/companies/{id}/trial-seed-status {app_slug, status}` (bearer
+    `CORE_APP_API_KEY`, 10 s, fail-silent: a refusal or an unreachable SSO is a warning in the log). SSO counts
+    a step as finished on its own after ten minutes, so a lost report only delays the bar. An app on an
+    older package answers no `seed_status`, and SSO counts its delivery as done. `RunTrialSeeder` must use
+    the `Queueable` trait (every app's does) or the job is dispatched unchained and only the timeout
+    finishes its step.
   - **`master_data.context` and `Trial\TrialContext`.** SSO sends where the trial is and what it seeded:
     `{state ('NY'), state_fips ('36'), city, county_fips ('36001'), zip, timezone (IANA), agency_name, phone,
     owner_user_id, fake_user_ids: [int], divisions: [name], stations: [{number, name, street, city, state,

@@ -69,7 +69,7 @@ class TrialSeedResyncTest extends TrialTestCase
 
         $this->postTrialWebhook('trial.seed_data', 77, $this->masterData())
             ->assertOk()
-            ->assertJson(['status' => 'ok', 'action' => 'trial.seed_data', 'master_data' => 'syncing']);
+            ->assertJson(['status' => 'ok', 'action' => 'trial.seed_data', 'master_data' => 'syncing', 'seed_status' => 'pending']);
 
         $this->assertCount(1, StubTrialDataSeeder::$calls);
         $this->assertSame(['divisions' => 2, 'locations' => 4, 'vehicles' => 6, 'qualifications' => 4], $seen);
@@ -151,7 +151,7 @@ class TrialSeedResyncTest extends TrialTestCase
 
         $this->postTrialWebhook('trial.seed_data', 77)
             ->assertOk()
-            ->assertExactJson(['status' => 'ok', 'action' => 'trial.seed_data']);
+            ->assertExactJson(['status' => 'ok', 'action' => 'trial.seed_data', 'seed_status' => 'pending']);
 
         Bus::assertDispatched(StubRunTrialSeeder::class, fn (StubRunTrialSeeder $job): bool => $job->adminSsoId === 'admin-uuid');
         Bus::assertNotDispatched(SeedTrialAfterMasterDataSync::class);
@@ -169,7 +169,7 @@ class TrialSeedResyncTest extends TrialTestCase
 
         $this->postTrialWebhook('trial.seed_data', 77, $this->masterData(ready: false))
             ->assertOk()
-            ->assertExactJson(['status' => 'ok', 'action' => 'trial.seed_data']);
+            ->assertExactJson(['status' => 'ok', 'action' => 'trial.seed_data', 'seed_status' => 'pending']);
 
         Bus::assertDispatched(StubRunTrialSeeder::class);
         Http::assertNothingSent();

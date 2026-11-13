@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Log;
 use Unified\SsoClient\Trial\AppTrialJobs;
 use Unified\SsoClient\Trial\TrialContext;
 use Unified\SsoClient\Trial\TrialMasterDataSync;
+use Unified\SsoClient\Trial\TrialSeedStatusReporter;
 
 /**
  * `trial.seed_data` from an SSO that seeds the shared lists: mirror them
@@ -65,5 +66,9 @@ class SeedTrialAfterMasterDataSync implements ShouldQueue
         ]);
 
         report(new \RuntimeException("Trial seed for SSO company {$this->company->sso_company_id} gave up: {$e->getMessage()}", 0, $e));
+
+        if (isset($this->company->sso_company_id)) {
+            app(TrialSeedStatusReporter::class)->report($this->company->sso_company_id, TrialSeedStatusReporter::FAILED);
+        }
     }
 }

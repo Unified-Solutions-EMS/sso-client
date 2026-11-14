@@ -3,6 +3,7 @@ import { pendingChoices, renderChoice, setRowBusy, showRowError, stillNeedText }
 import { BarAvoidance, SCROLLER_ATTRIBUTE, SCROLLER_PADDING_VAR } from './avoid';
 import { dayLabel, h, icons, paragraphs, svg, timeLabel } from './dom';
 import { askHelp, hasIntercom, setIntercomHidden } from './intercom';
+import { BusyPoller, DRAFT_NAME_PREFIX, type FailedTurnHandlers, SlowTurnTimer, clearDraftIfSent, draftName, failedTurnError, isBusy, readDraft, renderFailedTurn, saveDraft, showRetryButtons } from './retry';
 import { styles } from './styles';
 import type { Action, BootstrapResponse, Conversation, ConversationSummary, Handoff, Intro, Message, PlanChange, ReviewPlan, ReviewResponse, Suggestion, Tour, TourStep, TurnResponse, WidgetSettings } from './types';
 
@@ -108,7 +109,7 @@ function belongsToViewer(rest: string, viewer: string | null): boolean {
         return rest.startsWith(`${viewer}:`);
     }
 
-    return UNSCOPED_NAMES.includes(rest) || rest.startsWith(TOUR_NAME_PREFIX);
+    return UNSCOPED_NAMES.includes(rest) || rest.startsWith(TOUR_NAME_PREFIX) || rest.startsWith(DRAFT_NAME_PREFIX);
 }
 
 /** Drops what earlier viewers (other people, earlier logins) left in this tab. */
@@ -259,6 +260,15 @@ class AssistantWidget {
 
     private waitingRow: HTMLElement | null = null;
 
+    /** The error bubble under the last message that got no answer; never part of the saved thread. */
+    private failedRow: HTMLElement | null = null;
+
+    private retryHandlers: FailedTurnHandlers | null = null;
+
+    private slowTimer = new SlowTurnTimer();
+
+    private busyPoller: BusyPoller;
+
     private lastFocus: Element | null = null;
 
     private lifted = false;
@@ -305,6 +315,12 @@ class AssistantWidget {
         this.root = this.host.attachShadow({ mode: 'open' });
         this.syncTheme();
         this.build();
+        this.busyPoller = new BusyPoller(
+            () => this.api.bootstrap(this.conversation?.id ?? null),
+            () => this.messages,
+            (bootstrap) => this.applyBootstrap(bootstrap),
+            () => this.busyGaveUp(),
+        );
         this.avoidance = new BarAvoidance(this.host, (lifted) => {
             this.lifted = lifted;
             this.syncDock();
@@ -689,7 +705,10 @@ class AssistantWidget {
             placeholder: COPY.placeholder,
             'aria-label': COPY.placeholder,
             onkeydown: (event: Event) => this.onComposerKey(event as KeyboardEvent),
-            oninput: () => this.autosize(),
+            oninput: () => {
+                this.autosize();
+                saveDraft(this.draftKey(), this.input.value);
+            },
         });
 
         this.sendButton = h('button', { class: 'icon-btn send', type: 'button', 'aria-label': COPY.send, onclick: () => void this.send() }, svg(icons.send));
@@ -852,6 +871,10 @@ class AssistantWidget {
         this.tourActive = false;
         this.tourPillsEl = null;
         this.feedbackCard = null;
+        this.busyPoller.stop();
+        this.failedRow = null;
+        this.input.value = readDraft(this.draftKey());
+        this.autosize();
         this.renderMessages();
         this.resumeTour();
         this.renderThreads();
@@ -1300,18 +1323,98 @@ class AssistantWidget {
         }
 
         this.dropFeedbackCard();
-        this.push({ id: `u-${Date.now()}`, role: 'user', content: text, at: new Date().toISOString() });
+        this.dropFailedTurn();
+        const userId = `u-${Date.now()}`;
+        const draftKey = this.draftKey();
+        this.push({ id: userId, role: 'user', content: text, at: new Date().toISOString() });
         this.dismissIntro();
         this.setBusy(true);
+        this.slowTimer.start((label) => this.setWaitingLabel(label));
 
         try {
             const turn = await this.api.send(text, this.setupApp, this.conversation?.id ?? null);
+            const failure = failedTurnError(turn);
+
+            if (failure !== null) {
+                this.showFailedTurn(text, userId, failure, false);
+
+                return;
+            }
+
+            clearDraftIfSent(draftKey, text);
             this.acceptTurn(turn);
             this.advanceTour(turn);
         } catch (error) {
-            this.push({ id: `e-${Date.now()}`, role: 'assistant', content: this.errorText(error), tone: 'error', at: new Date().toISOString() });
+            this.showFailedTurn(text, userId, this.errorText(error), isBusy(error));
         } finally {
+            this.slowTimer.stop();
             this.setBusy(false);
+        }
+    }
+
+    /* A message that got no answer */
+
+    private draftKey(): string {
+        return this.storageKey(draftName(this.conversation?.id ?? null));
+    }
+
+    /**
+     * Keeps the admin's text: back in the composer (and the stored draft) so a
+     * refresh loses nothing, with Try again and Dismiss under the error. A busy
+     * thread is watched first and only offers Try again after a minute.
+     */
+    private showFailedTurn(text: string, userId: string, error: string, busy: boolean): void {
+        if (this.input.value.trim() === '') {
+            this.input.value = text;
+            this.autosize();
+        }
+
+        saveDraft(this.draftKey(), this.input.value);
+
+        const handlers: FailedTurnHandlers = {
+            onRetry: () => {
+                this.dropFailedTurn(userId);
+
+                if (this.input.value.trim() === text) {
+                    this.input.value = '';
+                    this.autosize();
+                }
+
+                void this.send(text);
+            },
+            onDismiss: () => {
+                this.dropFailedTurn(userId);
+                this.input.focus();
+            },
+        };
+
+        this.failedRow = renderFailedTurn(error, handlers, busy);
+        this.failedRow.dataset.retry = userId;
+        this.retryHandlers = handlers;
+        this.list.append(this.failedRow);
+        this.scrollToEnd();
+
+        if (busy) {
+            this.busyPoller.start();
+        }
+    }
+
+    private busyGaveUp(): void {
+        if (this.failedRow && this.retryHandlers) {
+            showRetryButtons(this.failedRow, this.retryHandlers);
+        }
+    }
+
+    /** Removes the error bubble and, when given, the unanswered message above it. */
+    private dropFailedTurn(userId?: string): void {
+        this.busyPoller.stop();
+        this.failedRow?.remove();
+        this.failedRow = null;
+        this.retryHandlers = null;
+
+        if (userId !== undefined) {
+            this.messages = this.messages.filter((message) => message.id !== userId);
+            this.list.querySelector(`[data-id="${userId}"]`)?.remove();
         }
     }
 
@@ -1556,12 +1659,20 @@ class AssistantWidget {
         this.waitingRow = null;
 
         if (busy) {
-            this.waitingRow = h('div', { class: 'turn assistant' }, h('div', { class: 'waiting' }, h('span', { class: 'dots' }, h('span'), h('span'), h('span')), label));
+            this.waitingRow = h('div', { class: 'turn assistant' }, h('div', { class: 'waiting', role: 'status' }, h('span', { class: 'dots' }, h('span'), h('span'), h('span')), h('span', { class: 'waiting-label' }, label)));
             this.list.append(this.waitingRow);
             this.scrollToEnd();
         }
 
         this.panel.querySelectorAll('button').forEach((button) => (button.disabled = busy));
+    }
+
+    private setWaitingLabel(label: string): void {
+        const target = this.waitingRow?.querySelector('.waiting-label');
+
+        if (target) {
+            target.textContent = label;
+        }
     }
 
     private appendNotice(text: string): void {

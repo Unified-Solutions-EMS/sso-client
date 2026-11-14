@@ -2,6 +2,8 @@
 
 namespace Unified\SsoClient\Contracts;
 
+use Illuminate\Contracts\Auth\Authenticatable;
+
 interface SsoUserSynchronizerContract
 {
     /**
@@ -10,7 +12,7 @@ interface SsoUserSynchronizerContract
      * Returns a tuple of [User, Company|null].
      *
      * @param  array  $payload  The normalized user payload from SSO /api/user endpoint.
-     * @return array{0: \Illuminate\Contracts\Auth\Authenticatable, 1: mixed}
+     * @return array{0: Authenticatable, 1: mixed}
      */
     public function synchronize(array $payload): array;
 }

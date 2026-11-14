@@ -17,7 +17,9 @@ use Unified\SsoClient\Trial\Exceptions\TrialMasterDataNotReadyException;
  *
  * SSO seeds the lists, then sends `trial.seed_data` with
  * `master_data: {ready, counts: {entity: n}}`. Every entity this app mirrors
- * (flag on, migration run) is resynced for the company, then each mirrored
+ * (flag on, migration run) is resynced for the company (every snapshot is
+ * fetched first, the plain ones in parallel, then the mirrors resync one
+ * after another in registry order, since some point at others), then each mirrored
  * entity SSO counted must hold at least that many active linked rows. Not
  * ready, SSO unreachable, or a short list throws, and the job that called
  * this retries: the app must never seed a list SSO owns.
@@ -65,12 +67,19 @@ class TrialMasterDataSync
             throw new TrialMasterDataNotReadyException("SSO has not finished seeding the lists of company {$ssoCompanyId}.");
         }
 
+        $mirrors = $this->mirrors();
+
+        try {
+            $snapshots = $this->client->snapshots($mirrors, $ssoCompanyId);
+        } catch (\Throwable $e) {
+            throw new TrialMasterDataNotReadyException("Could not resync the lists of company {$ssoCompanyId}: {$e->getMessage()}", 0, $e);
+        }
+
         $mirrored = [];
 
-        foreach ($this->mirrors() as $entity => $mirror) {
+        foreach ($mirrors as $entity => $mirror) {
             try {
-                $snapshot = $this->client->snapshot($mirror, $ssoCompanyId);
-                DB::transaction(fn (): array => $mirror->resync($localCompanyId, $snapshot));
+                DB::transaction(fn (): array => $mirror->resync($localCompanyId, $snapshots[$entity]));
             } catch (\Throwable $e) {
                 throw new TrialMasterDataNotReadyException("Could not resync {$entity} for company {$ssoCompanyId}: {$e->getMessage()}", 0, $e);
             }

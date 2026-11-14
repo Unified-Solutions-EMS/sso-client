@@ -112,13 +112,19 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     registry entity, so a new entity needs no package code). When the key is present **and** this app has at least one mirror turned on and
     migrated, the handler queues `Trial\Jobs\SeedTrialAfterMasterDataSync` instead of the app's seeder (ack
     `master_data: "syncing"`). The job resyncs EVERY enabled, installed mirror for the company
-    (`TrialMasterDataSync`, same `fetch` + `resync` as `sso:resync-master-data`), then checks each resynced
+    (`TrialMasterDataSync`: `MasterDataClient::snapshots()` fetches every plain snapshot at once in one
+    `Http::pool`, then the `FetchesSnapshot` mirrors page theirs; only then do the mirrors `resync` one by one
+    in `mirrors()` order, since locations point at divisions and so on), then checks each resynced
     entity's active linked rows against `counts` (entities absent from `counts` are not checked; counted
     entities this app does not mirror are ignored, the app seeds those locally). `ready !== true`, SSO
     unreachable / erroring, or a short list throws `TrialMasterDataNotReadyException` (`ShouldntReport`), so
     the queue retries: 6 tries, backoff 30/60/120/240/480 s (about 15 minutes); `failed()` logs and reports
-    once. Only after the check passes does it dispatch `App\Jobs\RunTrialSeeder` (queued, so the app job keeps
-    its own retry settings) or call `App\Services\TrialDataSeeder`. It fails closed: the seeder never runs
+    once. Only after the check passes does it run the app's seeder **inside this job** (`AppTrialJobs::seedNow()`:
+    `dispatch_sync(RunTrialSeeder)` then report `seeded`, or report `failed` and rethrow; without the job class
+    it calls `App\Services\TrialDataSeeder`), so there is no second queue hop (2026-11-13; was ~1 s plus
+    queue wait). The app job's own `$tries` no longer apply on this path: a seeder failure fails this job
+    (`$this->fail()`) instead of retrying the mirror + seed on a half-seeded trial. `$timeout = 300` so a
+    slow seeder outlives a worker's default 60 s. It fails closed: the seeder never runs
     on lists SSO has not delivered. On a sync queue there is no retry; the throw makes the webhook answer
     500 and SSO records the delivery as failed.
   - **Seed status for SSO's setup bar (2026-11-13).** A trial admin's first dashboard load comes while the

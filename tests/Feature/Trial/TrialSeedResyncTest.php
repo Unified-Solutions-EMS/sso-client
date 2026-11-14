@@ -3,15 +3,26 @@
 namespace Unified\SsoClient\Tests\Feature\Trial;
 
 use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Http\Client\Events\RequestSending;
+use Illuminate\Http\Client\Events\ResponseReceived;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use Mockery;
+use Unified\SsoClient\MasterData\Contracts\EntityMirror;
+use Unified\SsoClient\MasterData\Contracts\FetchesSnapshot;
+use Unified\SsoClient\MasterData\Exceptions\CompanyNotInSsoException;
+use Unified\SsoClient\MasterData\MasterDataClient;
+use Unified\SsoClient\MasterData\MasterDataRegistry;
 use Unified\SsoClient\Tests\Stubs\Models\Company;
 use Unified\SsoClient\Tests\Stubs\StubRunTrialSeeder;
 use Unified\SsoClient\Tests\Stubs\StubTrialDataSeeder;
 use Unified\SsoClient\Trial\Exceptions\TrialMasterDataNotReadyException;
 use Unified\SsoClient\Trial\Jobs\SeedTrialAfterMasterDataSync;
+use Unified\SsoClient\Trial\TrialMasterDataSync;
 
 class TrialSeedResyncTest extends TrialTestCase
 {
@@ -173,6 +184,100 @@ class TrialSeedResyncTest extends TrialTestCase
 
         Bus::assertDispatched(StubRunTrialSeeder::class);
         Http::assertNothingSent();
+    }
+
+    public function test_fetches_every_snapshot_at_once_before_resyncing_in_registry_order(): void
+    {
+        $this->company(77);
+        $this->fakeSso(77);
+
+        $log = [];
+        Event::listen(RequestSending::class, function (RequestSending $event) use (&$log): void {
+            $log[] = 'send '.basename($event->request->url());
+        });
+        Event::listen(ResponseReceived::class, function (ResponseReceived $event) use (&$log): void {
+            $log[] = 'received '.basename($event->request->url());
+        });
+
+        $sync = app(TrialMasterDataSync::class);
+        $order = array_keys($sync->mirrors());
+        $mirrored = $sync->sync(Company::first()->getKey(), '77', ['ready' => true, 'counts' => self::COUNTS]);
+
+        $this->assertSame($order, array_keys($mirrored));
+        $this->assertSame(
+            [...array_map(fn (string $entity): string => "send {$entity}", $order), ...array_map(fn (string $entity): string => "received {$entity}", $order)],
+            $log,
+            'all four requests leave before the first answer is read',
+        );
+    }
+
+    public function test_a_mirror_that_pages_its_own_snapshot_is_fetched_after_the_pool(): void
+    {
+        $this->fakeSso(77);
+        $order = [];
+        Event::listen(ResponseReceived::class, function (ResponseReceived $event) use (&$order): void {
+            $order[] = basename($event->request->url());
+        });
+
+        $paged = Mockery::mock(EntityMirror::class.', '.FetchesSnapshot::class);
+        $paged->shouldReceive('fetchSnapshot')->once()->with('77')->andReturnUsing(function () use (&$order): array {
+            $order[] = 'paged';
+
+            return ['people' => []];
+        });
+        $divisions = app(MasterDataRegistry::class)->mirror('divisions');
+        $vehicles = app(MasterDataRegistry::class)->mirror('vehicles');
+
+        $snapshots = app(MasterDataClient::class)->snapshots(['personnel' => $paged, 'divisions' => $divisions, 'vehicles' => $vehicles], '77');
+
+        $this->assertSame(['personnel', 'divisions', 'vehicles'], array_keys($snapshots));
+        $this->assertSame(['people' => []], $snapshots['personnel']);
+        $this->assertCount(2, $snapshots['divisions']['divisions']);
+        $this->assertSame(['divisions', 'vehicles', 'paged'], $order);
+    }
+
+    public function test_a_missing_company_in_the_pool_throws_the_typed_exception(): void
+    {
+        Http::fake(['sso.test/*' => Http::response([], 404)]);
+
+        $this->expectException(CompanyNotInSsoException::class);
+
+        app(MasterDataClient::class)->snapshots(['divisions' => app(MasterDataRegistry::class)->mirror('divisions')], '77');
+    }
+
+    public function test_the_seeder_runs_inside_the_sync_job_without_a_second_queue_trip(): void
+    {
+        config(['queue.connections.nowhere' => ['driver' => 'null'], 'queue.default' => 'nowhere']);
+        $this->company(77);
+        $this->fakeSso(77);
+
+        $job = new SeedTrialAfterMasterDataSync(Company::first(), ['admin-uuid'], 'admin-uuid', ['ready' => true, 'counts' => self::COUNTS]);
+        $this->app->call([$job, 'handle']);
+
+        $this->assertCount(1, StubTrialDataSeeder::$calls, 'ran here, though the default queue drops everything');
+        Http::assertSent(fn (Request $request): bool => str_ends_with($request->url(), '/companies/77/trial-seed-status') && $request['status'] === 'seeded');
+        $this->assertSame(300, $job->timeout);
+    }
+
+    public function test_an_inline_seeder_that_throws_reports_failed_and_never_seeded(): void
+    {
+        $this->company(77);
+        $this->fakeSso(77);
+        StubTrialDataSeeder::$onSeed = function (): void {
+            throw new \RuntimeException('no sample data today');
+        };
+
+        $job = new SeedTrialAfterMasterDataSync(Company::first(), ['admin-uuid'], 'admin-uuid', ['ready' => true, 'counts' => self::COUNTS]);
+
+        try {
+            $this->app->call([$job, 'handle']);
+            $this->fail('The seeder failure should reach the caller.');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('no sample data today', $e->getMessage());
+        }
+
+        Http::assertSent(fn (Request $request): bool => str_ends_with($request->url(), '/companies/77/trial-seed-status') && $request['status'] === 'failed');
+        Http::assertNotSent(fn (Request $request): bool => str_ends_with($request->url(), '/companies/77/trial-seed-status') && $request['status'] === 'seeded');
     }
 
     private function expectRetry(array $masterData, string $message): void

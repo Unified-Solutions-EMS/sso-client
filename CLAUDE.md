@@ -624,6 +624,15 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   `company_id` when present, and the exception, never the payload (it can carry PHI).
 - **Session actions** — `EnforceSsoSessionActions` is auto-appended to the `web` group in every app,
   so impersonation/forced-logout land on the next request without per-app wiring.
+  **A sign-out instruction never outlives the sign-in that follows it (2026-11-14).** `user.logged_out`
+  queues a `force_logout` row with `payload.issued_at` (SSO's `timestamp`) and `expires_at` 15 min; a
+  successful callback deletes the user's pending `force_logout` rows and stamps the session with
+  `SESSION_SIGNED_IN_AT`; the middleware drops expired rows first and applies a sign-out only when it was
+  issued at or after the session's sign-in (no `issued_at`, or no stamp, still applies, as before). CloudPCR
+  had 352 stale rows: every trial admin's first click after signing in (New PCR) was bounced to `/login`,
+  which also lost the intended URL because `sso.server_url` is unset there, so a second OAuth trip landed
+  on the dashboard 10-15 s later. The fallback now reads `sso.server_url` then `sso.base_url`, and with
+  neither sends the person back through the SSO redirect route with `intended` set.
 - **Legacy cookie scrub** — `Middleware\PurgeLegacyApexCookies` (`sso.purge-legacy-cookies`), also
   auto-appended to the `web` group. The legacy ASP.NET app set several cookies on `.unified-apps.com`,
   so browsers still send them to every app on the platform; its own logout only wrote host-only

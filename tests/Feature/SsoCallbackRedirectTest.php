@@ -7,6 +7,8 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Support\Facades\Schema;
 use Mockery;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
+use Unified\SsoClient\Middleware\EnforceSsoSessionActions;
+use Unified\SsoClient\Models\SsoSessionAction;
 use Unified\SsoClient\SsoClient;
 use Unified\SsoClient\SsoSessionState;
 use Unified\SsoClient\Tests\TestCase;
@@ -71,6 +73,23 @@ class SsoCallbackRedirectTest extends TestCase
 
         $response->assertRedirect($intended);
         $this->assertAuthenticatedAs($synced->fresh());
+    }
+
+    public function test_a_successful_sign_in_clears_an_older_sign_out_instruction(): void
+    {
+        $user = $this->bindCallbackFor('77', ['name' => 'Again', 'sso_id' => '77', 'email' => 'again@example.test']);
+        SsoSessionAction::create(['user_id' => $user->id, 'action' => SsoSessionAction::ACTION_FORCE_LOGOUT, 'payload' => ['reason' => 'sso_logout'], 'expires_at' => now()->addMinutes(10)]);
+
+        $this->withSession([
+            SsoSessionState::KEY_OAUTH_STATE => 'state-abc',
+            SsoSessionState::KEY_CODE_VERIFIER => 'verifier-xyz',
+            SsoSessionState::KEY_INTENDED_URL => 'http://localhost/epcr/create',
+        ])
+            ->get('/auth/sso/callback?state=state-abc&code=auth-code')
+            ->assertRedirect('http://localhost/epcr/create');
+
+        $this->assertSame(0, SsoSessionAction::query()->where('user_id', $user->id)->count());
+        $this->assertNotNull(session(EnforceSsoSessionActions::SESSION_SIGNED_IN_AT));
     }
 
     public function test_same_user_callback_still_honors_intended_url(): void

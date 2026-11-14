@@ -8,6 +8,8 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
 use Unified\SsoClient\Exceptions\SsoClientException;
+use Unified\SsoClient\Middleware\EnforceSsoSessionActions;
+use Unified\SsoClient\Models\SsoSessionAction;
 use Unified\SsoClient\SsoClient;
 use Unified\SsoClient\SsoSessionState;
 use Unified\SsoClient\SsoSingleFlight;
@@ -140,6 +142,15 @@ class SsoCallbackController extends Controller
 
             // Log in locally
             Auth::login($user, true);
+
+            // This sign-in is newer than any "signed out of SSO" instruction
+            // still waiting for this person here; applying one now would sign
+            // them straight out again and lose where they were going.
+            SsoSessionAction::query()
+                ->where('user_id', $user->id)
+                ->where('action', SsoSessionAction::ACTION_FORCE_LOGOUT)
+                ->delete();
+            $request->session()->put(EnforceSsoSessionActions::SESSION_SIGNED_IN_AT, now()->getTimestamp());
 
             // The trip completed: forget any earlier failures so a later
             // unrelated hiccup starts from zero.

@@ -26,6 +26,9 @@ use Unified\SsoClient\SsoSessionState;
  */
 class EnforceSsoSessionActions
 {
+    /** Unix time the callback signed this session in; a sign-out issued before it is not for this session. */
+    public const SESSION_SIGNED_IN_AT = 'sso_signed_in_at';
+
     public function __construct(protected SsoSessionState $sessionState) {}
 
     public function handle(Request $request, Closure $next): Response
@@ -36,6 +39,12 @@ class EnforceSsoSessionActions
 
         $userId = (int) Auth::id();
 
+        SsoSessionAction::query()
+            ->where('user_id', $userId)
+            ->whereNotNull('expires_at')
+            ->where('expires_at', '<=', now())
+            ->delete();
+
         $actions = SsoSessionAction::query()
             ->where('user_id', $userId)
             ->orderBy('id')
@@ -45,12 +54,18 @@ class EnforceSsoSessionActions
             return $next($request);
         }
 
+        $signedInAt = (int) $request->session()->get(self::SESSION_SIGNED_IN_AT, 0);
         $forceLogout = false;
         $setCompanyId = null;
 
         foreach ($actions as $action) {
             if ($action->action === SsoSessionAction::ACTION_FORCE_LOGOUT) {
-                $forceLogout = true;
+                // A sign-out SSO issued before this session was signed in is
+                // about an earlier session; this one is newer and stays.
+                $issuedAt = strtotime((string) ($action->payload['issued_at'] ?? '')) ?: null;
+                if ($issuedAt === null || $signedInAt === 0 || $issuedAt >= $signedInAt) {
+                    $forceLogout = true;
+                }
             } elseif ($action->action === SsoSessionAction::ACTION_SET_COMPANY) {
                 $setCompanyId = (int) ($action->payload['company_id'] ?? 0);
             }
@@ -63,12 +78,12 @@ class EnforceSsoSessionActions
             $request->session()->invalidate();
             $request->session()->regenerateToken();
 
-            $ssoUrl = rtrim((string) config('sso.server_url'), '/');
+            $ssoUrl = rtrim((string) (config('sso.server_url') ?: config('sso.base_url')), '/');
             if ($ssoUrl) {
                 return redirect()->away($ssoUrl.'/auth/logout');
             }
 
-            return redirect('/login');
+            return redirect()->to(config('sso.routes.redirect', '/auth/sso/redirect').'?intended='.urlencode($request->fullUrl()));
         }
 
         if ($setCompanyId !== null && $setCompanyId > 0) {

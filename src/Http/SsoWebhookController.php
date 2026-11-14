@@ -5,6 +5,7 @@ namespace Unified\SsoClient\Http;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
@@ -405,7 +406,10 @@ class SsoWebhookController extends Controller
             return ['status' => 'ok', 'action' => 'user.logged_out', 'skipped' => true];
         }
 
-        $this->queueForceLogout($user, 'sso_logout');
+        // Deliveries can arrive late. The action carries SSO's own timestamp
+        // so the middleware applies it only to a session signed in before the
+        // sign-out, never to the one the person started afterwards.
+        $this->queueForceLogout($user, 'sso_logout', now()->addMinutes(15), (string) $request->input('timestamp', ''));
 
         return ['status' => 'ok', 'action' => 'user.logged_out'];
     }
@@ -461,7 +465,7 @@ class SsoWebhookController extends Controller
         DB::connection($connection)->table($table)->where('user_id', $userId)->delete();
     }
 
-    protected function queueForceLogout(mixed $user, string $reason): void
+    protected function queueForceLogout(mixed $user, string $reason, ?Carbon $expiresAt = null, string $issuedAt = ''): void
     {
         SsoSessionAction::query()
             ->where('user_id', $user->id)
@@ -470,8 +474,8 @@ class SsoWebhookController extends Controller
         SsoSessionAction::create([
             'user_id' => $user->id,
             'action' => SsoSessionAction::ACTION_FORCE_LOGOUT,
-            'payload' => ['reason' => $reason],
-            'expires_at' => now()->addHours(8),
+            'payload' => array_filter(['reason' => $reason, 'issued_at' => $issuedAt]),
+            'expires_at' => $expiresAt ?? now()->addHours(8),
         ]);
     }
 

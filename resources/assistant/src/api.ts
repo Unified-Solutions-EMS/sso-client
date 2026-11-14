@@ -8,6 +8,12 @@ import type {
     WidgetSettings,
 } from './types';
 
+export type ReviewVerb = 'approve' | 'remove' | 'choose' | 'set-aside';
+
+export function chooseBody(planHash: string, index: number, code: string | null): { plan_hash: string; index: number; code: string | null } {
+    return { plan_hash: planHash, index, code };
+}
+
 export class ApiError extends Error {
     constructor(
         public status: number,
@@ -82,10 +88,15 @@ export class AssistantApi {
         return (await this.json('POST', this.settings.undo.replace('{action}', String(actionId)), {})) as UndoResponse;
     }
 
-    async review(planId: string, verb: 'approve' | 'remove' | 'set-aside', body: Record<string, unknown>): Promise<ReviewResponse> {
+    async review(planId: string, verb: ReviewVerb, body: Record<string, unknown>): Promise<ReviewResponse> {
         const url = this.settings.review.replace('{plan}', encodeURIComponent(planId)).replace('{verb}', verb);
 
         return (await this.json('POST', url, body)) as ReviewResponse;
+    }
+
+    /** Picks the code for a row that needs a choice; a null code leaves the row out. */
+    async choose(planId: string, planHash: string, index: number, code: string | null): Promise<ReviewResponse> {
+        return this.review(planId, 'choose', chooseBody(planHash, index, code));
     }
 
     /** Whether this app's component sends the feedback routes (an older sso-client does not). */

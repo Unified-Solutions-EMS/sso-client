@@ -39,6 +39,7 @@ if (config('sso.assistant.enabled', true)) {
                 Route::post('actions/{action}/undo', [AssistantProxyController::class, 'undo'])->whereNumber('action')->name('sso.assistant.undo');
                 Route::post('review/{plan}/approve', [AssistantProxyController::class, 'approveReview'])->name('sso.assistant.review.approve');
                 Route::post('review/{plan}/remove', [AssistantProxyController::class, 'removeFromReview'])->name('sso.assistant.review.remove');
+                Route::post('review/{plan}/choose', [AssistantProxyController::class, 'chooseInReview'])->name('sso.assistant.review.choose');
                 Route::post('review/{plan}/set-aside', [AssistantProxyController::class, 'setAsideReview'])->name('sso.assistant.review.set-aside');
                 Route::delete('conversation', [AssistantProxyController::class, 'clearConversation'])->name('sso.assistant.conversation.clear');
                 Route::post('intro/dismiss', [AssistantProxyController::class, 'dismissIntro'])->name('sso.assistant.intro.dismiss');

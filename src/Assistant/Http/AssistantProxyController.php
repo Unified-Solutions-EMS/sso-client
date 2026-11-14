@@ -108,6 +108,21 @@ class AssistantProxyController extends Controller
         return $this->forward($request, 'post', "/review/{$plan}/remove", $body);
     }
 
+    /**
+     * Picks the code for a review row that needs a choice. A null code leaves
+     * the row out, the same as removing it.
+     */
+    public function chooseInReview(Request $request, string $plan): JsonResponse|Response
+    {
+        $body = $request->validate([
+            'plan_hash' => ['required', 'string', 'max:128'],
+            'index' => ['required', 'integer'],
+            'code' => ['present', 'nullable', 'string', 'max:64'],
+        ]);
+
+        return $this->forward($request, 'post', "/review/{$plan}/choose", $body);
+    }
+
     public function setAsideReview(Request $request, string $plan): JsonResponse|Response
     {
         return $this->forward($request, 'post', "/review/{$plan}/set-aside");

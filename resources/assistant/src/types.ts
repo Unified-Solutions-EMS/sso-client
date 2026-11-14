@@ -5,7 +5,7 @@ export interface WidgetSettings {
     uploads: string;
     /** Template with {action}. */
     undo: string;
-    /** Template with {plan} and {verb} (approve | remove | set-aside). */
+    /** Template with {plan} and {verb} (approve | remove | choose | set-aside). */
     review: string;
     conversation: string;
     /** Still sent by the Blade component; the widget no longer calls it (SSO records the first turn itself). */
@@ -36,6 +36,24 @@ export interface PlanChange {
     needs_confirmation: boolean;
     risk?: string | null;
     step: number | null;
+    /**
+     * Set while the row needs the admin to pick a code (a medication name that
+     * matched several, or none). Picking one, or leaving the row out, answers
+     * with the review again and this row's choice gone.
+     */
+    choice?: ReviewChoice | null;
+}
+
+export interface ReviewCandidate {
+    code: string;
+    label: string;
+    /** A short second line, such as "Schedule II". */
+    detail?: string | null;
+}
+
+export interface ReviewChoice {
+    candidates: ReviewCandidate[];
+    search?: boolean;
 }
 
 export interface ReviewPlan {

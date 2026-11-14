@@ -298,6 +298,22 @@ class AssistantProxyTest extends AssistantTestCase
         Http::assertSent(fn (ClientRequest $r): bool => $r->method() === 'DELETE' && str_starts_with($r->url(), 'https://sso.test/api/internal/assistant/conversation'));
     }
 
+    public function test_choose_forwards_the_picked_code_or_null_to_leave_the_row_out(): void
+    {
+        $this->fakeSso();
+        $this->signedInMember();
+
+        $this->postJson('/assistant/review/abc/choose', ['plan_hash' => 'h1', 'index' => 4, 'code' => '7052'])->assertOk();
+        $this->postJson('/assistant/review/abc/choose', ['plan_hash' => 'h2', 'index' => 5, 'code' => null])->assertOk();
+        $this->postJson('/assistant/review/abc/choose', ['plan_hash' => 'h3', 'index' => 6])->assertUnprocessable();
+
+        Http::assertSent(fn (ClientRequest $r): bool => $r->url() === 'https://sso.test/api/internal/assistant/review/abc/choose'
+            && $r->data()['plan_hash'] === 'h1' && $r->data()['index'] === 4 && $r->data()['code'] === '7052' && $r->data()['sso_user_id'] === 7);
+        Http::assertSent(fn (ClientRequest $r): bool => $r->url() === 'https://sso.test/api/internal/assistant/review/abc/choose'
+            && $r->data()['plan_hash'] === 'h2' && array_key_exists('code', $r->data()) && $r->data()['code'] === null);
+        Http::assertSentCount(2);
+    }
+
     public function test_dismiss_intro_forwards_with_identity_from_the_session_never_the_body(): void
     {
         Http::fake(['https://sso.test/api/internal/assistant/intro/dismiss' => Http::response(['ok' => true], 200)]);

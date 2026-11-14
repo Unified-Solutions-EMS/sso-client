@@ -488,8 +488,15 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      a reopened thread or new conversation shows none; any failure removes the card silently, the question
      must never block the work. An older SSO (no `feedback` in bootstrap) or an older component (no
      settings) never shows it. SSO keeps the score and the review list at `/admin/assistant-feedback`.
+     **Review rows that need a choice** (2026-11-14): a row with `choice: {candidates: [{code, label, detail}]}`
+     (a medication name that matched several codes, or none) renders the candidates as a radio group
+     (`choice.ts`; arrow keys move focus, Enter / Space / click picks, because each pick is sent at once) plus
+     "Leave it out". A pick posts `review/{plan}/choose` `{plan_hash, index, code|null}` (null = remove) and
+     re-renders from the answer like a removal; busy and errors stay on that row. Approve stays disabled with
+     "{n} still need a choice" while any row has a `choice`. Widget unit tests: `npm test` (vitest + happy-dom,
+     `resources/assistant/tests`).
   2. **The same-origin proxy** `/assistant/{bootstrap, messages, uploads, actions/{id}/undo,
-     review/{plan}/{approve|remove|set-aside}, intro/dismiss, feedback, feedback/{id}/follow-up, DELETE conversation}` under `sso.assistant.middleware`
+     review/{plan}/{approve|remove|choose|set-aside}, intro/dismiss, feedback, feedback/{id}/follow-up, DELETE conversation}` under `sso.assistant.middleware`
      (`['web','auth']`), registered only when `assistant.enabled && assistant.proxy`. It forwards to
      `SSO_BASE_URL/api/internal/assistant/{conversation, turn, uploads, actions/…, review/…, intro/dismiss, feedback, feedback/{id}/follow-up}` with
      `Http::withToken(config('app.core_api_key'))` and stamps `sso_user_id` (auth user's `sso_id`),

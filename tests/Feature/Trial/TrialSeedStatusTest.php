@@ -5,8 +5,10 @@ namespace Unified\SsoClient\Tests\Feature\Trial;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Unified\SsoClient\Tests\Stubs\StubRunTrialSeeder;
 use Unified\SsoClient\Tests\Stubs\StubTrialDataSeeder;
+use Unified\SsoClient\Trial\Jobs\ReportTrialSeedFailure;
 use Unified\SsoClient\Trial\Jobs\ReportTrialSeedStatus;
 use Unified\SsoClient\Trial\TrialSeedStatusReporter;
 
@@ -45,6 +47,23 @@ class TrialSeedStatusTest extends TrialTestCase
             new ReportTrialSeedStatus('77', TrialSeedStatusReporter::SEEDED),
         ]);
         Http::assertNothingSent();
+    }
+
+    public function test_the_chain_reports_a_failure_through_a_plain_object_not_a_closure(): void
+    {
+        $this->noMirrors();
+        Queue::fake();
+        Http::fake();
+        $this->company(77);
+
+        $this->postTrialWebhook('trial.seed_data', 77)->assertOk();
+
+        $pushed = Queue::pushed(StubRunTrialSeeder::class)->first();
+
+        $this->assertNotNull($pushed);
+        $this->assertCount(1, $pushed->chainCatchCallbacks);
+        $this->assertInstanceOf(ReportTrialSeedFailure::class, $pushed->chainCatchCallbacks[0]);
+        $this->assertSame('77', (string) $pushed->chainCatchCallbacks[0]->ssoCompanyId);
     }
 
     public function test_on_a_sync_queue_sso_hears_seeded_once_the_seeder_has_run(): void

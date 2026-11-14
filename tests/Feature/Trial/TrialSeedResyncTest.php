@@ -101,7 +101,7 @@ class TrialSeedResyncTest extends TrialTestCase
 
         $job = new SeedTrialAfterMasterDataSync(Company::first(), [], '', []);
         $this->assertSame(6, $job->tries);
-        $this->assertSame([30, 60, 120, 240, 480], $job->backoff);
+        $this->assertSame([5, 15, 60, 120, 480], $job->backoff);
     }
 
     public function test_not_ready_throws_so_the_job_retries_and_never_seeds(): void

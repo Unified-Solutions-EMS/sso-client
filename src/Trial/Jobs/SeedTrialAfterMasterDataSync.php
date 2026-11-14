@@ -11,6 +11,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 use Unified\SsoClient\Trial\AppTrialJobs;
+use Unified\SsoClient\Trial\Exceptions\TrialMasterDataNotReadyException;
 use Unified\SsoClient\Trial\TrialContext;
 use Unified\SsoClient\Trial\TrialMasterDataSync;
 use Unified\SsoClient\Trial\TrialSeedStatusReporter;
@@ -36,7 +37,13 @@ class SeedTrialAfterMasterDataSync implements ShouldQueue
     public int $timeout = 300;
 
     /** @var list<int> about 15 minutes in all */
-    public array $backoff = [30, 60, 120, 240, 480];
+    /**
+     * SSO sends the seed after its lists are complete, so a shortfall is
+     * usually a mirror that needs one more pass, not SSO still writing: the
+     * first retries are quick (CloudPCR lost 32 s to a 30 s first wait on
+     * 2026-11-14), the later ones back off for a real outage.
+     */
+    public array $backoff = [5, 15, 60, 120, 480];
 
     /**
      * @param  array<string>  $userSsoIds
@@ -52,7 +59,17 @@ class SeedTrialAfterMasterDataSync implements ShouldQueue
 
     public function handle(TrialMasterDataSync $sync, AppTrialJobs $app): void
     {
-        $mirrored = $sync->sync((int) $this->company->getKey(), $this->company->sso_company_id, $this->masterData);
+        try {
+            $mirrored = $sync->sync((int) $this->company->getKey(), $this->company->sso_company_id, $this->masterData);
+        } catch (TrialMasterDataNotReadyException $e) {
+            Log::warning('SSO trial seed: shared lists not mirrored yet, trying again', [
+                'sso_company_id' => $this->company->sso_company_id,
+                'attempt' => $this->attempts(),
+                'reason' => $e->getMessage(),
+            ]);
+
+            throw $e;
+        }
 
         Log::info('SSO trial seed: shared lists mirrored, running the app seeder', [
             'sso_company_id' => $this->company->sso_company_id,

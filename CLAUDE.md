@@ -118,8 +118,9 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     entity's active linked rows against `counts` (entities absent from `counts` are not checked; counted
     entities this app does not mirror are ignored, the app seeds those locally). `ready !== true`, SSO
     unreachable / erroring, or a short list throws `TrialMasterDataNotReadyException` (`ShouldntReport`), so
-    the queue retries: 6 tries, backoff 30/60/120/240/480 s (about 15 minutes); `failed()` logs and reports
-    once. Only after the check passes does it run the app's seeder **inside this job** (`AppTrialJobs::seedNow()`:
+    the queue retries: 6 tries, backoff 5/15/60/120/480 s (each retry logs `SSO trial seed: shared lists
+    not mirrored yet, trying again` with the reason; SSO now sends the seed after its lists are complete, so the first
+    waits are short: CloudPCR lost 32 s to a 30 s first wait on 2026-11-14); `failed()` logs and reports once. Only after the check passes does it run the app's seeder **inside this job** (`AppTrialJobs::seedNow()`:
     `dispatch_sync(RunTrialSeeder)` then report `seeded`, or report `failed` and rethrow; without the job class
     it calls `App\Services\TrialDataSeeder`), so there is no second queue hop (2026-11-13; was ~1 s plus
     queue wait). The app job's own `$tries` no longer apply on this path: a seeder failure fails this job
@@ -132,8 +133,9 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     reported. The webhook answer carries `seed_status`: `pending` when a seeder was queued (both the
     `master_data: syncing` path and a direct `RunTrialSeeder` dispatch), `seeded` when the seeder ran in the
     request, `skipped` when the app has none. A queued seeder is dispatched as a chain
-    (`AppTrialJobs::seed()`): `RunTrialSeeder` then `Trial\Jobs\ReportTrialSeedStatus`, with a `catch`
-    that reports `failed`, so SSO hears the outcome when the job really finishes;
+    (`AppTrialJobs::seed()`): `RunTrialSeeder` then `Trial\Jobs\ReportTrialSeedStatus`, with `Trial\Jobs\ReportTrialSeedFailure` as the
+    `catch` (an invokable object, never a closure: a serialized closure carries the app key's signature, and Account
+    Manager's worker could not read one on 2026-11-14, so neither the seed nor the failure report ran), so SSO hears the outcome when the job really finishes;
     `SeedTrialAfterMasterDataSync::failed()` reports `failed` too. The report is
     `Trial\TrialSeedStatusReporter::report($ssoCompanyId, seeded|failed|skipped)` ->
     `POST {SSO_BASE_URL}/api/internal/companies/{id}/trial-seed-status {app_slug, status}` (bearer

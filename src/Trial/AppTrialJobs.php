@@ -6,6 +6,7 @@ namespace Unified\SsoClient\Trial;
 
 use Illuminate\Support\Facades\Bus;
 use Unified\SsoClient\Contracts\ReceivesTrialContext;
+use Unified\SsoClient\Trial\Jobs\ReportTrialSeedFailure;
 use Unified\SsoClient\Trial\Jobs\ReportTrialSeedStatus;
 
 /**
@@ -57,9 +58,7 @@ class AppTrialJobs
             }
 
             Bus::chain([$job, new ReportTrialSeedStatus($ssoCompanyId, TrialSeedStatusReporter::SEEDED)])
-                ->catch(function () use ($ssoCompanyId): void {
-                    app(TrialSeedStatusReporter::class)->report($ssoCompanyId, TrialSeedStatusReporter::FAILED);
-                })
+                ->catch(new ReportTrialSeedFailure($ssoCompanyId))
                 ->dispatch();
 
             return 'pending';

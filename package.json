@@ -5,10 +5,13 @@
   "scripts": {
     "build": "esbuild resources/assistant/src/index.ts --bundle --minify --format=iife --target=es2019 --outfile=dist/assistant.js --legal-comments=none",
     "watch": "npm run build -- --watch",
-    "typecheck": "tsc --noEmit -p resources/assistant/tsconfig.json"
+    "typecheck": "tsc --noEmit -p resources/assistant/tsconfig.json",
+    "test": "vitest run --environment happy-dom --dir resources/assistant/tests"
   },
   "devDependencies": {
     "esbuild": "^0.24.2",
-    "typescript": "^5.7.3"
+    "happy-dom": "^15.11.7",
+    "typescript": "^5.7.3",
+    "vitest": "^3.2.7"
   }
 }

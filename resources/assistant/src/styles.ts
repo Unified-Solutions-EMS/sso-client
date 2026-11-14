@@ -325,6 +325,29 @@ p + p { margin-top: 0.5em; }
 .change .why { color: rgb(var(--ua-text-muted)); font-size: 12px; margin-top: 2px; }
 .change .care { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 12px; color: rgb(var(--ua-warning)); }
 .change .care input { width: 14px; height: 14px; accent-color: rgb(var(--ua-primary)); margin: 0; }
+.change.choosing { flex-direction: column; }
+.change.choosing .body { width: 100%; }
+.choice-block { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.choices { display: flex; flex-direction: column; gap: 6px; }
+.choice {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 8px 10px;
+  border: 1px solid rgb(var(--ua-border-strong)); border-radius: var(--ua-radius);
+  background: rgb(var(--ua-surface)); color: rgb(var(--ua-text)); text-align: left; cursor: pointer;
+  transition: background-color var(--ua-fast) var(--ua-ease), border-color var(--ua-fast) var(--ua-ease);
+}
+.choice:hover:not(:disabled) { background: rgb(var(--ua-bg-muted)); }
+.choice[aria-checked="true"] { border-color: rgb(var(--ua-primary)); background: rgb(var(--ua-primary-subtle)); }
+.choice:disabled { cursor: default; opacity: 0.7; }
+.choice .dot { flex: none; width: 16px; height: 16px; border-radius: 9999px; border: 1.5px solid rgb(var(--ua-border-strong)); background: rgb(var(--ua-surface)); }
+.choice[aria-checked="true"] .dot { border-color: rgb(var(--ua-primary)); box-shadow: inset 0 0 0 3px rgb(var(--ua-surface)); background: rgb(var(--ua-primary)); }
+.choice-text { display: flex; flex-direction: column; min-width: 0; }
+.choice-label { font-weight: 500; overflow-wrap: anywhere; }
+.choice-detail { font-size: 12px; color: rgb(var(--ua-text-muted)); }
+.leave-out { align-self: flex-start; min-height: 44px; text-decoration: underline; text-underline-offset: 2px; }
+.change.busy { opacity: 0.85; }
+.choice-status { margin-top: 6px; font-size: 12px; color: rgb(var(--ua-text-secondary)); }
+.row-error { margin-top: 6px; font-size: 12px; color: rgb(var(--ua-danger)); }
+.still-need { margin-top: 2px; }
 .change .remove { color: rgb(var(--ua-text-muted)); }
 .change .remove:hover { color: rgb(var(--ua-danger)); }
 .card.done { opacity: 0.8; }

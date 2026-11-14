@@ -1,9 +1,10 @@
-import { ApiError, AssistantApi } from './api';
+import { ApiError, AssistantApi, type ReviewVerb } from './api';
+import { pendingChoices, renderChoice, setRowBusy, showRowError, stillNeedText } from './choice';
 import { BarAvoidance, SCROLLER_ATTRIBUTE, SCROLLER_PADDING_VAR } from './avoid';
 import { dayLabel, h, icons, paragraphs, svg, timeLabel } from './dom';
 import { askHelp, hasIntercom, setIntercomHidden } from './intercom';
 import { styles } from './styles';
-import type { Action, BootstrapResponse, Conversation, ConversationSummary, Handoff, Intro, Message, PlanChange, ReviewPlan, Suggestion, Tour, TourStep, TurnResponse, WidgetSettings } from './types';
+import type { Action, BootstrapResponse, Conversation, ConversationSummary, Handoff, Intro, Message, PlanChange, ReviewPlan, ReviewResponse, Suggestion, Tour, TourStep, TurnResponse, WidgetSettings } from './types';
 
 const COPY = {
     launcher: 'Assistant',
@@ -1121,7 +1122,8 @@ class AssistantWidget {
         card.append(rows);
 
         if (!resolved) {
-            const approve = h('button', { class: 'btn primary', type: 'button', disabled: plan.changes.length === 0 }, COPY.approve);
+            const waiting = pendingChoices(plan);
+            const approve = h('button', { class: 'btn primary', type: 'button', disabled: plan.changes.length === 0 || waiting > 0 }, COPY.approve);
             const setAside = h('button', { class: 'btn secondary', type: 'button' }, COPY.setAside);
 
             approve.addEventListener('click', () => {
@@ -1133,6 +1135,12 @@ class AssistantWidget {
             });
 
             card.append(h('div', { class: 'row-actions' }, approve, setAside));
+
+            if (waiting > 0) {
+                const line = h('div', { class: 'hint still-need', id: `ua-still-need-${plan.id}` }, stillNeedText(waiting));
+                approve.setAttribute('aria-describedby', line.id);
+                card.append(line);
+            }
         } else {
             card.classList.add('done');
             card.append(h('div', { class: 'hint' }, SET_ASIDE_PLAN_STATUSES.includes(plan.status) ? COPY.setAsideDone : COPY.applying));
@@ -1161,6 +1169,13 @@ class AssistantWidget {
             body.append(h('label', { class: 'care', for: box.id }, box, COPY.needsCare));
         }
 
+        if (change.choice && !resolved) {
+            const row = h('div', { class: 'change choosing' }, body);
+            body.append(renderChoice(plan.id, change, (code) => void this.chooseAction(plan, change, code, row, card)));
+
+            return row;
+        }
+
         const row = h('div', { class: 'change' }, body);
 
         if (!resolved) {
@@ -1174,8 +1189,35 @@ class AssistantWidget {
         return row;
     }
 
+    /**
+     * Sends the pick for one row. Busy and errors stay on that row; the answer
+     * re-renders the list the same way a removal does.
+     */
+    private async chooseAction(plan: ReviewPlan, change: PlanChange, code: string | null, row: HTMLElement, card: HTMLElement): Promise<void> {
+        const others = [...card.querySelectorAll('button')].filter((button) => !row.contains(button) && !button.disabled);
+        others.forEach((button) => (button.disabled = true));
+        row.querySelector('.row-error')?.remove();
+        setRowBusy(row, true);
+
+        try {
+            const result = await this.api.choose(plan.id, plan.plan_hash, change.index, code);
+
+            if (result.error) {
+                throw new ApiError(200, result.error);
+            }
+
+            this.applyReviewResult(plan, 'choose', result, card, null);
+        } catch (error) {
+            setRowBusy(row, false);
+            row.querySelectorAll('[role="radio"]').forEach((option) => option.setAttribute('aria-checked', 'false'));
+            others.forEach((button) => (button.disabled = false));
+            showRowError(row, this.errorText(error));
+        }
+    }
+
     private async reviewAction(plan: ReviewPlan, verb: 'approve' | 'remove' | 'set-aside', body: Record<string, unknown>, card: HTMLElement, doneText: string | null): Promise<void> {
-        card.querySelectorAll('button').forEach((button) => (button.disabled = true));
+        const enabled = [...card.querySelectorAll('button')].filter((button) => !button.disabled);
+        enabled.forEach((button) => (button.disabled = true));
 
         try {
             const result = await this.api.review(plan.id, verb, body);
@@ -1184,46 +1226,50 @@ class AssistantWidget {
                 throw new ApiError(200, result.error);
             }
 
-            if (result.review) {
-                const next = result.review;
-                this.pendingReview = next;
-                this.messages.forEach((message) => {
-                    if (message.review?.id === next.id) {
-                        message.review = next;
-                    }
-                });
-                card.replaceWith(this.renderReview(next));
-            } else {
-                this.pendingReview = null;
-                this.messages.forEach((message) => {
-                    if (message.review?.id === plan.id) {
-                        message.review = { ...plan, status: verb === 'set-aside' ? 'set_aside' : 'approved' };
-                    }
-                });
-                card.classList.add('done');
-                card.querySelectorAll('.row-actions, .remove, .care').forEach((el) => el.remove());
-                card.append(h('div', { class: 'hint' }, doneText ?? COPY.applying));
-            }
-
-            if (verb === 'approve') {
-                // Approving the list is the change an action step waited for.
-                this.advanceTour({ review: result.review ?? { ...plan, status: 'approved' }, turn_state: 'complete' });
-
-                if (!result.review || APPLIED_PLAN_STATUSES.includes(result.review.status)) {
-                    this.offerFeedback(null);
-                }
-            }
-
-            if (result.reply) {
-                this.push({ id: `r-${Date.now()}`, role: 'assistant', content: result.reply, at: new Date().toISOString() });
-            }
-
-            if (result.notice) {
-                this.appendNotice(result.notice);
-            }
+            this.applyReviewResult(plan, verb, result, card, doneText);
         } catch (error) {
-            card.querySelectorAll('button').forEach((button) => (button.disabled = false));
+            enabled.forEach((button) => (button.disabled = false));
             this.appendNotice(this.errorText(error));
+        }
+    }
+
+    private applyReviewResult(plan: ReviewPlan, verb: ReviewVerb, result: ReviewResponse, card: HTMLElement, doneText: string | null): void {
+        if (result.review) {
+            const next = result.review;
+            this.pendingReview = next;
+            this.messages.forEach((message) => {
+                if (message.review?.id === next.id) {
+                    message.review = next;
+                }
+            });
+            card.replaceWith(this.renderReview(next));
+        } else {
+            this.pendingReview = null;
+            this.messages.forEach((message) => {
+                if (message.review?.id === plan.id) {
+                    message.review = { ...plan, status: verb === 'set-aside' ? 'set_aside' : 'approved' };
+                }
+            });
+            card.classList.add('done');
+            card.querySelectorAll('.row-actions, .remove, .care, .choice-block, .still-need').forEach((el) => el.remove());
+            card.append(h('div', { class: 'hint' }, doneText ?? COPY.applying));
+        }
+
+        if (verb === 'approve') {
+            // Approving the list is the change an action step waited for.
+            this.advanceTour({ review: result.review ?? { ...plan, status: 'approved' }, turn_state: 'complete' });
+
+            if (!result.review || APPLIED_PLAN_STATUSES.includes(result.review.status)) {
+                this.offerFeedback(null);
+            }
+        }
+
+        if (result.reply) {
+            this.push({ id: `r-${Date.now()}`, role: 'assistant', content: result.reply, at: new Date().toISOString() });
+        }
+
+        if (result.notice) {
+            this.appendNotice(result.notice);
         }
     }
 

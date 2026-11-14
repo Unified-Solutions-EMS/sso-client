@@ -84,6 +84,35 @@ class AppTrialJobs
         return 'seeded';
     }
 
+    /**
+     * The same seeder, run in this process: for a caller that is already a
+     * queued job (the master-data sync), so the seeder starts without a
+     * second trip through the queue. SSO hears "seeded" once it returns and
+     * "failed" if it throws; the throw is passed on.
+     *
+     * @param  array<string>  $userSsoIds
+     */
+    public function seedNow(mixed $company, array $userSsoIds, string $adminSsoId, ?TrialContext $context = null): void
+    {
+        if (! class_exists(self::SEEDER_JOB)) {
+            $this->seed($company, $userSsoIds, $adminSsoId, $context);
+
+            return;
+        }
+
+        $ssoCompanyId = $company->sso_company_id ?? null;
+
+        try {
+            dispatch_sync(new (self::SEEDER_JOB)($company, $userSsoIds, $adminSsoId, $context));
+        } catch (\Throwable $e) {
+            $this->reportIfLinked($ssoCompanyId, TrialSeedStatusReporter::FAILED);
+
+            throw $e;
+        }
+
+        $this->reportIfLinked($ssoCompanyId, TrialSeedStatusReporter::SEEDED);
+    }
+
     private function reportIfLinked(int|string|null $ssoCompanyId, string $status): void
     {
         if ($ssoCompanyId !== null) {

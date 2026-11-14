@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Unified\SsoClient\MasterData;
 
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Unified\SsoClient\MasterData\Contracts\EntityMirror;
@@ -104,6 +105,54 @@ class MasterDataClient
     }
 
     /**
+     * Every mirror's snapshot, keyed by entity in the order given. The plain
+     * ones are fetched at once in one pool; the ones that page their own
+     * (FetchesSnapshot) follow, one after another. The first failure, in the
+     * order given, throws the same exception fetch() would have.
+     *
+     * @param  array<string, EntityMirror>  $mirrors
+     * @return array<string, array<string, mixed>>
+     *
+     * @throws MasterDataSyncException
+     */
+    public function snapshots(array $mirrors, int|string $ssoCompanyId): array
+    {
+        $pooled = array_filter($mirrors, fn (EntityMirror $mirror): bool => ! $mirror instanceof FetchesSnapshot);
+        $responses = [];
+
+        if ($pooled !== []) {
+            [$apiKey, $timeout] = [$this->apiKey(), $this->timeout(null)];
+            $urls = array_map(fn (EntityMirror $mirror): string => $this->url($mirror->entity(), $ssoCompanyId, ''), $pooled);
+
+            try {
+                $responses = Http::pool(function (Pool $pool) use ($urls, $apiKey, $timeout): void {
+                    foreach ($urls as $key => $url) {
+                        $pool->as((string) $key)->withToken($apiKey)->acceptJson()->timeout($timeout)->get($url);
+                    }
+                });
+            } catch (\Throwable $e) {
+                throw new MasterDataSyncException("Could not reach SSO for the lists of company {$ssoCompanyId}: {$e->getMessage()}", 0, $e);
+            }
+        }
+
+        $snapshots = [];
+
+        foreach ($mirrors as $key => $mirror) {
+            $snapshots[$key] = $mirror instanceof FetchesSnapshot
+                ? null
+                : $this->read($responses[(string) $key] ?? null, $mirror->entity(), $ssoCompanyId, '', $this->timeout(null));
+        }
+
+        foreach ($mirrors as $key => $mirror) {
+            if ($mirror instanceof FetchesSnapshot) {
+                $snapshots[$key] = $mirror->fetchSnapshot($ssoCompanyId);
+            }
+        }
+
+        return $snapshots;
+    }
+
+    /**
      * @param  'get'|'post'|'patch'  $method
      * @param  array<string, mixed>  $payload
      * @param  array<string, scalar|null>  $query
@@ -111,16 +160,9 @@ class MasterDataClient
      */
     private function send(string $method, string $entity, int|string $ssoCompanyId, string $suffix, array $payload = [], array $query = [], ?int $timeout = null): array
     {
-        $baseUrl = rtrim((string) config('sso.base_url'), '/');
-        $apiKey = (string) (config('app.core_api_key') ?: config('security.token'));
-
-        if ($baseUrl === '' || $apiKey === '') {
-            throw new MasterDataSyncException('SSO_BASE_URL or CORE_APP_API_KEY is not configured.');
-        }
-
-        $url = $baseUrl.'/api/internal/companies/'.rawurlencode((string) $ssoCompanyId).'/'.rawurlencode($entity).$suffix;
-
-        $timeout ??= (int) config('sso.master_data.timeout', 120);
+        $url = $this->url($entity, $ssoCompanyId, $suffix);
+        $apiKey = $this->apiKey();
+        $timeout = $this->timeout($timeout);
         $query = array_filter($query, fn (mixed $value): bool => $value !== null && $value !== '');
 
         try {
@@ -134,19 +176,59 @@ class MasterDataClient
                 'patch' => $request->patch($url, $payload),
                 default => $request->get($url, $query),
             };
-        } catch (ConnectionException $e) {
-            if (str_contains($e->getMessage(), 'cURL error 28') || stripos($e->getMessage(), 'timed out') !== false) {
-                throw new MasterDataSyncException(
-                    "SSO did not answer {$entity}{$suffix} for company {$ssoCompanyId} within {$timeout}s; nothing was changed locally. "
-                    .'SSO may still finish the request. Rerun it (it is idempotent) or raise SSO_MASTER_DATA_TIMEOUT.',
-                    0,
-                    $e,
-                );
-            }
-
-            throw new MasterDataSyncException("Could not reach SSO for {$entity}: {$e->getMessage()}", 0, $e);
         } catch (\Throwable $e) {
-            throw new MasterDataSyncException("Could not reach SSO for {$entity}: {$e->getMessage()}", 0, $e);
+            $response = $e;
+        }
+
+        return $this->read($response, $entity, $ssoCompanyId, $suffix, $timeout);
+    }
+
+    private function url(string $entity, int|string $ssoCompanyId, string $suffix): string
+    {
+        $baseUrl = rtrim((string) config('sso.base_url'), '/');
+
+        if ($baseUrl === '' || $this->apiKey() === '') {
+            throw new MasterDataSyncException('SSO_BASE_URL or CORE_APP_API_KEY is not configured.');
+        }
+
+        return $baseUrl.'/api/internal/companies/'.rawurlencode((string) $ssoCompanyId).'/'.rawurlencode($entity).$suffix;
+    }
+
+    private function apiKey(): string
+    {
+        return (string) (config('app.core_api_key') ?: config('security.token'));
+    }
+
+    private function timeout(?int $timeout): int
+    {
+        return $timeout ?? (int) config('sso.master_data.timeout', 120);
+    }
+
+    /**
+     * SSO's answer (or the exception the request threw) as a snapshot body.
+     *
+     * @return array<string, mixed>
+     *
+     * @throws MasterDataSyncException
+     */
+    private function read(mixed $response, string $entity, int|string $ssoCompanyId, string $suffix, int $timeout): array
+    {
+        if ($response instanceof ConnectionException
+            && (str_contains($response->getMessage(), 'cURL error 28') || stripos($response->getMessage(), 'timed out') !== false)) {
+            throw new MasterDataSyncException(
+                "SSO did not answer {$entity}{$suffix} for company {$ssoCompanyId} within {$timeout}s; nothing was changed locally. "
+                .'SSO may still finish the request. Rerun it (it is idempotent) or raise SSO_MASTER_DATA_TIMEOUT.',
+                0,
+                $response,
+            );
+        }
+
+        if ($response instanceof \Throwable) {
+            throw new MasterDataSyncException("Could not reach SSO for {$entity}: {$response->getMessage()}", 0, $response);
+        }
+
+        if (! $response instanceof Response) {
+            throw new MasterDataSyncException("Could not reach SSO for {$entity}: no answer.");
         }
 
         if ($response->status() === 404 && in_array($suffix, ['', '/import'], true)) {

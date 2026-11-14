@@ -17,7 +17,8 @@ use Unified\SsoClient\Trial\TrialSeedStatusReporter;
 
 /**
  * `trial.seed_data` from an SSO that seeds the shared lists: mirror them
- * first, then hand over to the app's seeder. Until SSO's lists are here
+ * first, then run the app's seeder here, in this job, so it starts without
+ * a second trip through the queue. Until SSO's lists are here
  * (not ready, SSO unreachable, a list short of SSO's count) the job throws
  * and the queue retries it; after the last try the seeder never runs, so an
  * app whose list is mirrored never invents its own (fail closed).
@@ -30,6 +31,9 @@ class SeedTrialAfterMasterDataSync implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $tries = 6;
+
+    /** The app's seeder runs inside this job, and some take minutes. */
+    public int $timeout = 300;
 
     /** @var list<int> about 15 minutes in all */
     public array $backoff = [30, 60, 120, 240, 480];
@@ -55,12 +59,22 @@ class SeedTrialAfterMasterDataSync implements ShouldQueue
             'mirrored' => $mirrored,
         ]);
 
-        $app->seed($this->company, $this->userSsoIds, $this->adminSsoId, TrialContext::fromPayload($this->masterData));
+        try {
+            $app->seedNow($this->company, $this->userSsoIds, $this->adminSsoId, TrialContext::fromPayload($this->masterData));
+        } catch (\Throwable $e) {
+            if ($this->job === null) {
+                throw $e;
+            }
+
+            // The seeder failed, not the lists: retrying would mirror and seed
+            // again on top of a half-seeded trial, so this job stops here.
+            $this->fail($e);
+        }
     }
 
     public function failed(\Throwable $e): void
     {
-        Log::error('SSO trial seed: gave up waiting for the shared lists; the trial was not seeded', [
+        Log::error('SSO trial seed: gave up; the trial was not seeded', [
             'sso_company_id' => $this->company->sso_company_id ?? null,
             'error' => $e->getMessage(),
         ]);

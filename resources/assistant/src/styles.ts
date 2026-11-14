@@ -262,6 +262,10 @@ p + p { margin-top: 0.5em; }
 .activity div + div { margin-top: 2px; }
 .time { font-size: 11px; color: rgb(var(--ua-text-muted)); padding: 0 4px; }
 .notice { font-size: 12px; color: rgb(var(--ua-text-secondary)); text-align: center; padding: 2px 8px; }
+/* A message that got no answer: Try again / Dismiss under the error */
+.retry-row { display: flex; flex-wrap: wrap; gap: 8px; padding-left: 4px; }
+.retry-row .btn { min-height: 44px; }
+.turn.failed .checking { margin-top: 2px; }
 
 .waiting { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: rgb(var(--ua-text-muted)); padding-left: 4px; }
 .dots { display: inline-flex; gap: 3px; }

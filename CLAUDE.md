@@ -436,7 +436,7 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      keeps `intro.show` true until it records the admin's first real turn, and the widget only hides per
      tab: the X, or the first message sent in this tab, runs `dismissIntro()` (callout + badge go,
      `sessionStorage['unified-assistant:<viewer>:intro-dismissed']` keeps them away for the tab). **Every
-     sessionStorage key (`intro-dismissed`, `open`, `tour:<conversation id>`) is scoped to the bootstrap's
+     sessionStorage key (`intro-dismissed`, `open`, `tour:<conversation id>`, `draft:<conversation id>`) is scoped to the bootstrap's
      `viewer`** (SSO's opaque hash of the user id + their latest login, 2026-10-30): a new login or another
      user in the same tab starts clean, boot prunes keys left by other viewers, and an SSO that sends no
      `viewer` falls back to the unscoped names. Opening the drawer
@@ -495,6 +495,20 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      re-renders from the answer like a removal; busy and errors stay on that row. Approve stays disabled with
      "{n} still need a choice" while any row has a `choice`. Widget unit tests: `npm test` (vitest + happy-dom,
      `resources/assistant/tests`).
+     **A message that got no answer (2026-11-14, Jordan: "not reachable, unable to resend, refresh clears
+     it"):** `retry.ts`. A failed `POST /assistant/messages` (network error, 5xx / 502 / 504 from the proxy,
+     or a 200 that carries only `error`, such as "not available right now") keeps the admin's text back in
+     the composer and shows an error bubble (`.turn.failed`, drawer only, never in the saved thread) with
+     **Try again** (removes the unanswered bubble and re-sends the same text) and **Dismiss** (text stays in
+     the composer to edit). The composer is saved per thread as `draft:<conversation id>` on every keystroke
+     and restored when a thread is applied, so a refresh loses nothing; it is cleared only once that text
+     got an answer. A **409** (SSO's `SetupSessionBusy`: another request is still on this thread) shows the
+     message with "Checking again…" and re-reads the thread through `GET /assistant/bootstrap?conversation=ID`
+     every 5 s for up to 60 s; when the thread's last message is an assistant message the drawer does not
+     have, the thread is applied (notice gone, the admin's text still in the composer); after 60 s the bubble
+     offers Try again / Dismiss. A turn in flight moves its waiting line from "Working on it" to "Still
+     working… this one is taking a little longer" at 8 s and "Almost there" at 20 s (`activity[]` only
+     arrives with the final answer today).
   2. **The same-origin proxy** `/assistant/{bootstrap, messages, uploads, actions/{id}/undo,
      review/{plan}/{approve|remove|choose|set-aside}, intro/dismiss, feedback, feedback/{id}/follow-up, DELETE conversation}` under `sso.assistant.middleware`
      (`['web','auth']`), registered only when `assistant.enabled && assistant.proxy`. It forwards to

@@ -262,6 +262,44 @@ p + p { margin-top: 0.5em; }
 .activity div + div { margin-top: 2px; }
 .time { font-size: 11px; color: rgb(var(--ua-text-muted)); padding: 0 4px; }
 .notice { font-size: 12px; color: rgb(var(--ua-text-secondary)); text-align: center; padding: 2px 8px; }
+/* Our team: a teammate's reply, the lines about the conversation, files */
+.turn.staff { align-items: flex-start; }
+.staff-head { display: flex; align-items: center; gap: 6px; padding-left: 2px; font-size: 12px; color: rgb(var(--ua-text-secondary)); }
+.avatar {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 24px; height: 24px; border-radius: 999px;
+  background: rgb(var(--ua-primary)); color: rgb(var(--ua-on-accent));
+  font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+}
+.staff-name { font-weight: 600; color: rgb(var(--ua-text)); }
+.tag {
+  font-size: 10px; font-weight: 600; line-height: 1.4; padding: 1px 6px; border-radius: 999px;
+  background: rgb(var(--ua-primary-subtle)); color: rgb(var(--ua-primary));
+}
+.staff .bubble {
+  background: rgb(var(--ua-surface)); border: 1px solid rgb(var(--ua-primary) / 0.45);
+  border-bottom-left-radius: 4px; box-shadow: var(--ua-shadow-sm);
+}
+.system-line { align-self: center; max-width: 88%; font-size: 12px; color: rgb(var(--ua-text-muted)); text-align: center; padding: 2px 8px; }
+.attachments { display: flex; flex-wrap: wrap; gap: 6px; max-width: 88%; }
+.user .attachments { justify-content: flex-end; }
+.file-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-height: 32px;
+  padding: 4px 10px; border: 1px solid rgb(var(--ua-border)); border-radius: 999px;
+  background: rgb(var(--ua-surface)); color: rgb(var(--ua-text)); font-size: 12px; text-decoration: none;
+}
+.file-chip svg { flex: none; color: rgb(var(--ua-text-muted)); }
+a.file-chip:hover, a.file-chip:focus-visible { border-color: rgb(var(--ua-primary)); color: rgb(var(--ua-primary)); }
+.file-chip .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
+.file-chip .size { color: rgb(var(--ua-text-muted)); white-space: nowrap; }
+.pending-files { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.pending-files[hidden] { display: none; }
+.pending-files .file-chip { padding-right: 2px; }
+.pending-files .remove {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 999px; color: rgb(var(--ua-text-muted));
+}
+.pending-files .remove:hover { background: rgb(var(--ua-bg-muted)); color: rgb(var(--ua-text)); }
 /* A message that got no answer: Try again / Dismiss under the error */
 .retry-row { display: flex; flex-wrap: wrap; gap: 8px; padding-left: 4px; }
 .retry-row .btn { min-height: 44px; }

@@ -6,6 +6,7 @@ import type {
     UndoResponse,
     UploadResponse,
     UploadStatusResponse,
+    UpdatesResponse,
     WidgetSettings,
 } from './types';
 
@@ -49,7 +50,7 @@ export class AssistantApi {
         return (await this.read(response)) as BootstrapResponse;
     }
 
-    async send(message: string, setupApp: string | null, conversationId: number | string | null = null): Promise<TurnResponse> {
+    async send(message: string, setupApp: string | null, conversationId: number | string | null = null, attachments: number[] = []): Promise<TurnResponse> {
         const body: Record<string, unknown> = {
             message,
             page: { url: location.href, title: document.title },
@@ -63,7 +64,36 @@ export class AssistantApi {
             body.conversation_id = conversationId;
         }
 
+        if (attachments.length > 0) {
+            body.attachments = attachments;
+        }
+
         return (await this.json('POST', this.settings.messages, body)) as TurnResponse;
+    }
+
+    /** "Talk to our team". The answer is the bootstrap shape with the "Handed to our team" line. */
+    async escalate(conversationId: number | string | null, question: string): Promise<BootstrapResponse> {
+        const body: Record<string, unknown> = { question };
+
+        if (conversationId !== null) {
+            body.conversation_id = conversationId;
+        }
+
+        return (await this.json('POST', this.sibling('escalate', this.settings.escalate), body)) as BootstrapResponse;
+    }
+
+    /** Our team's replies newer than `after`. */
+    async updates(conversationId: number | string, after: number): Promise<UpdatesResponse> {
+        const url = this.sibling('updates', this.settings.updates);
+        const query = `conversation=${encodeURIComponent(String(conversationId))}&after=${encodeURIComponent(String(after))}`;
+        const response = await this.request('GET', `${url}${url.includes('?') ? '&' : '?'}${query}`);
+
+        return (await this.read(response)) as UpdatesResponse;
+    }
+
+    /** A route next to messages, for a component that does not send it yet. */
+    private sibling(name: string, given: string | null | undefined): string {
+        return given || this.settings.messages.replace(/messages\/?$/, name);
     }
 
     /**

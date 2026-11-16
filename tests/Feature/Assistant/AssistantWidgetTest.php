@@ -126,6 +126,8 @@ class AssistantWidgetTest extends AssistantTestCase
         $this->assertStringContainsString('"intro_dismiss":"/assistant/intro/dismiss"', $html);
         $this->assertStringContainsString('"feedback":"/assistant/feedback"', $html);
         $this->assertStringContainsString('"feedback_follow_up":"/assistant/feedback/{feedback}/follow-up"', $html);
+        $this->assertStringContainsString('"escalate":"/assistant/escalate"', $html);
+        $this->assertStringContainsString('"updates":"/assistant/updates"', $html);
         $this->assertStringContainsString('"csrf"', $html);
     }
 

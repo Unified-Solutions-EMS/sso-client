@@ -43,6 +43,8 @@ class Assistant extends Component
             'intro_dismiss' => $base.'/intro/dismiss',
             'feedback' => $base.'/feedback',
             'feedback_follow_up' => $base.'/feedback/{feedback}/follow-up',
+            'escalate' => $base.'/escalate',
+            'updates' => $base.'/updates',
             'csrf' => csrf_token(),
         ];
 

@@ -167,3 +167,20 @@ export function timeLabel(iso: string | null | undefined): string {
 
     return sameDay ? time : `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${time}`;
 }
+
+/** A file's size the way a person reads it: 512 B, 18 KB, 2.4 MB. */
+export function fileSize(bytes: number | null | undefined): string {
+    if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) {
+        return '';
+    }
+
+    if (bytes < 1024) {
+        return `${bytes} B`;
+    }
+
+    if (bytes < 1024 * 1024) {
+        return `${Math.round(bytes / 1024)} KB`;
+    }
+
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}

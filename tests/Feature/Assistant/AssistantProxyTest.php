@@ -189,6 +189,63 @@ class AssistantProxyTest extends AssistantTestCase
         $this->postJson('/assistant/feedback/abc/follow-up', ['follow_up' => true])->assertNotFound();
     }
 
+    public function test_message_forwards_the_attached_file_ids(): void
+    {
+        $this->fakeSso();
+        $this->signedInMember();
+
+        $this->postJson('/assistant/messages', ['message' => 'Here is the error', 'attachments' => [17, 18]])->assertOk();
+
+        Http::assertSent(fn (ClientRequest $request): bool => $request->url() === 'https://sso.test/api/internal/assistant/turn'
+            && $request->data()['attachments'] === [17, 18]
+            && $request->data()['sso_user_id'] === 7);
+
+        $this->postJson('/assistant/messages', ['message' => 'x', 'attachments' => ['abc']])->assertUnprocessable();
+    }
+
+    public function test_escalate_forwards_the_thread_and_question_with_the_session_identity(): void
+    {
+        Http::fake(['https://sso.test/api/internal/assistant/escalate' => Http::response(['enabled' => true, 'support' => ['enabled' => true, 'status' => 'needs_teammate', 'last_message_id' => 40]], 200)]);
+        $this->signedInMember();
+
+        $this->postJson('/assistant/escalate', ['conversation_id' => 31, 'question' => 'How do I export?', 'sso_user_id' => 999])
+            ->assertOk()
+            ->assertJsonPath('support.status', 'needs_teammate');
+
+        Http::assertSent(function (ClientRequest $request): bool {
+            $data = $request->data();
+
+            return $request->method() === 'POST'
+                && $request->url() === 'https://sso.test/api/internal/assistant/escalate'
+                && $data['conversation_id'] === 31
+                && $data['question'] === 'How do I export?'
+                && $data['sso_user_id'] === 7
+                && $data['sso_company_id'] === 42
+                && $data['app_slug'] === 'crew-scheduling';
+        });
+    }
+
+    public function test_updates_forwards_the_conversation_and_after_and_nothing_else_from_the_browser(): void
+    {
+        Http::fake(['https://sso.test/api/internal/assistant/updates*' => Http::response(['status' => 'needs_teammate', 'messages' => [], 'last_message_id' => 41], 200)]);
+        $this->signedInMember();
+
+        $this->getJson('/assistant/updates?conversation=31&after=40&sso_user_id=999')->assertOk()->assertJsonPath('last_message_id', 41);
+
+        Http::assertSent(function (ClientRequest $request): bool {
+            parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+
+            return $request->method() === 'GET'
+                && str_starts_with($request->url(), 'https://sso.test/api/internal/assistant/updates')
+                && $query['conversation'] === '31'
+                && $query['after'] === '40'
+                && $query['sso_user_id'] === '7'
+                && $query['sso_company_id'] === '42';
+        });
+
+        $this->getJson('/assistant/updates')->assertUnprocessable();
+    }
+
     public function test_message_without_a_conversation_id_sends_none(): void
     {
         $this->fakeSso();

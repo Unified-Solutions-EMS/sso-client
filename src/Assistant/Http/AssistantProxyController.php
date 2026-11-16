@@ -82,6 +82,15 @@ class AssistantProxyController extends Controller
         );
     }
 
+    /**
+     * SSO reads an added file in a queued job; the widget polls this until
+     * the file is read.
+     */
+    public function uploadStatus(Request $request, int $upload): JsonResponse|Response
+    {
+        return $this->forward($request, 'get', "/uploads/{$upload}");
+    }
+
     public function undo(Request $request, int $action): JsonResponse|Response
     {
         return $this->forward($request, 'post', "/actions/{$action}/undo");

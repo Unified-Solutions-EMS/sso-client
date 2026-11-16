@@ -5,6 +5,7 @@ import { dayLabel, h, icons, paragraphs, svg, timeLabel } from './dom';
 import { askHelp, hasIntercom, setIntercomHidden } from './intercom';
 import { BusyPoller, DRAFT_NAME_PREFIX, type FailedTurnHandlers, SlowTurnTimer, clearDraftIfSent, draftName, failedTurnError, isBusy, readDraft, renderFailedTurn, saveDraft, showRetryButtons } from './retry';
 import { styles } from './styles';
+import { UPLOAD_COPY, stillReading, waitUntilRead } from './upload';
 import type { Action, BootstrapResponse, Conversation, ConversationSummary, Handoff, Intro, Message, PlanChange, ReviewPlan, ReviewResponse, Suggestion, Tour, TourStep, TurnResponse, WidgetSettings } from './types';
 
 const COPY = {
@@ -1583,14 +1584,62 @@ class AssistantWidget {
                 throw new ApiError(200, result.error || 'That file did not go through.');
             }
 
+            const upload = result.upload ?? null;
+
+            if (upload && stillReading(upload)) {
+                // The composer stays locked while SSO reads the file; the chip is the progress.
+                this.setBusy(true, COPY.uploading, false);
+                const ready = await this.waitForFile(upload.id, file.name);
+
+                if (!ready) {
+                    this.setBusy(false);
+
+                    return;
+                }
+            }
+
             this.setBusy(false);
             // The model reads a file by its number; the name alone leaves it guessing.
-            const label = result.upload?.id ? `${COPY.fileAdded} (file ${result.upload.id})` : COPY.fileAdded;
+            const label = upload?.id ? `${COPY.fileAdded} (file ${upload.id})` : COPY.fileAdded;
             await this.send(`${label}: ${file.name}`);
         } catch (error) {
             this.setBusy(false);
             this.push({ id: `e-${Date.now()}`, role: 'assistant', content: this.errorText(error), tone: 'error', at: new Date().toISOString() });
         }
+    }
+
+    /**
+     * Shows the file as a chip reading "Reading file..." and asks SSO for its
+     * status until it is read. A file that could not be read keeps the chip
+     * with the reason and sends nothing; a read file's chip goes, because the
+     * "I added a file" message takes its place.
+     */
+    private async waitForFile(uploadId: number, name: string): Promise<boolean> {
+        const status = h('span', { class: 'status' }, UPLOAD_COPY.reading);
+        const mark = h('span', { class: 'dots', 'aria-hidden': 'true' }, h('span'), h('span'), h('span'));
+        const chip = h('div', { class: 'chip file reading', role: 'status' }, mark, h('div', { class: 'text' }, h('div', {}, name)), status);
+        const row = h('div', { class: 'turn user file-turn' }, h('div', { class: 'chips' }, chip));
+
+        this.list.append(row);
+        this.scrollToEnd();
+
+        const outcome = await waitUntilRead(() => this.api.uploadStatus(uploadId));
+
+        if (outcome.status === 'ready') {
+            row.remove();
+
+            return true;
+        }
+
+        chip.classList.remove('reading');
+        chip.classList.add('failed');
+        chip.removeAttribute('role');
+        mark.replaceWith(h('span', { class: 'mark' }, svg(icons.alert, 16)));
+        status.remove();
+        chip.querySelector('.text')?.append(h('div', { class: 'meta', role: 'alert' }, outcome.error));
+        this.scrollToEnd();
+
+        return false;
     }
 
     private askHelpInstead(): void {
@@ -1651,14 +1700,14 @@ class AssistantWidget {
         this.scrollToEnd();
     }
 
-    private setBusy(busy: boolean, label: string = COPY.working): void {
+    private setBusy(busy: boolean, label: string = COPY.working, showWaiting: boolean = true): void {
         this.busy = busy;
         this.sendButton.disabled = busy;
         this.attachButton.disabled = busy;
         this.waitingRow?.remove();
         this.waitingRow = null;
 
-        if (busy) {
+        if (busy && showWaiting) {
             this.waitingRow = h('div', { class: 'turn assistant' }, h('div', { class: 'waiting', role: 'status' }, h('span', { class: 'dots' }, h('span'), h('span'), h('span')), h('span', { class: 'waiting-label' }, label)));
             this.list.append(this.waitingRow);
             this.scrollToEnd();

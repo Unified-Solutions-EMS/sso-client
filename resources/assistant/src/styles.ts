@@ -289,6 +289,14 @@ p + p { margin-top: 0.5em; }
 .chip.undone .text { text-decoration: line-through; color: rgb(var(--ua-text-muted)); }
 .chip .status { color: rgb(var(--ua-text-muted)); font-size: 11px; font-weight: 500; }
 
+/* A file SSO is reading */
+.file-turn .chips { width: auto; max-width: 88%; }
+.chip.file .dots { flex: none; width: 16px; justify-content: center; }
+.chip.file .text > div:first-child { overflow-wrap: anywhere; }
+.chip.file.failed { border-color: rgb(var(--ua-danger) / 0.4); background: rgb(var(--ua-danger-subtle)); }
+.chip.file.failed .mark { color: rgb(var(--ua-danger)); }
+.chip.file.failed .text .meta { color: rgb(var(--ua-danger)); }
+
 /* Buttons */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;

@@ -5,6 +5,7 @@ import type {
     TurnResponse,
     UndoResponse,
     UploadResponse,
+    UploadStatusResponse,
     WidgetSettings,
 } from './types';
 
@@ -82,6 +83,13 @@ export class AssistantApi {
         const response = await this.request('POST', this.settings.uploads, form);
 
         return (await this.read(response)) as UploadResponse;
+    }
+
+    /** Where a file SSO is reading stands. The route sits next to the upload route. */
+    async uploadStatus(uploadId: number): Promise<UploadStatusResponse> {
+        const response = await this.request('GET', `${this.settings.uploads.replace(/\/+$/, '')}/${encodeURIComponent(String(uploadId))}`);
+
+        return (await this.read(response)) as UploadStatusResponse;
     }
 
     async undo(actionId: number): Promise<UndoResponse> {

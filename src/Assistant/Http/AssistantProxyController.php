@@ -45,9 +45,40 @@ class AssistantProxyController extends Controller
             'page.title' => ['sometimes', 'nullable', 'string', 'max:512'],
             'setup_app' => ['sometimes', 'nullable', 'string', 'max:64'],
             'conversation_id' => ['sometimes', 'nullable', 'integer'],
+            'attachments' => ['sometimes', 'nullable', 'array', 'max:10'],
+            'attachments.*' => ['integer'],
         ]);
 
         return $this->forward($request, 'post', '/turn', $body);
+    }
+
+    /**
+     * "Talk to our team": SSO hands the conversation to a teammate and
+     * answers the bootstrap shape. The thread id is a selector SSO checks
+     * against the stamped identity.
+     */
+    public function escalate(Request $request): JsonResponse|Response
+    {
+        $body = $request->validate([
+            'conversation_id' => ['sometimes', 'nullable', 'integer'],
+            'question' => ['sometimes', 'nullable', 'string', 'max:2000'],
+        ]);
+
+        return $this->forward($request, 'post', '/escalate', $body);
+    }
+
+    /**
+     * Our team's replies newer than the last message the widget has, polled
+     * while a teammate has the conversation.
+     */
+    public function updates(Request $request): JsonResponse|Response
+    {
+        $query = $request->validate([
+            'conversation' => ['required', 'integer'],
+            'after' => ['sometimes', 'nullable', 'integer'],
+        ]);
+
+        return $this->forward($request, 'get', '/updates', array_filter($query, fn ($value): bool => $value !== null));
     }
 
     public function upload(Request $request): JsonResponse|Response

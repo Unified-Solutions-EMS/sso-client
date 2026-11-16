@@ -14,7 +14,42 @@ export interface WidgetSettings {
     feedback?: string | null;
     /** Template with {feedback}: the follow-up answer after a no. */
     feedback_follow_up?: string | null;
+    /** POST: "Talk to our team". Absent from an older component: derived from `messages`. */
+    escalate?: string | null;
+    /** GET: our team's replies, polled while a teammate has the conversation. Absent: derived from `messages`. */
+    updates?: string | null;
     csrf: string | null;
+}
+
+/**
+ * A file on a message. The administrator's own carry an `id` (SSO's file
+ * number); a teammate's carry the CRM's `url` to download it from.
+ */
+export interface MessageAttachment {
+    id?: number | null;
+    name: string;
+    mime?: string | null;
+    size?: number | null;
+    url?: string | null;
+}
+
+/**
+ * Our team behind the Assistant. `enabled` swaps the handoff card's Ask Help
+ * for Talk to our team; `needs_teammate` means a teammate has the
+ * conversation and the widget polls for their replies. Absent from an older
+ * SSO: no team, and an added file is sent at once as before.
+ */
+export interface Support {
+    enabled: boolean;
+    status: 'assistant' | 'needs_teammate' | 'resolved';
+    last_message_id: number;
+}
+
+/** GET /assistant/updates answer. */
+export interface UpdatesResponse {
+    status?: Support['status'] | null;
+    messages?: Message[] | null;
+    last_message_id?: number | null;
 }
 
 export interface Action {
@@ -69,8 +104,11 @@ export interface Handoff {
 
 export interface Message {
     id: number | string;
-    role: 'user' | 'assistant';
+    role: 'user' | 'assistant' | 'staff' | 'system';
     content: string;
+    /** A teammate's name (role staff). */
+    author?: string | null;
+    attachments?: MessageAttachment[] | null;
     at?: string | null;
     activity?: string[] | null;
     actions?: Action[] | null;
@@ -95,6 +133,7 @@ export interface TurnResponse {
      * Missing from an older SSO: treated as complete.
      */
     turn_state?: 'complete' | 'awaiting_user' | null;
+    support?: Support | null;
 }
 
 export interface Conversation {
@@ -177,6 +216,7 @@ export interface BootstrapResponse {
      * Absent from an older SSO: never asked.
      */
     feedback?: { ask: boolean } | null;
+    support?: Support | null;
 }
 
 export interface UndoResponse {

@@ -35,6 +35,8 @@ if (config('sso.assistant.enabled', true)) {
             ->group(function (): void {
                 Route::get('bootstrap', [AssistantProxyController::class, 'bootstrap'])->name('sso.assistant.bootstrap');
                 Route::post('messages', [AssistantProxyController::class, 'message'])->name('sso.assistant.messages');
+                Route::post('escalate', [AssistantProxyController::class, 'escalate'])->name('sso.assistant.escalate');
+                Route::get('updates', [AssistantProxyController::class, 'updates'])->name('sso.assistant.updates');
                 Route::post('uploads', [AssistantProxyController::class, 'upload'])->name('sso.assistant.uploads');
                 Route::get('uploads/{upload}', [AssistantProxyController::class, 'uploadStatus'])->whereNumber('upload')->name('sso.assistant.uploads.show');
                 Route::post('actions/{action}/undo', [AssistantProxyController::class, 'undo'])->whereNumber('action')->name('sso.assistant.undo');

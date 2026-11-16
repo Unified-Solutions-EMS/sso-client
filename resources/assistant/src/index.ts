@@ -1,12 +1,12 @@
 import { ApiError, AssistantApi, type ReviewVerb } from './api';
 import { pendingChoices, renderChoice, setRowBusy, showRowError, stillNeedText } from './choice';
 import { BarAvoidance, SCROLLER_ATTRIBUTE, SCROLLER_PADDING_VAR } from './avoid';
-import { dayLabel, h, icons, paragraphs, svg, timeLabel } from './dom';
+import { dayLabel, fileSize, h, icons, paragraphs, svg, timeLabel } from './dom';
 import { askHelp, hasIntercom, setIntercomHidden } from './intercom';
 import { BusyPoller, DRAFT_NAME_PREFIX, type FailedTurnHandlers, SlowTurnTimer, clearDraftIfSent, draftName, failedTurnError, isBusy, readDraft, renderFailedTurn, saveDraft, showRetryButtons } from './retry';
 import { styles } from './styles';
 import { UPLOAD_COPY, stillReading, waitUntilRead } from './upload';
-import type { Action, BootstrapResponse, Conversation, ConversationSummary, Handoff, Intro, Message, PlanChange, ReviewPlan, ReviewResponse, Suggestion, Tour, TourStep, TurnResponse, WidgetSettings } from './types';
+import type { Action, BootstrapResponse, Conversation, ConversationSummary, Handoff, Intro, Message, MessageAttachment, PlanChange, ReviewPlan, ReviewResponse, Suggestion, Support, Tour, TourStep, TurnResponse, WidgetSettings } from './types';
 
 const COPY = {
     launcher: 'Assistant',
@@ -21,6 +21,10 @@ const COPY = {
     askHelpInstead: 'Ask Help instead',
     handoff: "I can't do that one, but Help can take it from here.",
     askHelp: 'Ask Help',
+    teamHandoff: "I can't finish this one, but our team can.",
+    talkToTeam: 'Talk to our team',
+    teamTag: 'Unified',
+    removeFile: 'Remove',
     noHelp: 'Open Help from the menu to send this.',
     copy: 'Copy',
     copied: 'Copied',
@@ -184,6 +188,32 @@ const APPLIED_PLAN_STATUSES = ['approved', 'executing', 'applied', 'completed'];
 /** Host pages listen for this to refetch what the assistant just changed. */
 const ACTION_EVENT = 'unified-assistant:action';
 
+/** How often to ask for our team's replies: drawer open and showing, or not. */
+const TEAM_POLL_OPEN_MS = 5000;
+const TEAM_POLL_HIDDEN_MS = 20000;
+
+function initials(name: string): string {
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    const letters = parts.length > 1 ? parts[0][0] + parts[parts.length - 1][0] : (parts[0] ?? '?').slice(0, 2);
+
+    return letters.toUpperCase();
+}
+
+/** Files on a message: a link that opens in a new tab when there is one to download from. */
+function renderAttachments(files: MessageAttachment[]): HTMLElement {
+    return h(
+        'div',
+        { class: 'attachments' },
+        ...files.map((file) => {
+            const parts = [svg(icons.paperclip, 14), h('span', { class: 'name' }, file.name), file.size ? h('span', { class: 'size' }, fileSize(file.size)) : null];
+
+            return file.url && /^https?:\/\//i.test(file.url)
+                ? h('a', { class: 'file-chip', href: file.url, target: '_blank', rel: 'noopener noreferrer' }, ...parts)
+                : h('span', { class: 'file-chip' }, ...parts);
+        }),
+    );
+}
+
 /** An action with no summary is not an action: nothing to show, nothing to announce. */
 function realActions(actions: Action[] | null | undefined): Action[] {
     return (actions ?? []).filter((action) => typeof action.summary === 'string' && action.summary.trim() !== '');
@@ -309,6 +339,17 @@ class AssistantWidget {
     /** The one feedback card showing; a new task or a new message replaces it. */
     private feedbackCard: HTMLElement | null = null;
 
+    /** Our team behind the Assistant, from SSO. Null: an older SSO (no team, files sent at once). */
+    private support: Support | null = null;
+
+    /** Files added and read, waiting to go with the next message. */
+    private pendingFiles: Array<{ id: number; name: string; size: number }> = [];
+
+    private pendingEl!: HTMLDivElement;
+
+    /** The next poll for our team's replies while a teammate has the conversation. */
+    private pollTimer: number | null = null;
+
     constructor(settings: SettingsWithContext) {
         this.api = new AssistantApi(settings);
         this.setupApp = settings.setup_app ?? null;
@@ -370,6 +411,7 @@ class AssistantWidget {
         }
 
         window.addEventListener('pagehide', () => setIntercomHidden(false));
+        document.addEventListener('visibilitychange', () => this.reschedulePoll());
     }
 
     /* Public API (window.UnifiedAssistant) */
@@ -714,6 +756,8 @@ class AssistantWidget {
 
         this.sendButton = h('button', { class: 'icon-btn send', type: 'button', 'aria-label': COPY.send, onclick: () => void this.send() }, svg(icons.send));
 
+        this.pendingEl = h('div', { class: 'pending-files', hidden: true, 'aria-live': 'polite' });
+
         this.fileInput = h('input', { type: 'file', class: 'sr', tabindex: '-1', 'aria-hidden': 'true', onchange: () => void this.onFilePicked() });
         this.attachButton = h('button', { class: 'icon-btn', type: 'button', 'aria-label': COPY.attach, title: COPY.attach, onclick: () => this.fileInput.click() }, svg(icons.paperclip));
 
@@ -756,6 +800,7 @@ class AssistantWidget {
         const footer = h(
             'footer',
             { class: 'footer' },
+            this.pendingEl,
             h('div', { class: 'composer' }, this.attachButton, this.input, this.sendButton),
             h(
                 'div',
@@ -821,6 +866,12 @@ class AssistantWidget {
             this.avoidance.setActive(!open);
         }
 
+        if (open && !this.introPending) {
+            this.badge.hidden = true;
+        }
+
+        this.reschedulePoll();
+
         if (persist) {
             try {
                 sessionStorage.setItem(this.storageKey(OPEN_NAME), open ? '1' : '0');
@@ -874,6 +925,9 @@ class AssistantWidget {
         this.feedbackCard = null;
         this.busyPoller.stop();
         this.failedRow = null;
+        this.support = bootstrap.support ?? null;
+        this.pendingFiles = [];
+        this.renderPendingFiles();
         this.input.value = readDraft(this.draftKey());
         this.autosize();
         this.renderMessages();
@@ -883,6 +937,8 @@ class AssistantWidget {
         if (bootstrap.notice) {
             this.appendNotice(bootstrap.notice);
         }
+
+        this.syncPolling();
     }
 
     private setPanelOpen(open: boolean): void {
@@ -1015,6 +1071,14 @@ class AssistantWidget {
     }
 
     private renderTurn(message: Message): HTMLElement {
+        if (message.role === 'system') {
+            return h('div', { class: 'system-line', role: 'status', 'data-id': String(message.id) }, message.content);
+        }
+
+        if (message.role === 'staff') {
+            return this.renderStaffTurn(message);
+        }
+
         const turn = h('div', { class: `turn ${message.role}`, 'data-id': String(message.id) });
 
         if (message.role === 'assistant' && message.activity && message.activity.length > 0) {
@@ -1025,6 +1089,10 @@ class AssistantWidget {
             const bubble = h('div', { class: `bubble${message.tone ? ` ${message.tone}` : ''}` });
             bubble.append(paragraphs(message.content));
             turn.append(bubble);
+        }
+
+        if (message.attachments && message.attachments.length > 0) {
+            turn.append(renderAttachments(message.attachments));
         }
 
         const actions = realActions(message.actions);
@@ -1039,6 +1107,34 @@ class AssistantWidget {
 
         if (message.handoff) {
             turn.append(this.renderHandoff(message.handoff));
+        }
+
+        const time = timeLabel(message.at);
+
+        if (time) {
+            turn.append(h('div', { class: 'time' }, time));
+        }
+
+        return turn;
+    }
+
+    /** A reply from someone on our team: their initials, name and a small Unified tag. */
+    private renderStaffTurn(message: Message): HTMLElement {
+        const name = message.author?.trim() || COPY.teamTag;
+        const turn = h(
+            'div',
+            { class: 'turn staff', 'data-id': String(message.id) },
+            h('div', { class: 'staff-head' }, h('span', { class: 'avatar', 'aria-hidden': 'true' }, initials(name)), h('span', { class: 'staff-name' }, name), h('span', { class: 'tag' }, COPY.teamTag)),
+        );
+
+        if (message.content) {
+            const bubble = h('div', { class: 'bubble' });
+            bubble.append(paragraphs(message.content));
+            turn.append(bubble);
+        }
+
+        if (message.attachments && message.attachments.length > 0) {
+            turn.append(renderAttachments(message.attachments));
         }
 
         const time = timeLabel(message.at);
@@ -1093,6 +1189,10 @@ class AssistantWidget {
     }
 
     private renderHandoff(handoff: Handoff): HTMLElement {
+        if (this.support?.enabled) {
+            return this.renderTeamHandoff(handoff);
+        }
+
         const card = h('div', { class: 'card' }, h('div', { class: 'card-title' }, COPY.handoff));
 
         if (hasIntercom()) {
@@ -1124,6 +1224,43 @@ class AssistantWidget {
         }
 
         return card;
+    }
+
+    /**
+     * With our team behind the Assistant the handoff goes to a person: the
+     * conversation is handed over in place and their replies show up here.
+     */
+    private renderTeamHandoff(handoff: Handoff): HTMLElement {
+        const card = h('div', { class: 'card' }, h('div', { class: 'card-title' }, COPY.teamHandoff));
+
+        if (this.support?.status === 'needs_teammate') {
+            return card;
+        }
+
+        const button = h('button', { class: 'btn primary', type: 'button' }, COPY.talkToTeam);
+        button.addEventListener('click', () => void this.talkToTeam(handoff.question, button));
+        card.append(h('div', { class: 'row-actions' }, button));
+
+        return card;
+    }
+
+    private async talkToTeam(question: string, button: HTMLButtonElement): Promise<void> {
+        if (this.busy) {
+            return;
+        }
+
+        button.disabled = true;
+        this.setBusy(true);
+
+        try {
+            const bootstrap = await this.api.escalate(this.conversation?.id ?? null, question);
+            this.setBusy(false);
+            this.applyBootstrap(bootstrap);
+        } catch (error) {
+            this.setBusy(false);
+            button.disabled = false;
+            this.appendNotice(this.errorText(error));
+        }
     }
 
     private renderReview(plan: ReviewPlan): HTMLElement {
@@ -1312,7 +1449,9 @@ class AssistantWidget {
     }
 
     private async send(preset?: string): Promise<void> {
-        const text = (preset ?? this.input.value).trim();
+        const files = this.pendingFiles.slice();
+        const typed = (preset ?? this.input.value).trim();
+        const text = typed || (files.length > 0 ? `${COPY.fileAdded}: ${files.map((file) => file.name).join(', ')}` : '');
 
         if (!text || this.busy) {
             return;
@@ -1327,13 +1466,19 @@ class AssistantWidget {
         this.dropFailedTurn();
         const userId = `u-${Date.now()}`;
         const draftKey = this.draftKey();
-        this.push({ id: userId, role: 'user', content: text, at: new Date().toISOString() });
+        this.push({
+            id: userId,
+            role: 'user',
+            content: text,
+            at: new Date().toISOString(),
+            attachments: files.length > 0 ? files.map((file) => ({ id: file.id, name: file.name, size: file.size })) : null,
+        });
         this.dismissIntro();
         this.setBusy(true);
         this.slowTimer.start((label) => this.setWaitingLabel(label));
 
         try {
-            const turn = await this.api.send(text, this.setupApp, this.conversation?.id ?? null);
+            const turn = await this.api.send(text, this.setupApp, this.conversation?.id ?? null, files.map((file) => file.id));
             const failure = failedTurnError(turn);
 
             if (failure !== null) {
@@ -1341,6 +1486,9 @@ class AssistantWidget {
 
                 return;
             }
+
+            this.pendingFiles = this.pendingFiles.filter((file) => !files.some((sentFile) => sentFile.id === file.id));
+            this.renderPendingFiles();
 
             clearDraftIfSent(draftKey, text);
             this.acceptTurn(turn);
@@ -1421,6 +1569,11 @@ class AssistantWidget {
 
     private acceptTurn(turn: TurnResponse): void {
         const actions = realActions(turn.actions);
+        const wasWaiting = this.support?.status === 'needs_teammate';
+
+        if (turn.support) {
+            this.support = turn.support;
+        }
 
         const message: Message = {
             id: turn.message_id ?? `a-${Date.now()}`,
@@ -1459,6 +1612,116 @@ class AssistantWidget {
         if ((turn.turn_state ?? 'complete') === 'complete' && (actions.length > 0 || applied)) {
             this.offerFeedback(typeof turn.message_id === 'number' ? turn.message_id : null);
         }
+
+        // Handed to our team by this turn: fetch the "Handed to our team" line now.
+        this.syncPolling(!wasWaiting && this.support?.status === 'needs_teammate');
+    }
+
+    /* Our team's replies */
+
+    /**
+     * Polls while a teammate has the conversation: every 5 s while the drawer
+     * is open and the page is showing, every 20 s otherwise. Stops once the
+     * conversation is resolved or back with the Assistant, and starts over
+     * with every thread change (applyBootstrap).
+     */
+    private syncPolling(now = false): void {
+        const waiting = this.booted && this.support?.enabled === true && this.support.status === 'needs_teammate' && this.conversation !== null;
+
+        if (!waiting) {
+            this.stopPolling();
+
+            return;
+        }
+
+        if (now || this.pollTimer === null) {
+            this.schedulePoll(now ? 0 : this.pollDelay());
+        }
+    }
+
+    private reschedulePoll(): void {
+        if (this.pollTimer !== null) {
+            this.schedulePoll(this.pollDelay());
+        }
+    }
+
+    private pollDelay(): number {
+        return this.open && document.visibilityState !== 'hidden' ? TEAM_POLL_OPEN_MS : TEAM_POLL_HIDDEN_MS;
+    }
+
+    private schedulePoll(delay: number): void {
+        this.stopPolling();
+        this.pollTimer = window.setTimeout(() => void this.pollTeam(), delay);
+    }
+
+    private stopPolling(): void {
+        if (this.pollTimer !== null) {
+            window.clearTimeout(this.pollTimer);
+            this.pollTimer = null;
+        }
+    }
+
+    private async pollTeam(): Promise<void> {
+        this.pollTimer = null;
+        const conversationId = this.conversation?.id ?? null;
+
+        if (conversationId === null) {
+            return;
+        }
+
+        try {
+            const updates = await this.api.updates(conversationId, this.lastSeenId());
+
+            if (String(this.conversation?.id ?? '') !== String(conversationId)) {
+                return;
+            }
+
+            for (const message of updates.messages ?? []) {
+                if (!this.messages.some((known) => String(known.id) === String(message.id))) {
+                    this.push(message);
+
+                    if (!this.open && message.role === 'staff') {
+                        this.badge.textContent = '1';
+                        this.badge.hidden = false;
+                    }
+                }
+            }
+
+            if (updates.status && this.support) {
+                this.support = { ...this.support, status: updates.status };
+            }
+        } catch {
+            /* asked again on the next round */
+        }
+
+        if (this.pollTimer === null) {
+            this.syncPolling();
+        }
+    }
+
+    /** The newest message id the widget has from SSO (its own sends carry local ids). */
+    private lastSeenId(): number {
+        const ids = this.messages.map((message) => (typeof message.id === 'number' ? message.id : Number.NaN)).filter((id) => Number.isFinite(id));
+
+        return ids.length > 0 ? Math.max(...ids) : (this.support?.last_message_id ?? 0);
+    }
+
+    /* Files waiting to go with the next message */
+
+    private renderPendingFiles(): void {
+        this.pendingEl.replaceChildren(
+            ...this.pendingFiles.map((file) => {
+                const remove = h('button', { class: 'remove', type: 'button', 'aria-label': `${COPY.removeFile} ${file.name}`, title: COPY.removeFile }, svg(icons.close, 14));
+                remove.addEventListener('click', () => {
+                    this.pendingFiles = this.pendingFiles.filter((pending) => pending.id !== file.id);
+                    this.renderPendingFiles();
+                    this.input.focus();
+                });
+
+                return h('span', { class: 'file-chip' }, svg(icons.paperclip, 14), h('span', { class: 'name' }, file.name), h('span', { class: 'size' }, fileSize(file.size)), remove);
+            }),
+        );
+        this.pendingEl.hidden = this.pendingFiles.length === 0;
     }
 
     /* "Did I handle that correctly?" */
@@ -1599,6 +1862,16 @@ class AssistantWidget {
             }
 
             this.setBusy(false);
+
+            // An SSO with our team behind it takes the file with the next message.
+            if (this.support !== null && upload?.id) {
+                this.pendingFiles = [...this.pendingFiles, { id: upload.id, name: file.name, size: file.size }];
+                this.renderPendingFiles();
+                this.input.focus();
+
+                return;
+            }
+
             // The model reads a file by its number; the name alone leaves it guessing.
             const label = upload?.id ? `${COPY.fileAdded} (file ${upload.id})` : COPY.fileAdded;
             await this.send(`${label}: ${file.name}`);

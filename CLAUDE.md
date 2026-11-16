@@ -522,16 +522,40 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      SSO's `error` and sends nothing. An upload answer without `status: 'reading'` (an older SSO that read the
      file in the request) sends the message at once, as before. Tests: `resources/assistant/tests/upload.test.ts`,
      `widget-upload.test.ts`.
-  2. **The same-origin proxy** `/assistant/{bootstrap, messages, uploads, uploads/{id}, actions/{id}/undo,
+     **Our team behind the Assistant (2026-11-16, contract `SUPPORT-CONTRACT.md`; SSO side
+     `feature/assistant-support-handoff`, CRM inbox in the `crm` repo).** Bootstrap and turn answers carry
+     `support: {enabled, status: assistant | needs_teammate | resolved, last_message_id}` (absent from an older
+     SSO). With `support.enabled` the handoff card reads "I can't finish this one, but our team can." with
+     **Talk to our team** (`POST {escalate} {conversation_id, question}`; the answer is the bootstrap shape with
+     the "Handed to our team" line, applied in place) instead of Ask Help; with it off (or absent) the Ask Help
+     card is exactly as before. While `status === 'needs_teammate'` the widget polls
+     `GET {updates}?conversation=ID&after=<newest numeric message id it has>` every 5 s while the drawer is open
+     and the page is showing, every 20 s otherwise (`visibilitychange` and open/close reschedule it), appends
+     the staff / assistant / system messages it does not have (by id), badges the launcher for a staff reply
+     while the drawer is closed, and stops once the status is `resolved` or `assistant`. A thread change
+     (`applyBootstrap`: New conversation, reopening one, escalate) starts it over; a turn that hands the
+     conversation over polls at once to fetch the line. Messages: `role: 'staff'` renders on the left with the
+     author's initials, name and a small "Unified" tag in a brand-bordered bubble; `role: 'system'` is a
+     centered muted line; `attachments [{id?, name, mime?, size?, url?}]` render as chips (name + size), a link
+     opening in a new tab only for an `http(s)` `url`. **Files go with the next message:** with an SSO that
+     sends `support`, an added file (read as before, or only carried while our team has the thread) becomes a
+     chip above the composer (`.pending-files`, X to take it off) and the next message posts `attachments:
+     [ids]` (a message with only files sends "I added a file: name"); an older SSO keeps the old "I added a
+     file (file N): name" message. The component and SSO's own settings send `escalate` and `updates`; a
+     component without them gets the paths derived from `messages`. Tests:
+     `resources/assistant/tests/widget-support.test.ts`, `widget-support-off.test.ts`.
+  2. **The same-origin proxy** `/assistant/{bootstrap, messages, escalate, updates, uploads, uploads/{id}, actions/{id}/undo,
      review/{plan}/{approve|remove|choose|set-aside}, intro/dismiss, feedback, feedback/{id}/follow-up, DELETE conversation}` under `sso.assistant.middleware`
      (`['web','auth']`), registered only when `assistant.enabled && assistant.proxy`. It forwards to
-     `SSO_BASE_URL/api/internal/assistant/{conversation, turn, uploads, uploads/{id}, actions/…, review/…, intro/dismiss, feedback, feedback/{id}/follow-up}` with
+     `SSO_BASE_URL/api/internal/assistant/{conversation, turn, escalate, updates, uploads, uploads/{id}, actions/…, review/…, intro/dismiss, feedback, feedback/{id}/follow-up}` with
      `Http::withToken(config('app.core_api_key'))` and stamps `sso_user_id` (auth user's `sso_id`),
      `sso_company_id` (`session('selected_company_id')` → `companies.sso_company_id`), `app_slug`
      (`sso.app_slug`) and `impersonating` (`session()->has('impersonator_id')`). **Identity never comes
      from the request body**; anything the body says about those keys is dropped. Bootstrap forwards the
      optional `conversation` query parameter (integer, 422 otherwise) and a turn passes `conversation_id`
-     through; both are thread selectors, not identity. An upload forwards `setup_app` and the page as the
+     through; both are thread selectors, not identity. A turn also passes `attachments` (up to 10 integer file
+     ids); `POST escalate` forwards `conversation_id` and `question` (≤2000), `GET updates` forwards
+     `conversation` (required) and `after`, nothing else from the browser. An upload forwards `setup_app` and the page as the
      flat multipart fields `page[url]` / `page[title]` (nested arrays become `page[]` in Laravel's multipart
      encoder), and the widget sends them with every file, so SSO files the upload under the app whose setup
      page is open rather than the agency's first app (Val's 2026-11-01 roster test: files landed on the
@@ -581,7 +605,8 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   - **Wording (rendered UI, binding, DEV_GUIDELINES §2d):** the feature is **Assistant**, Intercom/Fin is
     **Help**; never "chat", "bot", "AI", "support". Subtitle "Does tasks for you. For questions about how
     something works, use Help." Handoff "I can't do that one, but Help can take it from here." / **Ask
-    Help**. Chips "Undo" / "Undone". No em dashes, US English, no developer words, no tenant-isolation
+    Help**, or with our team behind the Assistant "I can't finish this one, but our team can." / **Talk to
+    our team**; a teammate's reply carries a "Unified" tag. Chips "Undo" / "Undone". No em dashes, US English, no developer words, no tenant-isolation
     narration. Tool `summary` and `failed()` text are rendered UI too.
   - **Tests:** `tests/Feature/Assistant/*` with `tests/Fixtures/FakeAssistantToolProvider.php` (catalog +
     execute auth/membership/hidden/confirm/failed/exception, proxy stamping from the session never the

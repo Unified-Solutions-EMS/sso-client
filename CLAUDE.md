@@ -511,10 +511,21 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      offers Try again / Dismiss. A turn in flight moves its waiting line from "Working on it" to "Still
      working… this one is taking a little longer" at 8 s and "Almost there" at 20 s (`activity[]` only
      arrives with the final answer today).
-  2. **The same-origin proxy** `/assistant/{bootstrap, messages, uploads, actions/{id}/undo,
+     **A file is read in the background (2026-11-16: SSO used to read it inside the upload request, and two
+     uploads died at 31.8 s and 33.5 s under Octane's 30 s limit, answering 500 = "not reachable").** SSO now
+     answers the upload at once with `upload: {id, status: 'reading'}`; `upload.ts` shows the file as a chip
+     (`.chip.file.reading`, "Reading file…", composer locked as for a turn) and polls `GET {uploads}/{id}` (the
+     status URL is derived from the `uploads` setting, so no component change) every 2 s for 30 s, then every
+     5 s, giving up at 5 minutes with "That file took too long to read. Try a smaller file." A network blip or
+     5xx is asked again; a 404 ends it ("That file is no longer here. Add it again."). `ready` removes the chip
+     and sends the same "I added a file (file N): name" message as before; `failed` turns the chip red with
+     SSO's `error` and sends nothing. An upload answer without `status: 'reading'` (an older SSO that read the
+     file in the request) sends the message at once, as before. Tests: `resources/assistant/tests/upload.test.ts`,
+     `widget-upload.test.ts`.
+  2. **The same-origin proxy** `/assistant/{bootstrap, messages, uploads, uploads/{id}, actions/{id}/undo,
      review/{plan}/{approve|remove|choose|set-aside}, intro/dismiss, feedback, feedback/{id}/follow-up, DELETE conversation}` under `sso.assistant.middleware`
      (`['web','auth']`), registered only when `assistant.enabled && assistant.proxy`. It forwards to
-     `SSO_BASE_URL/api/internal/assistant/{conversation, turn, uploads, actions/…, review/…, intro/dismiss, feedback, feedback/{id}/follow-up}` with
+     `SSO_BASE_URL/api/internal/assistant/{conversation, turn, uploads, uploads/{id}, actions/…, review/…, intro/dismiss, feedback, feedback/{id}/follow-up}` with
      `Http::withToken(config('app.core_api_key'))` and stamps `sso_user_id` (auth user's `sso_id`),
      `sso_company_id` (`session('selected_company_id')` → `companies.sso_company_id`), `app_slug`
      (`sso.app_slug`) and `impersonating` (`session()->has('impersonator_id')`). **Identity never comes

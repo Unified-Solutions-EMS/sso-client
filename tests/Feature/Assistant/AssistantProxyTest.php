@@ -387,4 +387,36 @@ class AssistantProxyTest extends AssistantTestCase
                 && ! in_array('page[url]', $names, true);
         });
     }
+
+    public function test_upload_status_forwards_to_sso_with_the_session_identity_and_passes_the_answer_back(): void
+    {
+        Http::fake(['https://sso.test/api/internal/assistant/uploads/17*' => Http::response(['upload' => ['id' => 17, 'status' => 'ready', 'summary' => 'A roster.', 'counts' => ['people' => 2], 'error' => null]], 200)]);
+        $this->signedInMember();
+
+        $this->getJson('/assistant/uploads/17?sso_user_id=999&sso_company_id=999')
+            ->assertOk()
+            ->assertJsonPath('upload.status', 'ready')
+            ->assertJsonPath('upload.summary', 'A roster.');
+
+        Http::assertSent(function (ClientRequest $request): bool {
+            parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+
+            return $request->method() === 'GET'
+                && str_starts_with($request->url(), 'https://sso.test/api/internal/assistant/uploads/17?')
+                && (int) $query['sso_user_id'] === 7
+                && (int) $query['sso_company_id'] === 42
+                && $query['app_slug'] === config('sso.app_slug');
+        });
+    }
+
+    public function test_upload_status_passes_a_not_found_back_and_only_takes_a_number(): void
+    {
+        Http::fake(['https://sso.test/api/internal/assistant/uploads/*' => Http::response(['message' => 'Not Found'], 404)]);
+        $this->signedInMember();
+
+        $this->getJson('/assistant/uploads/18')->assertNotFound();
+        $this->getJson('/assistant/uploads/abc')->assertNotFound();
+
+        Http::assertSentCount(1);
+    }
 }

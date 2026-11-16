@@ -193,10 +193,25 @@ export interface ReviewResponse {
     notice?: string | null;
 }
 
+/** A file SSO is reading or has read. An older SSO sends only `id` (read already). */
+export interface UploadStatus {
+    id: number;
+    status?: 'reading' | 'ready' | 'failed' | null;
+    summary?: string | null;
+    counts?: Record<string, number> | null;
+    error?: string | null;
+}
+
 export interface UploadResponse {
     ok?: boolean;
     name?: string | null;
-    upload?: { id: number } | null;
+    upload?: UploadStatus | null;
+    error?: string | null;
+}
+
+/** GET /assistant/uploads/{id} answer. */
+export interface UploadStatusResponse {
+    upload?: UploadStatus | null;
     error?: string | null;
 }
 

@@ -36,6 +36,7 @@ if (config('sso.assistant.enabled', true)) {
                 Route::get('bootstrap', [AssistantProxyController::class, 'bootstrap'])->name('sso.assistant.bootstrap');
                 Route::post('messages', [AssistantProxyController::class, 'message'])->name('sso.assistant.messages');
                 Route::post('uploads', [AssistantProxyController::class, 'upload'])->name('sso.assistant.uploads');
+                Route::get('uploads/{upload}', [AssistantProxyController::class, 'uploadStatus'])->whereNumber('upload')->name('sso.assistant.uploads.show');
                 Route::post('actions/{action}/undo', [AssistantProxyController::class, 'undo'])->whereNumber('action')->name('sso.assistant.undo');
                 Route::post('review/{plan}/approve', [AssistantProxyController::class, 'approveReview'])->name('sso.assistant.review.approve');
                 Route::post('review/{plan}/remove', [AssistantProxyController::class, 'removeFromReview'])->name('sso.assistant.review.remove');

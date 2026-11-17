@@ -649,10 +649,24 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      over 32 characters cut with an ellipsis ("unifiedreporting.unified-apps.com/dashboard"), with the sentence's
      closing punctuation and an unmatched `)` left outside; never the raw address spelled out. Anchors are built
      as elements with `textContent`, never `innerHTML`. Tests: `links.test.ts`, `widget-links.test.ts`.
-  2. **The same-origin proxy** `/assistant/{bootstrap, messages, escalate, updates, uploads, uploads/{id}, actions/{id}/undo,
+     **Read receipts for our team (2026-11-17, James: "can we show whether or not a message was seen by the
+     user"; SSO, CRM and Unified Mobile on `feature/seen-receipts`).** `seen.ts` (`SeenTracker`) watches every
+     staff turn with an `IntersectionObserver` rooted on the message list (a reply counts once half of it, or
+     half the list's height, is showing). When one is on screen while the drawer is open, the page is showing
+     and the Conversations menu is not over the thread, it posts `POST {seen} {conversation_id, last_message_id}`
+     with the newest such reply's id, 1 s after the last one came into view (`SEEN_DEBOUNCE_MS`), and only when
+     that id is newer than anything already reported (SSO's `support.seen.message_id` seeds it on every thread
+     change). Ids are read from `data-id` when the check runs, so a reply heard live (`crm-{id}`) counts once a
+     poll gives it SSO's id. A failed post lets the same reply be reported again. Opening the drawer, the page
+     becoming visible and closing the menu re-check. No observer (old browsers): a rendered reply counts as
+     on screen. The person never sees a receipt; our team sees "Seen" / "Delivered" in the CRM. Proxy
+     `POST /assistant/seen` (throttle 60/min, forwards `conversation_id` + `last_message_id` with the stamped
+     identity; SSO ignores receipts while impersonating) and component setting `seen`; an older component sends
+     neither and the widget sends no receipts. Tests: `seen.test.ts`, `widget-seen.test.ts`, `AssistantProxyTest`.
+  2. **The same-origin proxy** `/assistant/{bootstrap, messages, escalate, updates, seen, uploads, uploads/{id}, actions/{id}/undo,
      review/{plan}/{approve|remove|choose|set-aside}, intro/dismiss, feedback, feedback/{id}/follow-up, DELETE conversation}` under `sso.assistant.middleware`
      (`['web','auth']`), registered only when `assistant.enabled && assistant.proxy`. It forwards to
-     `SSO_BASE_URL/api/internal/assistant/{conversation, turn, escalate, updates, uploads, uploads/{id}, actions/…, review/…, intro/dismiss, feedback, feedback/{id}/follow-up}` with
+     `SSO_BASE_URL/api/internal/assistant/{conversation, turn, escalate, updates, seen, uploads, uploads/{id}, actions/…, review/…, intro/dismiss, feedback, feedback/{id}/follow-up}` with
      `Http::withToken(config('app.core_api_key'))` and stamps `sso_user_id` (auth user's `sso_id`),
      `sso_company_id` (`session('selected_company_id')` → `companies.sso_company_id`), `app_slug`
      (`sso.app_slug`) and `impersonating` (`session()->has('impersonator_id')`). **Identity never comes

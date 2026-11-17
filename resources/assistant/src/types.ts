@@ -28,6 +28,8 @@ export interface WidgetSettings {
     rating?: string | null;
     /** POST: "Yes, call me" after a low rating. Absent: the call is not offered. */
     callback?: string | null;
+    /** POST: read receipts for our team's replies. Absent from an older component: none are sent. */
+    seen?: string | null;
     csrf: string | null;
 }
 
@@ -55,6 +57,13 @@ export interface Support {
     last_message_id: number;
     /** Where our team's replies arrive live; null or absent: polling only. */
     realtime?: Realtime | null;
+    /** How far the person has read our team's replies (absent from an older SSO). Only used to skip a receipt already sent. */
+    seen?: Seen | null;
+}
+
+export interface Seen {
+    message_id: number;
+    at: string | null;
 }
 
 /**

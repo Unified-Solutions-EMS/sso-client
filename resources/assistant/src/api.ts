@@ -108,6 +108,16 @@ export class AssistantApi {
         return (await this.read(response)) as UpdatesResponse;
     }
 
+    /** Whether this app's component sends the read-receipt route (an older sso-client does not). */
+    canSendSeen(): boolean {
+        return Boolean(this.settings.seen);
+    }
+
+    /** Our team's replies up to this message were on the person's screen. */
+    async seen(conversationId: number | string, lastMessageId: number): Promise<unknown> {
+        return this.json('POST', this.settings.seen ?? '', { conversation_id: conversationId, last_message_id: lastMessageId });
+    }
+
     /** A route next to messages, for a component that does not send it yet. */
     private sibling(name: string, given: string | null | undefined): string {
         return given || this.settings.messages.replace(/messages\/?$/, name);

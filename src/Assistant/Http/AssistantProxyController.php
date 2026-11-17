@@ -86,6 +86,21 @@ class AssistantProxyController extends Controller
         return $this->forward($request, 'get', '/updates', array_filter($query, fn ($value): bool => $value !== null));
     }
 
+    /**
+     * A read receipt: our team's replies up to this message were on the
+     * person's screen. Only the thread and the message id go through; SSO
+     * decides whether it moves the pointer (never while impersonating).
+     */
+    public function seen(Request $request): JsonResponse|Response
+    {
+        $body = $request->validate([
+            'conversation_id' => ['required', 'integer', 'min:1'],
+            'last_message_id' => ['required', 'integer', 'min:1'],
+        ]);
+
+        return $this->forward($request, 'post', '/seen', $body);
+    }
+
     public function upload(Request $request): JsonResponse|Response
     {
         $body = $request->validate([

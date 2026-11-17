@@ -346,7 +346,7 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      root `app.blade.php` next to `<x-intercom-widget />`; Blade apps in the main layout; Filament panels
      via a `panels::body.end` render hook (same as the Intercom widget). Optional `setup-app="crew-scheduling"`
      prop makes every turn carry `setup_app`. The bundle is `dist/assistant.js` (vanilla TypeScript,
-     shadow DOM, no runtime deps, committed; rebuild with `npm ci && npm run build`, `npm run typecheck`
+     shadow DOM, one runtime dependency (pusher-js, bundled, for our team's live replies), committed; rebuild with `npm ci && npm run build`, `npm run typecheck`
      first). **SSO is the bundle's origin.** An app's `GET /assistant/widget.js`
      (`AssistantWidgetController`) fetches `{SSO_BASE_URL}/assistant/widget.js`, keeps body + ETag in the
      app cache for `sso.assistant.bundle_cache_seconds` (3600) and serves it with
@@ -574,6 +574,28 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      its place and the widget does not append a second one; an older widget drops it for the empty prompt and
      appends its own, so either way there is one. The first-run callout text is SSO's (`intro.title` "Need a
      hand? Ask here." for members); the widget has no per-reach callout copy. Tests: `widget-reach.test.ts`.
+     **Our team's replies live (2026-11-16, contract `REALTIME-CONTRACT.md`; SSO side `feature/assistant-realtime`,
+     broadcasting in the `crm` repo).** `support.realtime` (bootstrap, turn, escalate, and the `support` block SSO
+     now adds to the updates answer) is `{host, port, scheme, key, channel, auth_url, token, name}` or null. While
+     the thread is `needs_teammate` and a block is present, `realtime.ts` (`SupportSocket`, pusher-js 8.6.0 pinned,
+     bundled) connects to the CRM's Reverb cluster (`wsHost`/`wsPort`/`wssPort`, `forceTLS` for https,
+     `enabledTransports: ['ws','wss']`, stats off) and subscribes to `private-{channel}`, authorized by
+     `POST auth_url` with `X-Support-Token` (sent through `channelAuthorization.headersProvider`, so the fresher
+     token from each answer is used on any later re-subscribe; tokens last an hour). `message.created`: staff and
+     system lines render (customer and assistant lines are already on screen); the id is `sso_message_id` when the
+     CRM has it, else `crm-{id}`, the message keeps `crm_message_id` and is marked `live`, which keeps it out of
+     the poll's `after`; a poll that brings the same line (same id, or a staff message with the same
+     `crm_message_id`, which SSO now includes) takes SSO's id instead of adding a second bubble.
+     `conversation.updated`: a new `assignee_name` adds the local line "{name} from our team has your
+     conversation", a `support_status` change applies like a polled one (resolved also adds "Our team marked this
+     resolved." and leaves the channel). `client-typing` from staff shows "{name} is typing" below the last message
+     (6 s, or until their message lands); typing in the composer sends `client-typing {who: customer, name}` at
+     most every 3 s while connected. Polling never stops: connected and subscribed it runs every 60 s (one poll at
+     once on each (re)connect to catch anything missed), and on a drop or a refused subscription it is back to
+     5 s / 20 s. A refused channel is not retried until SSO names another one. A new conversation, a resolved one,
+     or one back with the Assistant disconnects. No socket for threads the Assistant has (keeps the cluster's
+     connection count to people actually waiting on our team). Bundle 78.6 KB -> 145.4 KB minified (22 KB -> 42 KB
+     gzip). Tests: `resources/assistant/tests/widget-realtime.test.ts` (fake pusher via `vi.mock`).
   2. **The same-origin proxy** `/assistant/{bootstrap, messages, escalate, updates, uploads, uploads/{id}, actions/{id}/undo,
      review/{plan}/{approve|remove|choose|set-aside}, intro/dismiss, feedback, feedback/{id}/follow-up, DELETE conversation}` under `sso.assistant.middleware`
      (`['web','auth']`), registered only when `assistant.enabled && assistant.proxy`. It forwards to

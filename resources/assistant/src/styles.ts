@@ -286,6 +286,8 @@ p + p { margin-top: 0.5em; }
   border-bottom-left-radius: 4px; box-shadow: var(--ua-shadow-sm);
 }
 .system-line { align-self: center; max-width: 88%; font-size: 12px; color: rgb(var(--ua-text-muted)); text-align: center; padding: 2px 8px; }
+.typing { align-self: flex-start; font-size: 12px; font-style: italic; color: rgb(var(--ua-text-muted)); padding: 0 4px; }
+.typing[hidden] { display: none; }
 .attachments { display: flex; flex-wrap: wrap; gap: 6px; max-width: 88%; }
 .user .attachments { justify-content: flex-end; }
 .file-chip {

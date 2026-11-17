@@ -4,6 +4,7 @@ import { BarAvoidance, SCROLLER_ATTRIBUTE, SCROLLER_PADDING_VAR } from './avoid'
 import { dayLabel, fileSize, h, icons, paragraphs, svg, timeLabel } from './dom';
 import { askHelp, hasIntercom, setIntercomHidden } from './intercom';
 import { BusyPoller, DRAFT_NAME_PREFIX, type FailedTurnHandlers, SlowTurnTimer, clearDraftIfSent, draftName, failedTurnError, isBusy, readDraft, renderFailedTurn, saveDraft, showRetryButtons } from './retry';
+import { type LiveConversation, type LiveMessage, type LiveTyping, SupportSocket, liveToMessage } from './realtime';
 import { styles } from './styles';
 import { UPLOAD_COPY, stillReading, waitUntilRead } from './upload';
 import type { Action, BootstrapResponse, Conversation, ConversationSummary, Handoff, Intro, Message, MessageAttachment, PlanChange, Reach, ReviewPlan, ReviewResponse, Suggestion, Support, Tour, TourStep, TurnResponse, WidgetSettings } from './types';
@@ -26,6 +27,9 @@ const COPY = {
     teamPrompt: 'Tell me what you need and I will pass it to our team.',
     toOurTeam: 'To our team',
     teamHasConversation: 'Our team has this conversation',
+    isTyping: 'is typing',
+    assigned: 'from our team has your conversation',
+    resolved: 'Our team marked this resolved.',
     teamTag: 'Unified',
     removeFile: 'Remove',
     noHelp: 'Open Help from the menu to send this.',
@@ -207,6 +211,10 @@ const ACTION_EVENT = 'unified-assistant:action';
 /** How often to ask for our team's replies: drawer open and showing, or not. */
 const TEAM_POLL_OPEN_MS = 5000;
 const TEAM_POLL_HIDDEN_MS = 20000;
+/** While the socket is connected, polling is only a safety net. */
+const TEAM_POLL_LIVE_MS = 60000;
+/** "{name} is typing" goes when no typing event has come for this long. */
+const TYPING_SHOWN_MS = 6000;
 
 function initials(name: string): string {
     const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -382,6 +390,17 @@ class AssistantWidget {
     /** The standing "Talk to our team" item in the Conversations menu, or the status line once our team has it. */
     private teamEntryEl!: HTMLDivElement;
 
+    /** Our team's replies the moment they are written, over the CRM's socket. */
+    private socket: SupportSocket;
+
+    /** "{name} is typing" below the last message. */
+    private typingEl!: HTMLDivElement;
+
+    private typingTimer: number | null = null;
+
+    /** The teammate the CRM last said has the conversation. */
+    private assignee: string | null = null;
+
     constructor(settings: SettingsWithContext) {
         this.api = new AssistantApi(settings);
         this.setupApp = settings.setup_app ?? null;
@@ -395,6 +414,12 @@ class AssistantWidget {
             (bootstrap) => this.applyBootstrap(bootstrap),
             () => this.busyGaveUp(),
         );
+        this.socket = new SupportSocket({
+            live: (live) => this.onLive(live),
+            message: (message) => this.onLiveMessage(message),
+            conversation: (update) => this.onLiveConversation(update),
+            typing: (typing) => this.onLiveTyping(typing),
+        });
         this.avoidance = new BarAvoidance(this.host, (lifted) => {
             this.lifted = lifted;
             this.syncDock();
@@ -774,6 +799,7 @@ class AssistantWidget {
         this.scrim = h('div', { class: 'scrim', onclick: () => this.setOpen(false) });
 
         this.list = h('div', { class: 'list', role: 'log', 'aria-live': 'polite', 'aria-relevant': 'additions' });
+        this.typingEl = h('div', { class: 'typing', role: 'status', hidden: true });
 
         this.input = h('textarea', {
             rows: '1',
@@ -783,6 +809,10 @@ class AssistantWidget {
             oninput: () => {
                 this.autosize();
                 saveDraft(this.draftKey(), this.input.value);
+
+                if (this.input.value.trim() !== '') {
+                    this.socket.typing();
+                }
             },
         });
 
@@ -965,6 +995,8 @@ class AssistantWidget {
         this.busyPoller.stop();
         this.failedRow = null;
         this.support = bootstrap.support ?? null;
+        this.assignee = null;
+        this.hideTyping();
         this.reach = bootstrap.reach ?? null;
         this.applyReach();
         this.teamMode = false;
@@ -1743,6 +1775,8 @@ class AssistantWidget {
     private syncPolling(now = false): void {
         const waiting = this.booted && this.support?.enabled === true && this.support.status === 'needs_teammate' && this.conversation !== null;
 
+        this.syncRealtime(waiting);
+
         if (!waiting) {
             this.stopPolling();
 
@@ -1761,6 +1795,10 @@ class AssistantWidget {
     }
 
     private pollDelay(): number {
+        if (this.socket.isLive()) {
+            return TEAM_POLL_LIVE_MS;
+        }
+
         return this.open && document.visibilityState !== 'hidden' ? TEAM_POLL_OPEN_MS : TEAM_POLL_HIDDEN_MS;
     }
 
@@ -1792,14 +1830,18 @@ class AssistantWidget {
             }
 
             for (const message of updates.messages ?? []) {
-                if (!this.messages.some((known) => String(known.id) === String(message.id))) {
-                    this.push(message);
+                const known = this.findKnown(message);
 
-                    if (!this.open && message.role === 'staff') {
-                        this.badge.textContent = '1';
-                        this.badge.hidden = false;
-                    }
+                if (known) {
+                    this.confirmLive(known, message);
+                } else {
+                    this.push(message);
+                    this.badgeFor(message);
                 }
+            }
+
+            if (updates.support?.realtime !== undefined && this.support) {
+                this.support = { ...this.support, realtime: updates.support.realtime };
             }
 
             if (updates.status && this.support && updates.status !== this.support.status) {
@@ -1815,11 +1857,136 @@ class AssistantWidget {
         }
     }
 
-    /** The newest message id the widget has from SSO (its own sends carry local ids). */
+    /** The newest message id the widget has from SSO (its own sends carry local ids; lines heard live wait for a poll). */
     private lastSeenId(): number {
-        const ids = this.messages.map((message) => (typeof message.id === 'number' ? message.id : Number.NaN)).filter((id) => Number.isFinite(id));
+        const ids = this.messages.map((message) => (typeof message.id === 'number' && !message.live ? message.id : Number.NaN)).filter((id) => Number.isFinite(id));
 
         return ids.length > 0 ? Math.max(...ids) : (this.support?.last_message_id ?? 0);
+    }
+
+    /** A message the widget already shows: the same id, or the same teammate's reply by its CRM id. */
+    private findKnown(message: Message): Message | undefined {
+        return this.messages.find(
+            (known) => String(known.id) === String(message.id) || (typeof message.crm_message_id === 'number' && known.crm_message_id === message.crm_message_id),
+        );
+    }
+
+    /** A line first heard on the socket, now given by SSO: it takes SSO's id so the next poll starts after it. */
+    private confirmLive(known: Message, message: Message): void {
+        if (!known.live) {
+            return;
+        }
+
+        const row = Array.from(this.list.querySelectorAll<HTMLElement>('[data-id]')).find((el) => el.dataset.id === String(known.id));
+        known.id = message.id;
+        known.live = false;
+        row?.setAttribute('data-id', String(message.id));
+    }
+
+    private badgeFor(message: Message): void {
+        if (!this.open && message.role === 'staff') {
+            this.badge.textContent = '1';
+            this.badge.hidden = false;
+        }
+    }
+
+    /* Our team's replies, live */
+
+    /**
+     * Listens on the CRM's socket while our team has the conversation and
+     * SSO gave a channel; leaves it on a new conversation, a resolved one, or
+     * one handed back to the Assistant.
+     */
+    private syncRealtime(waiting: boolean): void {
+        const realtime = this.support?.realtime ?? null;
+
+        if (waiting && realtime) {
+            this.socket.connect(realtime);
+
+            return;
+        }
+
+        this.socket.close();
+        this.hideTyping();
+    }
+
+    /** Connected: poll once now for anything missed, then only every 60 s. Dropped: back to every 5 s. */
+    private onLive(live: boolean): void {
+        if (live) {
+            this.syncPolling(true);
+        } else {
+            this.reschedulePoll();
+        }
+    }
+
+    private onLiveMessage(live: LiveMessage): void {
+        const message = liveToMessage(live);
+
+        if (!message || (message.role === 'staff' && !message.content && !message.attachments) || this.findKnown(message)) {
+            return;
+        }
+
+        if (message.role === 'staff') {
+            this.hideTyping();
+        }
+
+        this.push(message);
+        this.badgeFor(message);
+    }
+
+    private onLiveConversation(update: LiveConversation): void {
+        if (!this.support) {
+            return;
+        }
+
+        const status = update.support_status;
+        const assignee = update.assignee_name?.trim() || null;
+
+        if (assignee && assignee !== this.assignee && (status ?? this.support.status) === 'needs_teammate') {
+            this.pushLocalLine(`${assignee} ${COPY.assigned}`);
+        }
+
+        this.assignee = assignee;
+
+        if (status && ['assistant', 'needs_teammate', 'resolved'].includes(status) && status !== this.support.status) {
+            this.support = { ...this.support, status };
+
+            if (status === 'resolved') {
+                this.pushLocalLine(COPY.resolved);
+            }
+
+            this.supportChanged();
+            this.syncPolling();
+        }
+    }
+
+    private onLiveTyping(typing: LiveTyping): void {
+        const name = typing.name?.trim() || COPY.teamTag;
+        this.typingEl.textContent = `${name} ${COPY.isTyping}`;
+        this.typingEl.hidden = false;
+        this.list.append(this.typingEl);
+        this.scrollToEnd();
+
+        if (this.typingTimer !== null) {
+            window.clearTimeout(this.typingTimer);
+        }
+
+        this.typingTimer = window.setTimeout(() => this.hideTyping(), TYPING_SHOWN_MS);
+    }
+
+    private hideTyping(): void {
+        if (this.typingTimer !== null) {
+            window.clearTimeout(this.typingTimer);
+            this.typingTimer = null;
+        }
+
+        this.typingEl.hidden = true;
+        this.typingEl.remove();
+    }
+
+    /** A status line from the socket: shown now, never persisted (SSO keeps its own lines). */
+    private pushLocalLine(text: string): void {
+        this.push({ id: `status-${Date.now()}-${this.messages.length}`, role: 'system', content: text, live: true });
     }
 
     /* "Talk to our team" at any time */
@@ -2209,6 +2376,11 @@ class AssistantWidget {
         }
 
         this.list.append(this.renderTurn(message));
+
+        if (!this.typingEl.hidden) {
+            this.list.append(this.typingEl);
+        }
+
         this.renderSuggestions();
         this.scrollToEnd();
     }

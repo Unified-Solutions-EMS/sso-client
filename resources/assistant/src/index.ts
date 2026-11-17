@@ -1,14 +1,14 @@
 import { ApiError, AssistantApi, type ReviewVerb } from './api';
 import { pendingChoices, renderChoice, setRowBusy, showRowError, stillNeedText } from './choice';
 import { BarAvoidance, SCROLLER_ATTRIBUTE, SCROLLER_PADDING_VAR } from './avoid';
-import { dayLabel, fileSize, h, icons, paragraphs, svg, timeLabel } from './dom';
+import { dayLabel, fileSize, h, icons, link, paragraphs, shortUrl, svg, timeLabel } from './dom';
 import { askHelp, hasIntercom, setIntercomHidden } from './intercom';
 import { BusyPoller, DRAFT_NAME_PREFIX, type FailedTurnHandlers, SlowTurnTimer, clearDraftIfSent, draftName, failedTurnError, isBusy, readDraft, renderFailedTurn, saveDraft, showRetryButtons } from './retry';
 import { type LiveConversation, type LiveMessage, type LiveTyping, SupportSocket, liveToMessage } from './realtime';
 import { MessageSound } from './sound';
 import { styles } from './styles';
 import { UPLOAD_COPY, stillReading, waitUntilRead } from './upload';
-import type { Action, BootstrapResponse, Conversation, ConversationSummary, Handoff, Intro, Message, MessageAttachment, PlanChange, Reach, ReviewPlan, ReviewResponse, Suggestion, Support, Tour, TourStep, TurnResponse, WidgetSettings } from './types';
+import type { Action, BootstrapResponse, Conversation, ConversationSummary, Handoff, Intro, Message, MessageAttachment, MessageLink, PlanChange, Reach, ReviewPlan, ReviewResponse, Suggestion, Support, Tour, TourStep, TurnResponse, WidgetSettings } from './types';
 
 const COPY = {
     launcher: 'Assistant',
@@ -240,6 +240,31 @@ function renderAttachments(files: MessageAttachment[]): HTMLElement {
                 : h('span', { class: 'file-chip' }, ...parts);
         }),
     );
+}
+
+/** Pages to open with a reply: small chips under the message, each opening in a new tab. */
+function renderLinks(links: MessageLink[] | null | undefined): HTMLElement | null {
+    const chips = (links ?? []).flatMap((item) => {
+        let url: URL;
+
+        try {
+            url = new URL(item.url);
+        } catch {
+            return [];
+        }
+
+        if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+            return [];
+        }
+
+        const label = typeof item.label === 'string' && item.label.trim() !== '' ? item.label.trim() : shortUrl(url);
+        const chip = link(url, label, 'link-chip');
+        chip.prepend(svg(icons.external, 14));
+
+        return [chip];
+    });
+
+    return chips.length > 0 ? h('div', { class: 'links' }, ...chips) : null;
 }
 
 /** An action with no summary is not an action: nothing to show, nothing to announce. */
@@ -1263,8 +1288,14 @@ class AssistantWidget {
 
         if (message.content) {
             const bubble = h('div', { class: `bubble${message.tone ? ` ${message.tone}` : ''}` });
-            bubble.append(paragraphs(message.content));
+            bubble.append(paragraphs(message.content, { links: message.role === 'assistant' }));
             turn.append(bubble);
+        }
+
+        const links = message.role === 'assistant' ? renderLinks(message.links) : null;
+
+        if (links) {
+            turn.append(links);
         }
 
         if (message.attachments && message.attachments.length > 0) {
@@ -1767,6 +1798,7 @@ class AssistantWidget {
             actions,
             review: turn.review ?? null,
             handoff: turn.handoff ?? null,
+            links: turn.links ?? null,
         };
 
         if (turn.error) {
@@ -1778,7 +1810,7 @@ class AssistantWidget {
             this.pendingReview = turn.review;
         }
 
-        if (message.content || message.actions?.length || message.review || message.handoff) {
+        if (message.content || message.actions?.length || message.review || message.handoff || message.links?.length) {
             this.push(message);
         }
 

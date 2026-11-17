@@ -611,6 +611,17 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      `unified-assistant.sounds` = `off` mutes (default on). Tests: `sound.test.ts`, `widget-sound.test.ts`
      (they replace `HTMLMediaElement.prototype.play` with a plain function, not a spy: a spy handles the
      returned promise and would hide an unhandled rejection).
+     **Links (2026-11-17, James saw "Open in Analytics: https://unifiedreporting.unified-apps.com/dashboard?analyst=95"
+     as plain text).** An assistant message (bootstrap / updates `messages[]`) and a turn answer may carry
+     `links: [{label, url}]` (SSO fills it from a tool result's `open_url` / `open_label` and keeps the address out
+     of the reply; absent from an older SSO). They render as `.links` > `a.link-chip` under the message (external
+     icon + label, `target="_blank"`, `rel="noopener"`, http(s) only, anything else dropped), and a turn that is
+     only links still renders. In the Assistant's own text (`paragraphs(text, {links: true})`, assistant role
+     only; the person's messages and our team's stay plain) `[label](https://...)` becomes a link with the label
+     and a bare `http(s)://` address becomes a link whose text is the host plus path, no scheme, no query, a path
+     over 32 characters cut with an ellipsis ("unifiedreporting.unified-apps.com/dashboard"), with the sentence's
+     closing punctuation and an unmatched `)` left outside; never the raw address spelled out. Anchors are built
+     as elements with `textContent`, never `innerHTML`. Tests: `links.test.ts`, `widget-links.test.ts`.
   2. **The same-origin proxy** `/assistant/{bootstrap, messages, escalate, updates, uploads, uploads/{id}, actions/{id}/undo,
      review/{plan}/{approve|remove|choose|set-aside}, intro/dismiss, feedback, feedback/{id}/follow-up, DELETE conversation}` under `sso.assistant.middleware`
      (`['web','auth']`), registered only when `assistant.enabled && assistant.proxy`. It forwards to

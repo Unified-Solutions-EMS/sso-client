@@ -318,6 +318,17 @@ p + p { margin-top: 0.5em; }
 a.file-chip:hover, a.file-chip:focus-visible { border-color: rgb(var(--ua-primary)); color: rgb(var(--ua-primary)); }
 .file-chip .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
 .file-chip .size { color: rgb(var(--ua-text-muted)); white-space: nowrap; }
+/* Links: in the reply's text, and pages to open as chips under it */
+.bubble a { color: rgb(var(--ua-primary)); text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
+.bubble a:hover, .bubble a:focus-visible { text-decoration-thickness: 2px; }
+.links { display: flex; flex-wrap: wrap; gap: 6px; max-width: 88%; }
+.link-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-height: 32px;
+  padding: 4px 10px; border: 1px solid rgb(var(--ua-border)); border-radius: 999px;
+  background: rgb(var(--ua-surface)); color: rgb(var(--ua-primary)); font-size: 12px; font-weight: 500; text-decoration: none;
+}
+.link-chip svg { flex: none; }
+.link-chip:hover, .link-chip:focus-visible { border-color: rgb(var(--ua-primary)); background: rgb(var(--ua-primary-subtle)); }
 .pending-files { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .pending-files[hidden] { display: none; }
 .team-mode { display: flex; margin-bottom: 8px; }

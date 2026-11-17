@@ -47,6 +47,7 @@ class Assistant extends Component
             'callback' => $base.'/callback',
             'escalate' => $base.'/escalate',
             'updates' => $base.'/updates',
+            'seen' => $base.'/seen',
             'escalate_message' => true,
             'csrf' => csrf_token(),
         ];

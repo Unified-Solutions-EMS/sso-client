@@ -209,6 +209,38 @@ class AssistantProxyTest extends AssistantTestCase
         $this->postJson('/assistant/rating', ['conversation_id' => 31])->assertUnprocessable();
     }
 
+    public function test_seen_forwards_the_receipt_with_the_session_identity_only(): void
+    {
+        Http::fake(['https://sso.test/api/internal/assistant/seen' => Http::response(['ok' => true, 'seen' => ['message_id' => 55, 'at' => '2026-11-17T15:00:00+00:00']], 200)]);
+        $this->signedInMember();
+
+        $this->postJson('/assistant/seen', ['conversation_id' => 31, 'last_message_id' => 55, 'sso_user_id' => 999, 'impersonating' => false])
+            ->assertOk()
+            ->assertJsonPath('seen.message_id', 55);
+
+        Http::assertSent(fn (ClientRequest $request): bool => $request->url() === 'https://sso.test/api/internal/assistant/seen'
+            && $request->method() === 'POST'
+            && $request->data()['conversation_id'] === 31
+            && $request->data()['last_message_id'] === 55
+            && $request->data()['sso_user_id'] === 7
+            && $request->data()['sso_company_id'] === 42
+            && $request->data()['impersonating'] === false);
+
+        $this->postJson('/assistant/seen', ['conversation_id' => 31])->assertUnprocessable();
+        $this->postJson('/assistant/seen', ['conversation_id' => 31, 'last_message_id' => 'x'])->assertUnprocessable();
+    }
+
+    public function test_seen_tells_sso_when_staff_are_impersonating(): void
+    {
+        Http::fake(['https://sso.test/api/internal/assistant/seen' => Http::response(['ok' => true, 'seen' => null], 200)]);
+        $this->signedInMember();
+        session(['impersonator_id' => 1]);
+
+        $this->postJson('/assistant/seen', ['conversation_id' => 31, 'last_message_id' => 55])->assertOk();
+
+        Http::assertSent(fn (ClientRequest $request): bool => $request->url() === 'https://sso.test/api/internal/assistant/seen' && $request->data()['impersonating'] === true);
+    }
+
     public function test_callback_forwards_the_number_and_passes_back_ssos_field_errors(): void
     {
         Http::fake([

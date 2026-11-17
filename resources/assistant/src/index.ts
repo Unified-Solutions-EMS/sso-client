@@ -6,6 +6,7 @@ import { askHelp, hasIntercom, setIntercomHidden } from './intercom';
 import { BusyPoller, DRAFT_NAME_PREFIX, type FailedTurnHandlers, SlowTurnTimer, clearDraftIfSent, draftName, failedTurnError, isBusy, readDraft, renderFailedTurn, saveDraft, showRetryButtons } from './retry';
 import { type LiveConversation, type LiveMessage, type LiveTyping, SupportSocket, liveToMessage } from './realtime';
 import { RatingCard } from './rating';
+import { SeenTracker } from './seen';
 import { MessageSound } from './sound';
 import { styles } from './styles';
 import { UPLOAD_COPY, stillReading, waitUntilRead } from './upload';
@@ -463,6 +464,9 @@ class AssistantWidget {
     /** The Sounds switch in the Conversations panel. */
     private soundSwitch!: HTMLButtonElement;
 
+    /** Read receipts: tells our team which of their replies the person has had on screen. */
+    private seen!: SeenTracker;
+
     constructor(settings: SettingsWithContext) {
         this.api = new AssistantApi(settings);
         this.setupApp = settings.setup_app ?? null;
@@ -470,6 +474,10 @@ class AssistantWidget {
         this.root = this.host.attachShadow({ mode: 'open' });
         this.syncTheme();
         this.build();
+        this.seen = new SeenTracker(this.list, {
+            send: (messageId) => this.sendSeen(messageId),
+            visible: () => this.threadVisible(),
+        });
         this.busyPoller = new BusyPoller(
             () => this.api.bootstrap(this.conversation?.id ?? null),
             () => this.messages,
@@ -530,7 +538,10 @@ class AssistantWidget {
         }
 
         window.addEventListener('pagehide', () => setIntercomHidden(false));
-        document.addEventListener('visibilitychange', () => this.reschedulePoll());
+        document.addEventListener('visibilitychange', () => {
+            this.reschedulePoll();
+            this.seen.check();
+        });
     }
 
     /* Public API (window.UnifiedAssistant) */
@@ -1003,6 +1014,7 @@ class AssistantWidget {
         }
 
         this.reschedulePoll();
+        this.seen.check();
 
         if (!open && this.booted) {
             this.offerRating();
@@ -1030,6 +1042,7 @@ class AssistantWidget {
     }
 
     private renderMessages(): void {
+        this.seen.forget();
         this.list.replaceChildren();
 
         if (this.messages.length === 0) {
@@ -1069,6 +1082,7 @@ class AssistantWidget {
         this.busyPoller.stop();
         this.failedRow = null;
         this.support = bootstrap.support ?? null;
+        this.seen.reset(this.support?.seen?.message_id);
         this.assignee = null;
         this.hideTyping();
         this.reach = bootstrap.reach ?? null;
@@ -1102,6 +1116,7 @@ class AssistantWidget {
 
         this.panelOpen = open;
         this.panel.hidden = !open;
+        this.seen.check();
         this.historyButton.setAttribute('aria-expanded', open ? 'true' : 'false');
         this.list.setAttribute('aria-hidden', open ? 'true' : 'false');
 
@@ -1399,6 +1414,8 @@ class AssistantWidget {
         if (time) {
             turn.append(h('div', { class: 'time' }, time));
         }
+
+        this.seen.watch(turn);
 
         return turn;
     }
@@ -2003,6 +2020,24 @@ class AssistantWidget {
         known.id = message.id;
         known.live = false;
         row?.setAttribute('data-id', String(message.id));
+        this.seen.check();
+    }
+
+    /* Read receipts */
+
+    /** The thread is in front of the person: drawer open, page showing, the Conversations menu not over it. */
+    private threadVisible(): boolean {
+        return this.open && this.panelOpen === false && document.visibilityState !== 'hidden';
+    }
+
+    private sendSeen(messageId: number): Promise<unknown> {
+        const conversationId = this.conversation?.id ?? null;
+
+        if (conversationId === null || !this.api.canSendSeen()) {
+            return Promise.resolve();
+        }
+
+        return this.api.seen(conversationId, messageId);
     }
 
     private badgeFor(message: Message): void {

@@ -37,6 +37,7 @@ if (config('sso.assistant.enabled', true)) {
                 Route::post('messages', [AssistantProxyController::class, 'message'])->name('sso.assistant.messages');
                 Route::post('escalate', [AssistantProxyController::class, 'escalate'])->name('sso.assistant.escalate');
                 Route::get('updates', [AssistantProxyController::class, 'updates'])->name('sso.assistant.updates');
+                Route::post('seen', [AssistantProxyController::class, 'seen'])->middleware('throttle:60,1')->name('sso.assistant.seen');
                 Route::post('uploads', [AssistantProxyController::class, 'upload'])->name('sso.assistant.uploads');
                 Route::get('uploads/{upload}', [AssistantProxyController::class, 'uploadStatus'])->whereNumber('upload')->name('sso.assistant.uploads.show');
                 Route::post('actions/{action}/undo', [AssistantProxyController::class, 'undo'])->whereNumber('action')->name('sso.assistant.undo');

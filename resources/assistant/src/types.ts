@@ -129,6 +129,15 @@ export interface Handoff {
     question: string;
 }
 
+/**
+ * A page a tool offered to open with the reply ("Open in Analytics"), shown
+ * as a link chip under the message. Absent from an older SSO.
+ */
+export interface MessageLink {
+    label: string;
+    url: string;
+}
+
 export interface Message {
     id: number | string;
     role: 'user' | 'assistant' | 'staff' | 'system';
@@ -145,6 +154,7 @@ export interface Message {
     actions?: Action[] | null;
     review?: ReviewPlan | null;
     handoff?: Handoff | null;
+    links?: MessageLink[] | null;
     tone?: 'error' | 'info' | null;
 }
 
@@ -155,6 +165,7 @@ export interface TurnResponse {
     actions?: Action[] | null;
     review?: ReviewPlan | null;
     handoff?: Handoff | null;
+    links?: MessageLink[] | null;
     error?: string | null;
     notice?: string | null;
     message_id?: number | string | null;

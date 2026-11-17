@@ -65,38 +65,155 @@ export const icons = {
     alert: 'M12 8v5M12 16v.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z',
     clock: 'M12 7v5l3 2M21 12a9 9 0 11-18 0 9 9 0 0118 0z',
     plus: 'M12 5v14M5 12h14',
+    external: 'M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5',
 };
 
-/** Plain text with line breaks kept; no markup is ever interpreted. */
+/** How text is turned into nodes: always text nodes and elements, never innerHTML. */
+export interface TextOptions {
+    /** Turn web addresses and [label](https://...) into links that open in a new tab. */
+    links?: boolean;
+}
+
+const URL_TAIL = /[.,;:!?'"\u2019\u201D]+$/;
+
+/** Only http(s) addresses become links; anything else stays text. */
+function safeUrl(raw: string): URL | null {
+    try {
+        const url = new URL(raw);
+
+        return url.protocol === 'https:' || url.protocol === 'http:' ? url : null;
+    } catch {
+        return null;
+    }
+}
+
 /**
- * The model is asked for plain text, but **bold** still slips through; render
- * it rather than show the asterisks. Text nodes only, never innerHTML.
+ * A web address as a person reads it: the host and path, no scheme, no query,
+ * a long path cut short ("unifiedreporting.unified-apps.com/dashboard").
  */
-function inline(line: string): Node[] {
+export function shortUrl(url: URL): string {
+    const path = url.pathname.replace(/\/+$/, '');
+    const shown = path.length > 32 ? `${path.slice(0, 31)}\u2026` : path;
+
+    return `${url.hostname.replace(/^www\./, '')}${shown}`;
+}
+
+export function link(url: URL, label: string, className?: string): HTMLAnchorElement {
+    const a = document.createElement('a');
+    a.href = url.href;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.textContent = label;
+
+    if (className) {
+        a.className = className;
+    }
+
+    return a;
+}
+
+/**
+ * A bare address keeps the sentence's closing punctuation (and an unmatched
+ * closing parenthesis) outside the link.
+ */
+function bareUrl(raw: string): { url: URL; rest: string } | null {
+    let candidate = raw;
+    let rest = '';
+    const tail = candidate.match(URL_TAIL);
+
+    if (tail) {
+        rest = tail[0];
+        candidate = candidate.slice(0, -rest.length);
+    }
+
+    while (candidate.endsWith(')') && (candidate.match(/\(/g) ?? []).length < (candidate.match(/\)/g) ?? []).length) {
+        candidate = candidate.slice(0, -1);
+        rest = `)${rest}`;
+    }
+
+    const url = safeUrl(candidate);
+
+    return url ? { url, rest } : null;
+}
+
+/** Links inside one run of text: [label](https://...) and bare https:// addresses. */
+function linked(text: string): Node[] {
     const nodes: Node[] = [];
-    const bold = /\*\*([^*\n]+?)\*\*/g;
+    const pattern = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|https?:\/\/[^\s<>]+/gi;
     let last = 0;
     let match: RegExpExecArray | null;
 
-    while ((match = bold.exec(line)) !== null) {
-        if (match.index > last) {
-            nodes.push(document.createTextNode(line.slice(last, match.index)));
+    while ((match = pattern.exec(text)) !== null) {
+        const before = text.slice(last, match.index);
+        let node: Node | null = null;
+        let rest = '';
+
+        if (match[1] !== undefined) {
+            const url = safeUrl(match[2]);
+            node = url ? link(url, match[1].trim() || shortUrl(url)) : null;
+        } else {
+            const found = bareUrl(match[0]);
+
+            if (found) {
+                node = link(found.url, shortUrl(found.url));
+                rest = found.rest;
+            }
         }
 
-        const strong = document.createElement('strong');
-        strong.textContent = match[1];
-        nodes.push(strong);
+        if (!node) {
+            continue;
+        }
+
+        if (before) {
+            nodes.push(document.createTextNode(before));
+        }
+
+        nodes.push(node);
+
+        if (rest) {
+            nodes.push(document.createTextNode(rest));
+        }
+
         last = match.index + match[0].length;
     }
 
-    if (last < line.length) {
-        nodes.push(document.createTextNode(line.slice(last)));
+    if (last < text.length) {
+        nodes.push(document.createTextNode(text.slice(last)));
     }
 
     return nodes;
 }
 
-export function paragraphs(text: string): DocumentFragment {
+/**
+ * The model is asked for plain text, but **bold** still slips through; render
+ * it rather than show the asterisks. Text nodes only, never innerHTML.
+ */
+function inline(line: string, options: TextOptions): Node[] {
+    const nodes: Node[] = [];
+    const bold = /\*\*([^*\n]+?)\*\*/g;
+    const text = (part: string): Node[] => (options.links ? linked(part) : [document.createTextNode(part)]);
+    let last = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = bold.exec(line)) !== null) {
+        if (match.index > last) {
+            nodes.push(...text(line.slice(last, match.index)));
+        }
+
+        const strong = document.createElement('strong');
+        strong.append(...text(match[1]));
+        nodes.push(strong);
+        last = match.index + match[0].length;
+    }
+
+    if (last < line.length) {
+        nodes.push(...text(line.slice(last)));
+    }
+
+    return nodes;
+}
+
+export function paragraphs(text: string, options: TextOptions = {}): DocumentFragment {
     const fragment = document.createDocumentFragment();
     const blocks = text.replace(/\r\n/g, '\n').split(/\n{2,}/);
 
@@ -109,7 +226,7 @@ export function paragraphs(text: string): DocumentFragment {
                 p.append(document.createElement('br'));
             }
 
-            p.append(...inline(line));
+            p.append(...inline(line, options));
         });
 
         fragment.append(p);

@@ -6,7 +6,7 @@ import { askHelp, hasIntercom, setIntercomHidden } from './intercom';
 import { BusyPoller, DRAFT_NAME_PREFIX, type FailedTurnHandlers, SlowTurnTimer, clearDraftIfSent, draftName, failedTurnError, isBusy, readDraft, renderFailedTurn, saveDraft, showRetryButtons } from './retry';
 import { styles } from './styles';
 import { UPLOAD_COPY, stillReading, waitUntilRead } from './upload';
-import type { Action, BootstrapResponse, Conversation, ConversationSummary, Handoff, Intro, Message, MessageAttachment, PlanChange, ReviewPlan, ReviewResponse, Suggestion, Support, Tour, TourStep, TurnResponse, WidgetSettings } from './types';
+import type { Action, BootstrapResponse, Conversation, ConversationSummary, Handoff, Intro, Message, MessageAttachment, PlanChange, Reach, ReviewPlan, ReviewResponse, Suggestion, Support, Tour, TourStep, TurnResponse, WidgetSettings } from './types';
 
 const COPY = {
     launcher: 'Assistant',
@@ -69,6 +69,19 @@ const COPY = {
     followUpNo: 'No thanks',
     feedbackWillContact: "Thanks. We'll be in touch.",
     feedbackNoted: 'Thanks for letting us know.',
+};
+
+/**
+ * The words that change for someone the Assistant only answers questions for
+ * (`reach: none`, every member of the agency who is not an administrator): it
+ * changes nothing for them, so it never says "tell me what to do".
+ */
+const MEMBER_COPY = {
+    subtitle: 'Ask how something works, or talk to our team.',
+    subtitleNoTeam: 'Ask how something works. For anything else, use Help.',
+    intro: 'Hi. Ask me how something works in your apps, or tell me what is going on and I will pass it to our team.',
+    introNoTeam: 'Hi. Ask me how something works in your apps.',
+    placeholder: 'Ask a question',
 };
 
 /** How long the thank-you after a yes stays before the card goes. */
@@ -256,6 +269,11 @@ class AssistantWidget {
     private sendButton!: HTMLButtonElement;
 
     private attachButton!: HTMLButtonElement;
+
+    private subtitleEl!: HTMLElement;
+
+    /** SSO's AssistantReach for this person; null from an older SSO (the admin drawer). */
+    private reach: Reach | null = null;
 
     private fileInput!: HTMLInputElement;
 
@@ -791,10 +809,12 @@ class AssistantWidget {
             svg(icons.clock),
         );
 
+        this.subtitleEl = h('div', { class: 'subtitle' }, COPY.subtitle);
+
         const header = h(
             'header',
             { class: 'header' },
-            h('div', { class: 'title-wrap' }, h('h2', { id: 'ua-title' }, svg(icons.sparkles, 16), COPY.title), h('div', { class: 'subtitle' }, COPY.subtitle)),
+            h('div', { class: 'title-wrap' }, h('h2', { id: 'ua-title' }, svg(icons.sparkles, 16), COPY.title), this.subtitleEl),
             this.historyButton,
             h('button', { class: 'icon-btn', type: 'button', 'aria-label': COPY.close, onclick: () => this.setOpen(false) }, svg(icons.close)),
         );
@@ -914,7 +934,7 @@ class AssistantWidget {
         this.list.replaceChildren();
 
         if (this.messages.length === 0) {
-            this.list.append(this.renderTurn({ id: 'intro', role: 'assistant', content: COPY.intro }));
+            this.list.append(this.renderTurn({ id: 'intro', role: 'assistant', content: this.copyFor('intro') }));
         }
 
         for (const message of this.messages) {
@@ -936,7 +956,7 @@ class AssistantWidget {
         this.pendingReview = bootstrap.review ?? null;
         this.conversation = bootstrap.conversation ?? null;
         this.conversations = (bootstrap.conversations ?? []).slice();
-        this.suggestions = (bootstrap.suggestions ?? []).filter((s) => s && typeof s.prompt === 'string' && s.prompt.trim() !== '');
+        this.suggestions = (bootstrap.suggestions ?? []).filter((s) => s && (s.kind === 'team' || (typeof s.prompt === 'string' && s.prompt.trim() !== '')));
         this.ideasOpen = false;
         this.waitingRow = null;
         this.tourActive = false;
@@ -945,6 +965,8 @@ class AssistantWidget {
         this.busyPoller.stop();
         this.failedRow = null;
         this.support = bootstrap.support ?? null;
+        this.reach = bootstrap.reach ?? null;
+        this.applyReach();
         this.teamMode = false;
         this.renderTeamMode();
         this.pendingFiles = [];
@@ -1067,7 +1089,9 @@ class AssistantWidget {
 
         const ideas = this.drawer.querySelector<HTMLButtonElement>('.link.ideas');
         const offerTeam = this.canTalkToTeam();
-        const count = this.suggestions.length + (offerTeam ? 1 : 0);
+        const placedTeam = this.suggestions.some((suggestion) => suggestion.kind === 'team');
+        const shown = this.suggestions.filter((suggestion) => suggestion.kind !== 'team' || offerTeam);
+        const count = shown.length + (offerTeam && !placedTeam ? 1 : 0);
         const visible = count > 0 && !this.tourActive && (this.ideasOpen || this.messages.length === 0);
 
         if (ideas) {
@@ -1080,7 +1104,11 @@ class AssistantWidget {
             return;
         }
 
-        const pills = this.suggestions.map((suggestion) => {
+        const pills = shown.map((suggestion) => {
+            if (suggestion.kind === 'team') {
+                return this.teamPill(suggestion.label?.trim() || COPY.talkToTeam);
+            }
+
             const pill = h('button', { class: 'pill', type: 'button' }, suggestion.label?.trim() || suggestion.prompt);
             pill.addEventListener('click', () => {
                 this.ideasOpen = false;
@@ -1090,18 +1118,64 @@ class AssistantWidget {
             return pill;
         });
 
-        // Always the last pill while our team is behind the Assistant and does not have this thread yet.
-        if (offerTeam) {
-            const pill = h('button', { class: 'pill team', type: 'button' }, COPY.talkToTeam);
-            pill.addEventListener('click', () => {
-                this.ideasOpen = false;
-                this.startTeamMessage();
-            });
-            pills.push(pill);
+        // Always offered while our team is behind the Assistant and does not have this thread yet: where SSO placed it, else last.
+        if (offerTeam && !placedTeam) {
+            pills.push(this.teamPill(COPY.talkToTeam));
         }
 
         this.suggestionsEl = h('div', { class: 'suggestions' }, h('div', { class: 'suggestions-title' }, COPY.thingsICanDo), h('div', { class: 'pills' }, ...pills));
         this.list.append(this.suggestionsEl);
+    }
+
+    private teamPill(label: string): HTMLElement {
+        const pill = h('button', { class: 'pill team', type: 'button' }, label);
+        pill.addEventListener('click', () => {
+            this.ideasOpen = false;
+            this.startTeamMessage();
+        });
+
+        return pill;
+    }
+
+    /* Reach */
+
+    /** The person only asks questions here (SSO's `reach: none`). */
+    private memberOnly(): boolean {
+        return this.reach === 'none';
+    }
+
+    private copyFor(key: 'subtitle' | 'intro' | 'placeholder'): string {
+        if (!this.memberOnly()) {
+            return COPY[key];
+        }
+
+        if (key === 'placeholder') {
+            return MEMBER_COPY.placeholder;
+        }
+
+        const team = this.support?.enabled === true;
+
+        return key === 'subtitle' ? (team ? MEMBER_COPY.subtitle : MEMBER_COPY.subtitleNoTeam) : team ? MEMBER_COPY.intro : MEMBER_COPY.introNoTeam;
+    }
+
+    /** Header, composer and the file button follow the person's reach. */
+    private applyReach(): void {
+        this.subtitleEl.textContent = this.copyFor('subtitle');
+        this.input.placeholder = this.copyFor('placeholder');
+        this.input.setAttribute('aria-label', this.copyFor('placeholder'));
+        this.syncAttach();
+    }
+
+    /**
+     * Files are a list to set up for an agency administrator (any thread), and
+     * something to show our team for everyone else: the button shows for them
+     * only once our team has the conversation.
+     */
+    private syncAttach(): void {
+        const admin = this.reach === null || this.reach === 'full';
+        const withTeam = this.support?.enabled === true && this.support.status === 'needs_teammate';
+
+        this.attachButton.hidden = !(admin || withTeam);
     }
 
     private renderTurn(message: Message): HTMLElement {
@@ -1868,6 +1942,7 @@ class AssistantWidget {
         }
 
         this.renderTeamEntry();
+        this.syncAttach();
         this.renderSuggestions();
     }
 

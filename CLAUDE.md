@@ -490,6 +490,33 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      a reopened thread or new conversation shows none; any failure removes the card silently, the question
      must never block the work. An older SSO (no `feedback` in bootstrap) or an older component (no
      settings) never shows it. SSO keeps the score and the review list at `/admin/assistant-feedback`.
+     **Rating at the end of a conversation (2026-11-17, Jay: "thumbs up / down, and on a thumbs down offer a
+     call"; final shape from Jay and James: 1 to 5 faces; contract `RATING-CALLBACK-CONTRACT.md`).** One rating
+     per conversation, given at its end, for threads the Assistant handled and threads our team handled; a later
+     rating overwrites. Bootstrap (and clear, escalate, callback, updates) carry `rating: {enabled, score, note,
+     rated_at, phone}` (`phone` = the person's number on file, formatted, to prefill the call form). `rating.ts`
+     renders the closing card (`.card.rating-card`, a light inline card at the bottom of the thread, never a
+     modal): "Thanks for talking with us. If you can, rate this conversation from 1 to 5 and leave a note.", five
+     emoji faces as a radio group (arrow keys move and pick, `aria-label` "1 of 5, very poor" … "5 of 5, great"),
+     an optional note, **Send** and **Skip**. 4 or 5 → "Thanks, glad it helped." for 3 s, then "You rated this n
+     of 5."; 3 or less → "Sorry about that. Want someone from our team to call you?" **Yes, call me** / **No
+     thanks** (only with `support.enabled` and the `callback` route; otherwise "Thanks for telling us. Our team
+     will read this conversation."). The call form: Phone number (prefilled, checked as a US number in the widget
+     and again by SSO, whose 422 field error is shown under the field), Best time chips Now / This morning / This
+     afternoon / Tomorrow morning, **Request a call** / **Cancel**. `POST {callback} {conversation_id, phone,
+     best_time, note}` answers the bootstrap shape (now `needs_teammate`, with "Call requested: (814) 555-0100,
+     this afternoon") plus `callback.message`, shown as a local line "Our team will call you at … Replies also
+     show up here.". **When:** eligible = route + `rating.enabled` + unrated + an assistant or staff reply with a
+     numeric id + not `needs_teammate` + not skipped for that thread in this tab (`rating-skipped:<id>`). Shown
+     when the status turns `resolved` (after "Our team marked this resolved."), on a bootstrap of a resolved
+     thread, on reopening an earlier thread, 2 minutes after a reply with no typing (Assistant-only; while the
+     drawer is closed it waits for the next open), when the drawer is closed, and when New conversation is
+     pressed (the card shows first; Skip, No thanks or a 4-5 then starts the new thread, a second press goes
+     straight on). A new message drops an unanswered card; a handover drops it. Routes: proxy `POST
+     /assistant/rating {conversation_id, score 1..5, note?}` and `POST /assistant/callback {conversation_id, phone,
+     best_time, note?}` (component settings `rating`, `callback`); an older component sends neither and never
+     shows the card. Tests: `resources/assistant/tests/widget-rating.test.ts`,
+     `widget-rating-older-component.test.ts`, `AssistantProxyTest`.
      **Review rows that need a choice** (2026-11-14): a row with `choice: {candidates: [{code, label, detail}]}`
      (a medication name that matched several codes, or none) renders the candidates as a radio group
      (`choice.ts`; arrow keys move focus, Enter / Space / click picks, because each pick is sent at once) plus

@@ -5,10 +5,11 @@ import { dayLabel, fileSize, h, icons, link, paragraphs, shortUrl, svg, timeLabe
 import { askHelp, hasIntercom, setIntercomHidden } from './intercom';
 import { BusyPoller, DRAFT_NAME_PREFIX, type FailedTurnHandlers, SlowTurnTimer, clearDraftIfSent, draftName, failedTurnError, isBusy, readDraft, renderFailedTurn, saveDraft, showRetryButtons } from './retry';
 import { type LiveConversation, type LiveMessage, type LiveTyping, SupportSocket, liveToMessage } from './realtime';
+import { RatingCard } from './rating';
 import { MessageSound } from './sound';
 import { styles } from './styles';
 import { UPLOAD_COPY, stillReading, waitUntilRead } from './upload';
-import type { Action, BootstrapResponse, Conversation, ConversationSummary, Handoff, Intro, Message, MessageAttachment, MessageLink, PlanChange, Reach, ReviewPlan, ReviewResponse, Suggestion, Support, Tour, TourStep, TurnResponse, WidgetSettings } from './types';
+import type { Action, BootstrapResponse, CallbackResponse, Conversation, ConversationSummary, Handoff, Intro, Message, MessageAttachment, MessageLink, PlanChange, Rating, Reach, ReviewPlan, ReviewResponse, Suggestion, Support, Tour, TourStep, TurnResponse, WidgetSettings } from './types';
 
 const COPY = {
     launcher: 'Assistant',
@@ -91,6 +92,18 @@ const MEMBER_COPY = {
     introNoTeam: 'Hi. Ask me how something works in your apps.',
     placeholder: 'Ask a question',
 };
+
+/**
+ * An Assistant-only conversation is offered the rating card once the person
+ * has done nothing for this long after a reply.
+ */
+const RATING_IDLE_MS = 2 * 60 * 1000;
+
+/** After a 4 or 5 sent from New conversation, the thanks shows this long before the new thread. */
+const RATING_THEN_NEW_MS = 1500;
+
+/** Skip hides the rating card for that thread in this tab (`rating-skipped:<conversation id>`). */
+const RATING_SKIPPED_PREFIX = 'rating-skipped:';
 
 /** How long the thank-you after a yes stays before the card goes. */
 const FEEDBACK_THANKS_MS = 4000;
@@ -396,6 +409,20 @@ class AssistantWidget {
 
     /** The one feedback card showing; a new task or a new message replaces it. */
     private feedbackCard: HTMLElement | null = null;
+
+    /** The end-of-conversation rating from SSO. Null: an older SSO, never asked. */
+    private rating: Rating | null = null;
+
+    /** The closing card showing at the bottom of the thread, if any. */
+    private ratingCard: RatingCard | null = null;
+
+    private ratingIdleTimer: number | null = null;
+
+    /** The idle time passed while the drawer was closed: show the card when it opens. */
+    private ratingDue = false;
+
+    /** What to do once the card is answered or skipped (New conversation pressed before rating). */
+    private afterRating: (() => void) | null = null;
 
     /** Our team behind the Assistant, from SSO. Null: an older SSO (no team, files sent at once). */
     private support: Support | null = null;
@@ -842,6 +869,7 @@ class AssistantWidget {
             'aria-label': COPY.placeholder,
             onkeydown: (event: Event) => this.onComposerKey(event as KeyboardEvent),
             oninput: () => {
+                this.stopRatingIdle();
                 this.autosize();
                 saveDraft(this.draftKey(), this.input.value);
 
@@ -976,6 +1004,12 @@ class AssistantWidget {
 
         this.reschedulePoll();
 
+        if (!open && this.booted) {
+            this.offerRating();
+        } else if (open && this.ratingDue) {
+            this.offerRating();
+        }
+
         if (persist) {
             try {
                 sessionStorage.setItem(this.storageKey(OPEN_NAME), open ? '1' : '0');
@@ -1027,6 +1061,11 @@ class AssistantWidget {
         this.tourActive = false;
         this.tourPillsEl = null;
         this.feedbackCard = null;
+        this.rating = bootstrap.rating ?? null;
+        this.ratingCard = null;
+        this.ratingDue = false;
+        this.afterRating = null;
+        this.stopRatingIdle();
         this.busyPoller.stop();
         this.failedRow = null;
         this.support = bootstrap.support ?? null;
@@ -1050,6 +1089,10 @@ class AssistantWidget {
         }
 
         this.syncPolling();
+
+        if (this.support?.status === 'resolved') {
+            this.offerRating();
+        }
     }
 
     private setPanelOpen(open: boolean): void {
@@ -1122,8 +1165,14 @@ class AssistantWidget {
         }
     }
 
-    private async newConversation(): Promise<void> {
+    private async newConversation(rated = false): Promise<void> {
         if (this.busy) {
+            return;
+        }
+
+        if (!rated && this.offerRating(() => void this.newConversation(true))) {
+            this.setPanelOpen(false);
+
             return;
         }
 
@@ -1162,6 +1211,7 @@ class AssistantWidget {
             this.reopenedBar.replaceChildren(svg(icons.clock, 14), `${COPY.reopened}: ${bootstrap.conversation?.title?.trim() || thread.title?.trim() || COPY.untitled}`);
             this.reopenedBar.hidden = false;
             this.setPanelOpen(false);
+            this.offerRating();
         } catch (error) {
             this.setBusy(false);
             this.appendNotice(this.errorText(error));
@@ -1676,6 +1726,7 @@ class AssistantWidget {
         }
 
         this.dropFeedbackCard();
+        this.dropRatingCard();
         this.dropFailedTurn();
         const userId = `u-${Date.now()}`;
         const draftKey = this.draftKey();
@@ -1827,6 +1878,8 @@ class AssistantWidget {
         if ((turn.turn_state ?? 'complete') === 'complete' && (actions.length > 0 || applied)) {
             this.offerFeedback(typeof turn.message_id === 'number' ? turn.message_id : null);
         }
+
+        this.armRatingIdle();
 
         // Handed to our team by this turn: fetch the "Handed to our team" line now.
         this.syncPolling(!wasWaiting && this.support?.status === 'needs_teammate');
@@ -2111,6 +2164,7 @@ class AssistantWidget {
      */
     private async sendToTeam(text: string, files: Array<{ id: number; name: string; size: number }>): Promise<void> {
         this.dropFeedbackCard();
+        this.dropRatingCard();
         this.dropFailedTurn();
         const userId = `u-${Date.now()}`;
         const draftKey = this.draftKey();
@@ -2180,6 +2234,12 @@ class AssistantWidget {
 
     /** The menu item, the pill and the chip follow who has the conversation. */
     private supportChanged(): void {
+        if (this.support?.status === 'resolved') {
+            this.offerRating();
+        } else if (this.support?.status === 'needs_teammate') {
+            this.dropRatingCard();
+        }
+
         if (this.teamMode && !this.canTalkToTeam()) {
             this.teamMode = false;
             this.renderTeamMode();
@@ -2206,6 +2266,144 @@ class AssistantWidget {
             }),
         );
         this.pendingEl.hidden = this.pendingFiles.length === 0;
+    }
+
+    /* The rating at the end of a conversation */
+
+    /**
+     * Whether the closing card may be shown: SSO and this app's component
+     * both know the rating, the thread is unrated, someone (the Assistant or
+     * our team) has answered in it, and our team does not have it open.
+     */
+    private ratingEligible(): boolean {
+        const id = this.conversation?.id;
+
+        if (!this.rating?.enabled || this.rating.score !== null || !this.api.canRate() || id === undefined || id === null) {
+            return false;
+        }
+
+        if (this.support?.status === 'needs_teammate' || this.ratingSkipped()) {
+            return false;
+        }
+
+        return this.messages.some((message) => (message.role === 'assistant' || message.role === 'staff') && typeof message.id === 'number' && (message.content ?? '').trim() !== '');
+    }
+
+    /**
+     * Shows the card at the bottom of the thread. `then` runs once it is
+     * answered or skipped (New conversation waits for it). False when no card
+     * was shown: not eligible, or one is already there.
+     */
+    private offerRating(then: (() => void) | null = null): boolean {
+        if (this.ratingCard !== null || !this.ratingEligible() || this.conversation === null) {
+            return false;
+        }
+
+        const conversationId = this.conversation.id;
+        this.stopRatingIdle();
+        this.ratingDue = false;
+        this.afterRating = then;
+        this.dropFeedbackCard();
+
+        const card = new RatingCard({
+            rating: this.rating as Rating,
+            callOffered: this.support?.enabled === true && this.api.canRequestCall(),
+            rate: (score, note) => this.api.rate(conversationId, score, note),
+            requestCall: (phone, bestTime, note) => this.api.requestCall(conversationId, phone, bestTime, note),
+            finished: (outcome, rating) => this.ratingFinished(card, outcome, rating),
+            called: (answer) => this.callRequested(answer),
+            changed: () => this.scrollToEnd(),
+        });
+        this.ratingCard = card;
+        this.list.append(card.element);
+        this.scrollToEnd();
+
+        return true;
+    }
+
+    private ratingFinished(card: RatingCard, outcome: 'skipped' | 'rated' | 'declined', rating: Rating | null): void {
+        if (rating) {
+            this.rating = rating;
+        }
+
+        if (outcome === 'skipped' && this.ratingCard === card) {
+            this.markRatingSkipped();
+            this.ratingCard = null;
+        }
+
+        const then = this.afterRating;
+        this.afterRating = null;
+
+        if (then) {
+            window.setTimeout(then, outcome === 'rated' ? RATING_THEN_NEW_MS : 0);
+        }
+    }
+
+    /** "Request a call" went through: the thread is our team's now and says so. */
+    private callRequested(answer: CallbackResponse): void {
+        this.afterRating = null;
+        this.applyBootstrap(answer);
+
+        if (answer.callback?.message) {
+            this.push({ id: `callback-${Date.now()}`, role: 'assistant', content: answer.callback.message });
+        }
+    }
+
+    /** An unanswered card goes when the conversation carries on. */
+    private dropRatingCard(): void {
+        if (this.ratingCard && !this.ratingCard.isSettled()) {
+            this.ratingCard.element.remove();
+            this.ratingCard = null;
+            this.afterRating = null;
+        }
+    }
+
+    /** Assistant-only: two quiet minutes after a reply bring the card. */
+    private armRatingIdle(): void {
+        this.stopRatingIdle();
+
+        if (this.support?.status === 'needs_teammate' || this.support?.status === 'resolved' || !this.ratingEligible()) {
+            return;
+        }
+
+        this.ratingIdleTimer = window.setTimeout(() => {
+            this.ratingIdleTimer = null;
+
+            if (this.busy) {
+                return;
+            }
+
+            if (this.open) {
+                this.offerRating();
+            } else {
+                this.ratingDue = true;
+            }
+        }, RATING_IDLE_MS);
+    }
+
+    private stopRatingIdle(): void {
+        if (this.ratingIdleTimer !== null) {
+            window.clearTimeout(this.ratingIdleTimer);
+            this.ratingIdleTimer = null;
+        }
+    }
+
+    private ratingSkipped(): boolean {
+        try {
+            return this.conversation !== null && sessionStorage.getItem(this.storageKey(`${RATING_SKIPPED_PREFIX}${String(this.conversation.id)}`)) === '1';
+        } catch {
+            return false;
+        }
+    }
+
+    private markRatingSkipped(): void {
+        try {
+            if (this.conversation !== null) {
+                sessionStorage.setItem(this.storageKey(`${RATING_SKIPPED_PREFIX}${String(this.conversation.id)}`), '1');
+            }
+        } catch {
+            /* private mode: the card may come back on the next trigger */
+        }
     }
 
     /* "Did I handle that correctly?" */

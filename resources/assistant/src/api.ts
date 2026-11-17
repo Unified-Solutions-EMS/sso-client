@@ -1,6 +1,9 @@
 import type {
+    BestTime,
     BootstrapResponse,
+    CallbackResponse,
     FeedbackResponse,
+    RatingResponse,
     ReviewResponse,
     TurnResponse,
     UndoResponse,
@@ -20,6 +23,8 @@ export class ApiError extends Error {
     constructor(
         public status: number,
         message: string,
+        /** Field errors from a 422, keyed by field. */
+        public errors: Record<string, string[]> = {},
     ) {
         super(message);
     }
@@ -182,6 +187,38 @@ export class AssistantApi {
         return (await this.json('POST', this.settings.feedback_follow_up.replace('{feedback}', String(feedbackId)), { follow_up: wantsFollowUp })) as FeedbackResponse;
     }
 
+    /** Whether this app's component sends the rating route (an older sso-client does not). */
+    canRate(): boolean {
+        return Boolean(this.settings.rating);
+    }
+
+    /** Whether "Yes, call me" can be sent from this app. */
+    canRequestCall(): boolean {
+        return Boolean(this.settings.callback);
+    }
+
+    /** The 1 to 5 rating at the end of a conversation, with an optional note. */
+    async rate(conversationId: number | string, score: number, note: string | null): Promise<RatingResponse> {
+        const body: Record<string, unknown> = { conversation_id: conversationId, score };
+
+        if (note !== null && note.trim() !== '') {
+            body.note = note.trim();
+        }
+
+        return (await this.json('POST', this.settings.rating ?? '', body)) as RatingResponse;
+    }
+
+    /** "Request a call": our team gets the conversation with the number and the best time. */
+    async requestCall(conversationId: number | string, phone: string, bestTime: BestTime, note: string | null): Promise<CallbackResponse> {
+        const body: Record<string, unknown> = { conversation_id: conversationId, phone, best_time: bestTime };
+
+        if (note !== null && note.trim() !== '') {
+            body.note = note.trim();
+        }
+
+        return (await this.json('POST', this.settings.callback ?? '', body)) as CallbackResponse;
+    }
+
     /** Ends the current thread; the answer is the bootstrap shape with a new empty one. */
     async clear(): Promise<BootstrapResponse> {
         return (await this.json('DELETE', this.settings.conversation, {})) as BootstrapResponse;
@@ -238,7 +275,17 @@ export class AssistantApi {
                       ? UNREACHABLE
                       : 'That did not go through. Try again.');
 
-            throw new ApiError(response.status, message);
+            const errors: Record<string, string[]> = {};
+
+            if (record.errors && typeof record.errors === 'object') {
+                for (const [field, list] of Object.entries(record.errors as Record<string, unknown>)) {
+                    if (Array.isArray(list)) {
+                        errors[field] = list.filter((item): item is string => typeof item === 'string');
+                    }
+                }
+            }
+
+            throw new ApiError(response.status, message, errors);
         }
 
         return data ?? {};

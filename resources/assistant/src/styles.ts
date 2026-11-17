@@ -170,6 +170,7 @@ p + p { margin-top: 0.5em; }
   color: rgb(var(--ua-text-secondary));
   transition: background-color var(--ua-fast) var(--ua-ease), color var(--ua-fast) var(--ua-ease);
 }
+.icon-btn[hidden] { display: none; }
 .icon-btn:hover { background: rgb(var(--ua-bg-muted)); color: rgb(var(--ua-text)); }
 .icon-btn[aria-expanded="true"] { background: rgb(var(--ua-bg-muted)); color: rgb(var(--ua-text)); }
 

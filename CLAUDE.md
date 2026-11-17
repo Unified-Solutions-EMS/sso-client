@@ -358,7 +358,7 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      (md5 of the committed dist in local mode; the cached SSO bundle's ETag in SSO mode, else the dist hash
      until the first widget request warms the cache), so a changed bundle is a new URL and browsers refetch. The widget boots from
      `GET /assistant/bootstrap`: a **204** (no `sso_id`, no selected company) or `{enabled: false}` (SSO
-     says not an admin here) leaves the page untouched. `window.UnifiedAssistant = {open, close, ask(text),
+     says this person is not a member of the agency, or the Assistant is off) leaves the page untouched. `window.UnifiedAssistant = {open, close, ask(text),
      setSetupApp(slug)}` for an "Ask the assistant" button. While open it hides the Intercom launcher
      (`Intercom('update', {hide_default_launcher: true})`) and restores it on close / `pagehide`.
      **Launcher layout + page padding:** the closed-state launcher is a round 44px icon-only button
@@ -561,6 +561,19 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      package, so the component sends `escalate_message: true`; without it (an app not yet on this version) the
      widget escalates with `question` only and then sends the text as an ordinary turn, which SSO keeps for our
      team, so nothing typed is lost. Tests: `widget-team.test.ts`, `widget-team-older-component.test.ts`.
+     **Every member of the agency (2026-11-16, James: "we want to replace Intercom").** SSO now answers
+     `enabled: true` for any signed-in member of the company, not only administrators, and the bootstrap
+     carries `reach: full | apps | none` (SSO's `AssistantReach`; absent from an older SSO = `full`). For
+     `reach: none` (no admin role anywhere: crews, dispatchers, billers) SSO only answers how-do-I questions
+     and passes everything else to our team, and the widget follows it: subtitle "Ask how something works, or
+     talk to our team." ("Ask how something works. For anything else, use Help." when `support.enabled` is
+     off), an intro bubble that never says "tell me what to do", placeholder "Ask a question", and the file
+     button (`.composer` paperclip) hidden until the thread is `needs_teammate` (files are then for our team;
+     the same rule hides it for `reach: apps`, whose uploads SSO refuses). A suggestion with `kind: 'team'`
+     (SSO sends "Talk to our team" with an empty prompt as the third member pill) renders as the team pill in
+     its place and the widget does not append a second one; an older widget drops it for the empty prompt and
+     appends its own, so either way there is one. The first-run callout text is SSO's (`intro.title` "Need a
+     hand? Ask here." for members); the widget has no per-reach callout copy. Tests: `widget-reach.test.ts`.
   2. **The same-origin proxy** `/assistant/{bootstrap, messages, escalate, updates, uploads, uploads/{id}, actions/{id}/undo,
      review/{plan}/{approve|remove|choose|set-aside}, intro/dismiss, feedback, feedback/{id}/follow-up, DELETE conversation}` under `sso.assistant.middleware`
      (`['web','auth']`), registered only when `assistant.enabled && assistant.proxy`. It forwards to

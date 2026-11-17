@@ -161,7 +161,21 @@ export interface ConversationSummary {
 export interface Suggestion {
     label: string;
     prompt: string;
+    /**
+     * `team`: the Talk to our team pill, placed where SSO put it (its prompt is
+     * empty, so an older widget drops it and adds its own at the end).
+     */
+    kind?: 'team' | null;
 }
+
+/**
+ * How far the Assistant goes for the signed-in person (SSO's AssistantReach):
+ * `full` for an agency administrator or staff, `apps` for an administrator
+ * inside some apps only, `none` for every other member of the agency (how-do-I
+ * questions and Talk to our team, nothing changed for them). Absent from an
+ * older SSO: treated as `full`, the drawer as before.
+ */
+export type Reach = 'full' | 'apps' | 'none';
 
 /**
  * First-run callout above the launcher. SSO sends show=true on every login
@@ -223,6 +237,7 @@ export interface BootstrapResponse {
      */
     feedback?: { ask: boolean } | null;
     support?: Support | null;
+    reach?: Reach | null;
 }
 
 export interface UndoResponse {

@@ -71,12 +71,24 @@ export class AssistantApi {
         return (await this.json('POST', this.settings.messages, body)) as TurnResponse;
     }
 
-    /** "Talk to our team". The answer is the bootstrap shape with the "Handed to our team" line. */
-    async escalate(conversationId: number | string | null, question: string): Promise<BootstrapResponse> {
+    /**
+     * "Talk to our team". The answer is the bootstrap shape with the "Handed to
+     * our team" line. With `message` SSO first stores it as the administrator's
+     * message, with its files, and answers with "Our team has your message".
+     */
+    async escalate(conversationId: number | string | null, question: string, message: string | null = null, attachments: number[] = []): Promise<BootstrapResponse> {
         const body: Record<string, unknown> = { question };
 
         if (conversationId !== null) {
             body.conversation_id = conversationId;
+        }
+
+        if (message !== null) {
+            body.message = message;
+        }
+
+        if (attachments.length > 0) {
+            body.attachments = attachments;
         }
 
         return (await this.json('POST', this.sibling('escalate', this.settings.escalate), body)) as BootstrapResponse;
@@ -135,6 +147,11 @@ export class AssistantApi {
     /** Picks the code for a row that needs a choice; a null code leaves the row out. */
     async choose(planId: string, planHash: string, index: number, code: string | null): Promise<ReviewResponse> {
         return this.review(planId, 'choose', chooseBody(planHash, index, code));
+    }
+
+    /** Whether escalate carries the administrator's message in the same call (a newer component). */
+    escalatesWithMessage(): boolean {
+        return this.settings.escalate_message === true;
     }
 
     /** Whether this app's component sends the feedback routes (an older sso-client does not). */

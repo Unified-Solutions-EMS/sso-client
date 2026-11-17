@@ -55,13 +55,18 @@ class AssistantProxyController extends Controller
     /**
      * "Talk to our team": SSO hands the conversation to a teammate and
      * answers the bootstrap shape. The thread id is a selector SSO checks
-     * against the stamped identity.
+     * against the stamped identity. `message` (with its files) is what the
+     * administrator typed after choosing Talk to our team; SSO stores it as
+     * their message in the same handover.
      */
     public function escalate(Request $request): JsonResponse|Response
     {
         $body = $request->validate([
             'conversation_id' => ['sometimes', 'nullable', 'integer'],
             'question' => ['sometimes', 'nullable', 'string', 'max:2000'],
+            'message' => ['sometimes', 'nullable', 'string', 'max:20000'],
+            'attachments' => ['sometimes', 'nullable', 'array', 'max:10'],
+            'attachments.*' => ['integer'],
         ]);
 
         return $this->forward($request, 'post', '/escalate', $body);

@@ -544,6 +544,23 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      file (file N): name" message. The component and SSO's own settings send `escalate` and `updates`; a
      component without them gets the paths derived from `messages`. Tests:
      `resources/assistant/tests/widget-support.test.ts`, `widget-support-off.test.ts`.
+     **Talk to our team at any time (2026-11-16, James: "chat messages must be able to reach the team").**
+     With `support.enabled` and the thread not already with our team, the Conversations panel carries a
+     **Talk to our team** button under New conversation (`.team-entry .talk-to-team`) and the "Things I can do"
+     pills always end with a **Talk to our team** pill (`.pill.team`, shown even when SSO sends no other
+     suggestions, so Ideas shows too). Choosing either escalates nothing: it appends one local assistant bubble
+     "Tell me what you need and I will pass it to our team." (never persisted) and puts the composer in team
+     mode, a removable "To our team" chip above the input (`.team-mode`). The next message goes to
+     `POST {escalate} {conversation_id, question: text, message: text, attachments: [ids]}` instead of a turn;
+     SSO stores it as the administrator's message, hands over (`asked_for_person`), syncs once and answers the
+     bootstrap shape with "Our team has your message. Replies show up here.", which is applied in place and
+     polling starts as for any handover. A failed send keeps the text, the chip and Try again (which escalates
+     again). While the thread is `needs_teammate` the button is replaced by the line "Our team has this
+     conversation" and the pill is left out; a poll or turn that changes the status updates both. **Older
+     components:** the widget is served by SSO to every app, but the proxy that forwards `message` is this
+     package, so the component sends `escalate_message: true`; without it (an app not yet on this version) the
+     widget escalates with `question` only and then sends the text as an ordinary turn, which SSO keeps for our
+     team, so nothing typed is lost. Tests: `widget-team.test.ts`, `widget-team-older-component.test.ts`.
   2. **The same-origin proxy** `/assistant/{bootstrap, messages, escalate, updates, uploads, uploads/{id}, actions/{id}/undo,
      review/{plan}/{approve|remove|choose|set-aside}, intro/dismiss, feedback, feedback/{id}/follow-up, DELETE conversation}` under `sso.assistant.middleware`
      (`['web','auth']`), registered only when `assistant.enabled && assistant.proxy`. It forwards to
@@ -554,7 +571,8 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      from the request body**; anything the body says about those keys is dropped. Bootstrap forwards the
      optional `conversation` query parameter (integer, 422 otherwise) and a turn passes `conversation_id`
      through; both are thread selectors, not identity. A turn also passes `attachments` (up to 10 integer file
-     ids); `POST escalate` forwards `conversation_id` and `question` (≤2000), `GET updates` forwards
+     ids); `POST escalate` forwards `conversation_id`, `question` (≤2000), `message` (≤20000) and
+     `attachments` (up to 10 file ids), `GET updates` forwards
      `conversation` (required) and `after`, nothing else from the browser. An upload forwards `setup_app` and the page as the
      flat multipart fields `page[url]` / `page[title]` (nested arrays become `page[]` in Laravel's multipart
      encoder), and the widget sends them with every file, so SSO files the upload under the app whose setup
@@ -606,7 +624,9 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     **Help**; never "chat", "bot", "AI", "support". Subtitle "Does tasks for you. For questions about how
     something works, use Help." Handoff "I can't do that one, but Help can take it from here." / **Ask
     Help**, or with our team behind the Assistant "I can't finish this one, but our team can." / **Talk to
-    our team**; a teammate's reply carries a "Unified" tag. Chips "Undo" / "Undone". No em dashes, US English, no developer words, no tenant-isolation
+    our team**; a teammate's reply carries a "Unified" tag. The standing entry: **Talk to our team** (menu item
+    and last pill), "Tell me what you need and I will pass it to our team.", chip "To our team", and "Our team
+    has this conversation". Chips "Undo" / "Undone". No em dashes, US English, no developer words, no tenant-isolation
     narration. Tool `summary` and `failed()` text are rendered UI too.
   - **Tests:** `tests/Feature/Assistant/*` with `tests/Fixtures/FakeAssistantToolProvider.php` (catalog +
     execute auth/membership/hidden/confirm/failed/exception, proxy stamping from the session never the

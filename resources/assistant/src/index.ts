@@ -23,6 +23,9 @@ const COPY = {
     askHelp: 'Ask Help',
     teamHandoff: "I can't finish this one, but our team can.",
     talkToTeam: 'Talk to our team',
+    teamPrompt: 'Tell me what you need and I will pass it to our team.',
+    toOurTeam: 'To our team',
+    teamHasConversation: 'Our team has this conversation',
     teamTag: 'Unified',
     removeFile: 'Remove',
     noHelp: 'Open Help from the menu to send this.',
@@ -349,6 +352,17 @@ class AssistantWidget {
 
     /** The next poll for our team's replies while a teammate has the conversation. */
     private pollTimer: number | null = null;
+
+    /**
+     * "Talk to our team" was chosen: the next message goes to our team
+     * (escalate) instead of to the Assistant, until the chip is removed.
+     */
+    private teamMode = false;
+
+    private teamChipEl!: HTMLDivElement;
+
+    /** The standing "Talk to our team" item in the Conversations menu, or the status line once our team has it. */
+    private teamEntryEl!: HTMLDivElement;
 
     constructor(settings: SettingsWithContext) {
         this.api = new AssistantApi(settings);
@@ -758,6 +772,9 @@ class AssistantWidget {
 
         this.pendingEl = h('div', { class: 'pending-files', hidden: true, 'aria-live': 'polite' });
 
+        this.teamChipEl = h('div', { class: 'team-mode', hidden: true });
+        this.teamEntryEl = h('div', { class: 'team-entry', hidden: true });
+
         this.fileInput = h('input', { type: 'file', class: 'sr', tabindex: '-1', 'aria-hidden': 'true', onchange: () => void this.onFilePicked() });
         this.attachButton = h('button', { class: 'icon-btn', type: 'button', 'aria-label': COPY.attach, title: COPY.attach, onclick: () => this.fileInput.click() }, svg(icons.paperclip));
 
@@ -793,6 +810,7 @@ class AssistantWidget {
                 'div',
                 { class: 'panel-body' },
                 h('button', { class: 'btn secondary new-conversation', type: 'button', onclick: () => void this.newConversation() }, svg(icons.plus, 14), COPY.newConversation),
+                this.teamEntryEl,
                 this.panelList,
             ),
         );
@@ -800,6 +818,7 @@ class AssistantWidget {
         const footer = h(
             'footer',
             { class: 'footer' },
+            this.teamChipEl,
             this.pendingEl,
             h('div', { class: 'composer' }, this.attachButton, this.input, this.sendButton),
             h(
@@ -926,6 +945,8 @@ class AssistantWidget {
         this.busyPoller.stop();
         this.failedRow = null;
         this.support = bootstrap.support ?? null;
+        this.teamMode = false;
+        this.renderTeamMode();
         this.pendingFiles = [];
         this.renderPendingFiles();
         this.input.value = readDraft(this.draftKey());
@@ -933,6 +954,7 @@ class AssistantWidget {
         this.renderMessages();
         this.resumeTour();
         this.renderThreads();
+        this.renderTeamEntry();
 
         if (bootstrap.notice) {
             this.appendNotice(bootstrap.notice);
@@ -1044,10 +1066,12 @@ class AssistantWidget {
         this.suggestionsEl = null;
 
         const ideas = this.drawer.querySelector<HTMLButtonElement>('.link.ideas');
-        const visible = this.suggestions.length > 0 && !this.tourActive && (this.ideasOpen || this.messages.length === 0);
+        const offerTeam = this.canTalkToTeam();
+        const count = this.suggestions.length + (offerTeam ? 1 : 0);
+        const visible = count > 0 && !this.tourActive && (this.ideasOpen || this.messages.length === 0);
 
         if (ideas) {
-            ideas.hidden = this.suggestions.length === 0 || this.tourActive;
+            ideas.hidden = count === 0 || this.tourActive;
             ideas.setAttribute('aria-pressed', this.ideasOpen ? 'true' : 'false');
             ideas.textContent = this.ideasOpen ? COPY.hideIdeas : COPY.ideas;
         }
@@ -1065,6 +1089,16 @@ class AssistantWidget {
 
             return pill;
         });
+
+        // Always the last pill while our team is behind the Assistant and does not have this thread yet.
+        if (offerTeam) {
+            const pill = h('button', { class: 'pill team', type: 'button' }, COPY.talkToTeam);
+            pill.addEventListener('click', () => {
+                this.ideasOpen = false;
+                this.startTeamMessage();
+            });
+            pills.push(pill);
+        }
 
         this.suggestionsEl = h('div', { class: 'suggestions' }, h('div', { class: 'suggestions-title' }, COPY.thingsICanDo), h('div', { class: 'pills' }, ...pills));
         this.list.append(this.suggestionsEl);
@@ -1462,6 +1496,12 @@ class AssistantWidget {
             this.autosize();
         }
 
+        if (this.teamMode && this.canTalkToTeam()) {
+            await this.sendToTeam(text, files);
+
+            return;
+        }
+
         this.dropFeedbackCard();
         this.dropFailedTurn();
         const userId = `u-${Date.now()}`;
@@ -1573,6 +1613,7 @@ class AssistantWidget {
 
         if (turn.support) {
             this.support = turn.support;
+            this.supportChanged();
         }
 
         const message: Message = {
@@ -1687,8 +1728,9 @@ class AssistantWidget {
                 }
             }
 
-            if (updates.status && this.support) {
+            if (updates.status && this.support && updates.status !== this.support.status) {
                 this.support = { ...this.support, status: updates.status };
+                this.supportChanged();
             }
         } catch {
             /* asked again on the next round */
@@ -1704,6 +1746,129 @@ class AssistantWidget {
         const ids = this.messages.map((message) => (typeof message.id === 'number' ? message.id : Number.NaN)).filter((id) => Number.isFinite(id));
 
         return ids.length > 0 ? Math.max(...ids) : (this.support?.last_message_id ?? 0);
+    }
+
+    /* "Talk to our team" at any time */
+
+    /** Our team is behind the Assistant and does not have this thread yet. */
+    private canTalkToTeam(): boolean {
+        return this.support?.enabled === true && this.support.status !== 'needs_teammate';
+    }
+
+    /**
+     * Nothing is handed over yet: an empty thread is never escalated. The
+     * drawer asks what they need and the next message goes to our team.
+     */
+    private startTeamMessage(): void {
+        if (!this.canTalkToTeam() || this.busy) {
+            return;
+        }
+
+        if (this.panelOpen) {
+            this.setPanelOpen(false);
+        }
+
+        if (!this.teamMode) {
+            this.teamMode = true;
+            this.dropFeedbackCard();
+            this.push({ id: `team-prompt-${Date.now()}`, role: 'assistant', content: COPY.teamPrompt });
+            this.renderTeamMode();
+        }
+
+        this.input.focus();
+    }
+
+    private leaveTeamMode(): void {
+        this.teamMode = false;
+        this.renderTeamMode();
+        this.input.focus();
+    }
+
+    /**
+     * The message goes to our team with the conversation. A newer component
+     * sends it in the escalate call (SSO stores it, hands over and syncs once);
+     * an older one only forwards the question, so the conversation is handed
+     * over first and the text follows as an ordinary message, which SSO keeps
+     * for our team.
+     */
+    private async sendToTeam(text: string, files: Array<{ id: number; name: string; size: number }>): Promise<void> {
+        this.dropFeedbackCard();
+        this.dropFailedTurn();
+        const userId = `u-${Date.now()}`;
+        const draftKey = this.draftKey();
+        this.push({
+            id: userId,
+            role: 'user',
+            content: text,
+            at: new Date().toISOString(),
+            attachments: files.length > 0 ? files.map((file) => ({ id: file.id, name: file.name, size: file.size })) : null,
+        });
+        this.dismissIntro();
+        this.setBusy(true);
+
+        const fileIds = files.map((file) => file.id);
+        const withMessage = this.api.escalatesWithMessage();
+
+        try {
+            const bootstrap = await this.api.escalate(this.conversation?.id ?? null, text, withMessage ? text : null, withMessage ? fileIds : []);
+            clearDraftIfSent(draftKey, text);
+            this.setBusy(false);
+            this.applyBootstrap(bootstrap);
+
+            if (withMessage) {
+                return;
+            }
+
+            this.pendingFiles = files;
+            this.renderPendingFiles();
+            await this.send(text);
+        } catch (error) {
+            this.setBusy(false);
+            this.showFailedTurn(text, userId, this.errorText(error), isBusy(error));
+        }
+    }
+
+    /** The chip above the composer while the next message goes to our team. */
+    private renderTeamMode(): void {
+        if (!this.teamMode) {
+            this.teamChipEl.replaceChildren();
+            this.teamChipEl.hidden = true;
+
+            return;
+        }
+
+        const remove = h('button', { class: 'remove', type: 'button', 'aria-label': `${COPY.removeFile} ${COPY.toOurTeam}`, title: COPY.removeFile, onclick: () => this.leaveTeamMode() }, svg(icons.close, 14));
+        this.teamChipEl.replaceChildren(h('span', { class: 'file-chip team-chip' }, svg(icons.send, 14), h('span', { class: 'name' }, COPY.toOurTeam), remove));
+        this.teamChipEl.hidden = false;
+    }
+
+    /** "Talk to our team" next to New conversation, or "Our team has this conversation" once they do. */
+    private renderTeamEntry(): void {
+        this.teamEntryEl.replaceChildren();
+        this.teamEntryEl.hidden = this.support?.enabled !== true;
+
+        if (this.support?.enabled !== true) {
+            return;
+        }
+
+        if (this.support.status === 'needs_teammate') {
+            this.teamEntryEl.append(h('div', { class: 'team-status', role: 'status' }, COPY.teamHasConversation));
+
+            return;
+        }
+
+        this.teamEntryEl.append(h('button', { class: 'btn secondary talk-to-team', type: 'button', onclick: () => this.startTeamMessage() }, svg(icons.send, 14), COPY.talkToTeam));
+    }
+
+    /** The menu item, the pill and the chip follow who has the conversation. */
+    private supportChanged(): void {
+        if (this.teamMode && !this.canTalkToTeam()) {
+            this.teamMode = false;
+            this.renderTeamMode();
+        }
+
+        this.renderTeamEntry();
+        this.renderSuggestions();
     }
 
     /* Files waiting to go with the next message */

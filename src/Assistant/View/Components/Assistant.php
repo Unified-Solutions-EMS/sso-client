@@ -45,6 +45,7 @@ class Assistant extends Component
             'feedback_follow_up' => $base.'/feedback/{feedback}/follow-up',
             'escalate' => $base.'/escalate',
             'updates' => $base.'/updates',
+            'escalate_message' => true,
             'csrf' => csrf_token(),
         ];
 

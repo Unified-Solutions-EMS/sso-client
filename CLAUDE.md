@@ -596,6 +596,21 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      or one back with the Assistant disconnects. No socket for threads the Assistant has (keeps the cluster's
      connection count to people actually waiting on our team). Bundle 78.6 KB -> 145.4 KB minified (22 KB -> 42 KB
      gzip). Tests: `resources/assistant/tests/widget-realtime.test.ts` (fake pusher via `vi.mock`).
+     The realtime cluster must list every app host in its Reverb `allowed_origins`: the drawer connects from
+     each app's own host, and an empty list admits only the CRM's (`pusher:error 4009 Origin not allowed`, so
+     the drawer quietly polls and typing never shows; that was the CRM production cluster until 2026-11-17).
+     **Message sound (2026-11-17).** `sound.ts` (`MessageSound`) plays `resources/assistant/sounds/message.wav`
+     (original synthesized E5 then A5 two-tone, generator `scripts/make-message-sound.py`; the same bytes ship in
+     the CRM and Unified-Mobile, so regenerate all three or none), bundled as a data URL
+     (`--loader:.wav=dataurl`), when a staff message arrives that the widget did not already have: a new
+     `message.created` staff line or a new staff message from `/assistant/updates`. Never for history, an
+     opened thread, the person's own lines, Assistant replies or status lines. Silent (no Audio element) until
+     the first `pointerdown`/`keydown`/`touchstart` on the page, at most once per 2 s (so the socket copy and
+     the poll copy chime once), volume 0.6, a refused `play()` is swallowed. The **Sounds** switch
+     (`.sound-switch`, `role="switch"`) sits in the Conversations panel header; localStorage
+     `unified-assistant.sounds` = `off` mutes (default on). Tests: `sound.test.ts`, `widget-sound.test.ts`
+     (they replace `HTMLMediaElement.prototype.play` with a plain function, not a spy: a spy handles the
+     returned promise and would hide an unhandled rejection).
   2. **The same-origin proxy** `/assistant/{bootstrap, messages, escalate, updates, uploads, uploads/{id}, actions/{id}/undo,
      review/{plan}/{approve|remove|choose|set-aside}, intro/dismiss, feedback, feedback/{id}/follow-up, DELETE conversation}` under `sso.assistant.middleware`
      (`['web','auth']`), registered only when `assistant.enabled && assistant.proxy`. It forwards to

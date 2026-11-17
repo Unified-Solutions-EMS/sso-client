@@ -5,6 +5,7 @@ import { dayLabel, fileSize, h, icons, paragraphs, svg, timeLabel } from './dom'
 import { askHelp, hasIntercom, setIntercomHidden } from './intercom';
 import { BusyPoller, DRAFT_NAME_PREFIX, type FailedTurnHandlers, SlowTurnTimer, clearDraftIfSent, draftName, failedTurnError, isBusy, readDraft, renderFailedTurn, saveDraft, showRetryButtons } from './retry';
 import { type LiveConversation, type LiveMessage, type LiveTyping, SupportSocket, liveToMessage } from './realtime';
+import { MessageSound } from './sound';
 import { styles } from './styles';
 import { UPLOAD_COPY, stillReading, waitUntilRead } from './upload';
 import type { Action, BootstrapResponse, Conversation, ConversationSummary, Handoff, Intro, Message, MessageAttachment, PlanChange, Reach, ReviewPlan, ReviewResponse, Suggestion, Support, Tour, TourStep, TurnResponse, WidgetSettings } from './types';
@@ -73,6 +74,9 @@ const COPY = {
     followUpNo: 'No thanks',
     feedbackWillContact: "Thanks. We'll be in touch.",
     feedbackNoted: 'Thanks for letting us know.',
+    sounds: 'Sounds',
+    on: 'On',
+    off: 'Off',
 };
 
 /**
@@ -400,6 +404,12 @@ class AssistantWidget {
 
     /** The teammate the CRM last said has the conversation. */
     private assignee: string | null = null;
+
+    /** A soft chime when a reply from our team arrives. */
+    private sound = new MessageSound();
+
+    /** The Sounds switch in the Conversations panel. */
+    private soundSwitch!: HTMLButtonElement;
 
     constructor(settings: SettingsWithContext) {
         this.api = new AssistantApi(settings);
@@ -855,7 +865,7 @@ class AssistantWidget {
         this.panel = h(
             'section',
             { class: 'panel', 'aria-label': COPY.conversations, hidden: true },
-            h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, COPY.conversations)),
+            h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, COPY.conversations), this.buildSoundSwitch()),
             h(
                 'div',
                 { class: 'panel-body' },
@@ -1029,10 +1039,36 @@ class AssistantWidget {
 
         if (open) {
             this.renderThreads();
-            window.setTimeout(() => this.panel.querySelector<HTMLElement>('button')?.focus(), 30);
+            this.renderSoundSwitch();
+            window.setTimeout(() => this.panel.querySelector<HTMLElement>('.new-conversation')?.focus(), 30);
         } else {
             this.historyButton.focus();
         }
+    }
+
+    private buildSoundSwitch(): HTMLButtonElement {
+        this.soundSwitch = h('button', {
+            class: 'sound-switch',
+            type: 'button',
+            role: 'switch',
+            onclick: () => {
+                this.sound.setMuted(!this.sound.isMuted());
+                this.renderSoundSwitch();
+            },
+        });
+        this.renderSoundSwitch();
+
+        return this.soundSwitch;
+    }
+
+    private renderSoundSwitch(): void {
+        const on = !this.sound.isMuted();
+        this.soundSwitch.setAttribute('aria-checked', on ? 'true' : 'false');
+        this.soundSwitch.replaceChildren(
+            h('span', { class: 'sound-label' }, COPY.sounds),
+            h('span', { class: 'sound-track', 'aria-hidden': 'true' }, h('span', { class: 'sound-thumb' })),
+            h('span', { class: 'sound-state', 'aria-hidden': 'true' }, on ? COPY.on : COPY.off),
+        );
     }
 
     private renderThreads(): void {
@@ -1837,6 +1873,7 @@ class AssistantWidget {
                 } else {
                     this.push(message);
                     this.badgeFor(message);
+                    this.chimeFor(message);
                 }
             }
 
@@ -1932,6 +1969,14 @@ class AssistantWidget {
 
         this.push(message);
         this.badgeFor(message);
+        this.chimeFor(message);
+    }
+
+    /** Only a reply from our team the widget did not have yet; never history, the person's own lines, the Assistant or status lines. */
+    private chimeFor(message: Message): void {
+        if (message.role === 'staff') {
+            this.sound.play();
+        }
     }
 
     private onLiveConversation(update: LiveConversation): void {

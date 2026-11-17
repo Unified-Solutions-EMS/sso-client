@@ -113,6 +113,12 @@ afterEach(() => {
 });
 
 describe('widget: our team switched off', () => {
+    it('offers no Talk to our team pill or menu item', () => {
+        expect(shadow().querySelector('.pill.team')).toBeNull();
+        expect(shadow().querySelector<HTMLElement>('.team-entry')!.hidden).toBe(true);
+        expect(shadow().querySelector('.talk-to-team')).toBeNull();
+    });
+
     it('keeps the Ask Help handoff and never calls escalate or polls', async () => {
         vi.useFakeTimers();
         replies.messages.push({ status: 200, body: { reply: "I can't see that from here.", message_id: 2, handoff: { question: 'How do I export?' }, support: support('assistant', false) } });

@@ -200,6 +200,10 @@ p + p { margin-top: 0.5em; }
 .panel-title { font-size: 14px; font-weight: 600; }
 .panel-body { flex: 1; overflow-y: auto; padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 12px; background: rgb(var(--ua-bg-subtle)); }
 .new-conversation { align-self: stretch; }
+.team-entry { display: flex; flex-direction: column; }
+.team-entry[hidden] { display: none; }
+.team-entry .talk-to-team { align-self: stretch; }
+.team-status { font-size: 13px; color: rgb(var(--ua-text-muted)); text-align: center; padding: 6px 8px; }
 .threads { display: flex; flex-direction: column; border: 1px solid rgb(var(--ua-border)); border-radius: var(--ua-radius-lg); overflow: hidden; background: rgb(var(--ua-surface)); }
 .threads:empty { display: none; }
 .thread {
@@ -294,6 +298,15 @@ a.file-chip:hover, a.file-chip:focus-visible { border-color: rgb(var(--ua-primar
 .file-chip .size { color: rgb(var(--ua-text-muted)); white-space: nowrap; }
 .pending-files { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .pending-files[hidden] { display: none; }
+.team-mode { display: flex; margin-bottom: 8px; }
+.team-mode[hidden] { display: none; }
+.team-mode .file-chip { padding-right: 2px; border-color: rgb(var(--ua-primary)); color: rgb(var(--ua-primary)); background: rgb(var(--ua-primary-subtle)); }
+.team-mode .file-chip svg { color: rgb(var(--ua-primary)); }
+.team-mode .remove {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 999px; color: rgb(var(--ua-primary));
+}
+.team-mode .remove:hover { background: rgb(var(--ua-bg-muted)); }
 .pending-files .file-chip { padding-right: 2px; }
 .pending-files .remove {
   display: inline-flex; align-items: center; justify-content: center;

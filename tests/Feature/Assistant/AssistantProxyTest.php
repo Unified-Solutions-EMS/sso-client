@@ -225,6 +225,27 @@ class AssistantProxyTest extends AssistantTestCase
         });
     }
 
+    public function test_escalate_forwards_the_message_and_its_files(): void
+    {
+        Http::fake(['https://sso.test/api/internal/assistant/escalate' => Http::response(['enabled' => true, 'support' => ['enabled' => true, 'status' => 'needs_teammate', 'last_message_id' => 42]], 200)]);
+        $this->signedInMember();
+
+        $this->postJson('/assistant/escalate', ['conversation_id' => 31, 'question' => 'The export failed', 'message' => 'The export failed', 'attachments' => [21, 22]])
+            ->assertOk();
+
+        Http::assertSent(function (ClientRequest $request): bool {
+            $data = $request->data();
+
+            return $request->url() === 'https://sso.test/api/internal/assistant/escalate'
+                && $data['message'] === 'The export failed'
+                && $data['attachments'] === [21, 22]
+                && $data['sso_user_id'] === 7;
+        });
+
+        $this->postJson('/assistant/escalate', ['message' => str_repeat('a', 20001)])->assertUnprocessable();
+        $this->postJson('/assistant/escalate', ['attachments' => range(1, 11)])->assertUnprocessable();
+    }
+
     public function test_updates_forwards_the_conversation_and_after_and_nothing_else_from_the_browser(): void
     {
         Http::fake(['https://sso.test/api/internal/assistant/updates*' => Http::response(['status' => 'needs_teammate', 'messages' => [], 'last_message_id' => 41], 200)]);

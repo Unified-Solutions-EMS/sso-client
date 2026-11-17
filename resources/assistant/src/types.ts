@@ -18,6 +18,12 @@ export interface WidgetSettings {
     escalate?: string | null;
     /** GET: our team's replies, polled while a teammate has the conversation. Absent: derived from `messages`. */
     updates?: string | null;
+    /**
+     * True when this component's proxy forwards `message` (and `attachments`)
+     * on escalate, so "Talk to our team" goes in one call. Absent from an older
+     * component: the widget hands over first and sends the text as a turn.
+     */
+    escalate_message?: boolean | null;
     csrf: string | null;
 }
 

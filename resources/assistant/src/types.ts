@@ -49,6 +49,25 @@ export interface Support {
     enabled: boolean;
     status: 'assistant' | 'needs_teammate' | 'resolved';
     last_message_id: number;
+    /** Where our team's replies arrive live; null or absent: polling only. */
+    realtime?: Realtime | null;
+}
+
+/**
+ * The CRM's Reverb cluster and the conversation's channel
+ * (REALTIME-CONTRACT.md). `token` authorizes that one channel for an hour;
+ * every answer carries a fresh one.
+ */
+export interface Realtime {
+    host: string;
+    port: number;
+    scheme: string;
+    key: string;
+    channel: string;
+    auth_url: string;
+    token: string;
+    /** The person's own name, for our team's "{name} is typing". */
+    name?: string | null;
 }
 
 /** GET /assistant/updates answer. */
@@ -56,6 +75,8 @@ export interface UpdatesResponse {
     status?: Support['status'] | null;
     messages?: Message[] | null;
     last_message_id?: number | null;
+    /** Carries a fresh realtime token; absent from an older SSO. */
+    support?: Support | null;
 }
 
 export interface Action {
@@ -114,6 +135,10 @@ export interface Message {
     content: string;
     /** A teammate's name (role staff). */
     author?: string | null;
+    /** The CRM's id for a teammate's reply, so one heard live and the same one polled later render once. */
+    crm_message_id?: number | null;
+    /** Heard on the socket and not yet confirmed by a poll: never counts toward the poll's `after`. */
+    live?: boolean;
     attachments?: MessageAttachment[] | null;
     at?: string | null;
     activity?: string[] | null;

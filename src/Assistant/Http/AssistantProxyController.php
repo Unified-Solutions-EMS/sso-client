@@ -206,6 +206,39 @@ class AssistantProxyController extends Controller
         return $this->forward($request, 'post', '/feedback', $body);
     }
 
+    /**
+     * The 1 to 5 rating at the end of a conversation, with an optional note.
+     * The thread id is a selector SSO checks against the stamped identity.
+     */
+    public function rating(Request $request): JsonResponse|Response
+    {
+        $body = $request->validate([
+            'conversation_id' => ['required', 'integer'],
+            'score' => ['required', 'integer', 'min:1', 'max:5'],
+            'note' => ['sometimes', 'nullable', 'string', 'max:1000'],
+        ]);
+
+        return $this->forward($request, 'post', '/rating', $body);
+    }
+
+    /**
+     * "Yes, call me" after a low rating: the number, the best time and the
+     * note go to SSO, which checks the number is a US one and hands the
+     * conversation to our team. Its 422 (with the field errors) comes back
+     * as is.
+     */
+    public function callback(Request $request): JsonResponse|Response
+    {
+        $body = $request->validate([
+            'conversation_id' => ['required', 'integer'],
+            'phone' => ['required', 'string', 'max:32'],
+            'best_time' => ['required', 'string', 'in:now,this_morning,this_afternoon,tomorrow_morning'],
+            'note' => ['sometimes', 'nullable', 'string', 'max:1000'],
+        ]);
+
+        return $this->forward($request, 'post', '/callback', $body);
+    }
+
     public function feedbackFollowUp(Request $request, int $feedback): JsonResponse|Response
     {
         $body = $request->validate([

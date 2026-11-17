@@ -189,6 +189,52 @@ class AssistantProxyTest extends AssistantTestCase
         $this->postJson('/assistant/feedback/abc/follow-up', ['follow_up' => true])->assertNotFound();
     }
 
+    public function test_rating_forwards_the_score_and_note_with_the_session_identity(): void
+    {
+        Http::fake(['https://sso.test/api/internal/assistant/rating' => Http::response(['ok' => true, 'rating' => ['enabled' => true, 'score' => 2, 'note' => 'Slow']], 200)]);
+        $this->signedInMember();
+
+        $this->postJson('/assistant/rating', ['conversation_id' => 31, 'score' => 2, 'note' => 'Slow', 'sso_user_id' => 999])
+            ->assertOk()
+            ->assertJsonPath('rating.score', 2);
+
+        Http::assertSent(fn (ClientRequest $request): bool => $request->url() === 'https://sso.test/api/internal/assistant/rating'
+            && $request->data()['conversation_id'] === 31
+            && $request->data()['score'] === 2
+            && $request->data()['note'] === 'Slow'
+            && $request->data()['sso_user_id'] === 7
+            && $request->data()['sso_company_id'] === 42);
+
+        $this->postJson('/assistant/rating', ['conversation_id' => 31, 'score' => 6])->assertUnprocessable();
+        $this->postJson('/assistant/rating', ['conversation_id' => 31])->assertUnprocessable();
+    }
+
+    public function test_callback_forwards_the_number_and_passes_back_ssos_field_errors(): void
+    {
+        Http::fake([
+            'https://sso.test/api/internal/assistant/callback' => Http::sequence()
+                ->push(['enabled' => true, 'support' => ['enabled' => true, 'status' => 'needs_teammate', 'last_message_id' => 50], 'callback' => ['message' => 'Our team will call you at (814) 555-0100 this afternoon. Replies also show up here.']], 200)
+                ->push(['message' => 'Enter a US phone number, like (814) 555-0100.', 'errors' => ['phone' => ['Enter a US phone number, like (814) 555-0100.']]], 422),
+        ]);
+        $this->signedInMember();
+
+        $this->postJson('/assistant/callback', ['conversation_id' => 31, 'phone' => '(814) 555-0100', 'best_time' => 'this_afternoon', 'note' => 'Still broken'])
+            ->assertOk()
+            ->assertJsonPath('support.status', 'needs_teammate');
+
+        Http::assertSent(fn (ClientRequest $request): bool => $request->url() === 'https://sso.test/api/internal/assistant/callback'
+            && $request->data()['phone'] === '(814) 555-0100'
+            && $request->data()['best_time'] === 'this_afternoon'
+            && $request->data()['note'] === 'Still broken'
+            && $request->data()['sso_user_id'] === 7);
+
+        $this->postJson('/assistant/callback', ['conversation_id' => 31, 'phone' => '555', 'best_time' => 'now'])
+            ->assertUnprocessable()
+            ->assertJsonPath('errors.phone.0', 'Enter a US phone number, like (814) 555-0100.');
+
+        $this->postJson('/assistant/callback', ['conversation_id' => 31, 'phone' => '8145550100', 'best_time' => 'tonight'])->assertUnprocessable();
+    }
+
     public function test_message_forwards_the_attached_file_ids(): void
     {
         $this->fakeSso();

@@ -24,6 +24,10 @@ export interface WidgetSettings {
      * component: the widget hands over first and sends the text as a turn.
      */
     escalate_message?: boolean | null;
+    /** POST: the 1 to 5 rating at the end of a conversation. Absent from an older component: no rating card. */
+    rating?: string | null;
+    /** POST: "Yes, call me" after a low rating. Absent: the call is not offered. */
+    callback?: string | null;
     csrf: string | null;
 }
 
@@ -77,6 +81,7 @@ export interface UpdatesResponse {
     last_message_id?: number | null;
     /** Carries a fresh realtime token; absent from an older SSO. */
     support?: Support | null;
+    rating?: Rating | null;
 }
 
 export interface Action {
@@ -273,7 +278,31 @@ export interface BootstrapResponse {
      */
     feedback?: { ask: boolean } | null;
     support?: Support | null;
+    /** The end-of-conversation rating. Absent from an older SSO: never asked. */
+    rating?: Rating | null;
     reach?: Reach | null;
+}
+
+/** The 1 to 5 rating given at the end of a conversation (RATING-CALLBACK-CONTRACT.md). */
+export interface Rating {
+    enabled: boolean;
+    score: number | null;
+    note: string | null;
+    rated_at: string | null;
+    /** The person's phone on file, formatted, to prefill the call form. */
+    phone: string | null;
+}
+
+export interface RatingResponse {
+    ok?: boolean;
+    rating?: Rating | null;
+}
+
+export type BestTime = 'now' | 'this_morning' | 'this_afternoon' | 'tomorrow_morning';
+
+/** The answer to "Request a call": the bootstrap shape plus what to say about the call. */
+export interface CallbackResponse extends BootstrapResponse {
+    callback?: { phone: string; phone_display: string; best_time: BestTime; best_time_label: string; message: string } | null;
 }
 
 export interface UndoResponse {

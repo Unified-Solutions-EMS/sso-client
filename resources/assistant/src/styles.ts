@@ -59,12 +59,11 @@ p + p { margin-top: 0.5em; }
 
 :focus-visible { outline: 2px solid rgb(var(--ua-ring)); outline-offset: 2px; }
 
-/* Launcher: a round icon button stacked directly above the Intercom bubble
-   (which sits at its default bottom-right 20px), one column at the right edge.
-   --ua-lift is how far the column was raised to clear a bar pinned to the
-   bottom of the viewport (see avoid.ts); Intercom gets the same lift. */
+/* Launcher: a round icon button in the bottom-right corner, 20px in (16px
+   under 640px). --ua-lift is how far it was raised to clear a bar pinned to
+   the bottom of the viewport (see avoid.ts). */
 .launcher {
-  position: fixed; right: 20px; bottom: calc(92px + var(--ua-lift, 0px)); z-index: 2147483000;
+  position: fixed; right: 20px; bottom: calc(20px + var(--ua-lift, 0px)); z-index: 2147483000;
   display: inline-flex; align-items: center; justify-content: center;
   width: 44px; height: 44px; padding: 0;
   border-radius: 9999px;
@@ -85,7 +84,7 @@ p + p { margin-top: 0.5em; }
 }
 .launcher:hover .tip, .launcher:focus-visible .tip { opacity: 1; }
 @media (max-width: 639px) {
-  .launcher { right: 16px; bottom: calc(80px + var(--ua-lift, 0px)); width: 40px; height: 40px; }
+  .launcher { right: 16px; bottom: calc(16px + var(--ua-lift, 0px)); width: 40px; height: 40px; }
 }
 /* Unseen first-run badge on the launcher */
 .launcher .badge {
@@ -99,9 +98,9 @@ p + p { margin-top: 0.5em; }
 }
 .launcher .badge[hidden] { display: none; }
 
-/* First-run callout: a speech bubble above the launcher column, arrow at the launcher */
+/* First-run callout: a speech bubble above the launcher, arrow at the launcher */
 .callout {
-  position: fixed; right: 20px; bottom: calc(92px + 44px + 14px + var(--ua-lift, 0px)); z-index: 2147483000;
+  position: fixed; right: 20px; bottom: calc(20px + 44px + 14px + var(--ua-lift, 0px)); z-index: 2147483000;
   width: 300px; max-width: calc(100vw - 32px);
   padding: 14px 14px 12px;
   border: 1px solid rgb(var(--ua-border)); border-radius: var(--ua-radius-lg);
@@ -123,7 +122,7 @@ p + p { margin-top: 0.5em; }
 .callout-body { margin-top: 6px; font-size: 13px; line-height: 1.45; color: rgb(var(--ua-text-secondary)); }
 .callout-actions { margin-top: 12px; display: flex; }
 @media (max-width: 639px) {
-  .callout { right: 16px; left: 16px; width: auto; bottom: calc(80px + 40px + 14px + var(--ua-lift, 0px)); }
+  .callout { right: 16px; left: 16px; width: auto; bottom: calc(16px + 40px + 14px + var(--ua-lift, 0px)); }
 }
 
 /* Drawer */
@@ -509,6 +508,7 @@ a.file-chip:hover, a.file-chip:focus-visible { border-color: rgb(var(--ua-primar
 .link[aria-pressed="true"] { color: rgb(var(--ua-primary)); }
 .link { color: rgb(var(--ua-text-secondary)); text-decoration: underline; text-underline-offset: 2px; font-size: 11px; }
 .link:hover { color: rgb(var(--ua-text)); }
+.card .link.email { font-size: 13px; color: rgb(var(--ua-primary)); }
 .upload-name { font-size: 11px; color: rgb(var(--ua-text-secondary)); }
 `;
 

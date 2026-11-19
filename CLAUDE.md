@@ -337,14 +337,16 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
       }
   }
   ```
-- **Unified Assistant** — the one platform-wide assistant that *does tasks* for agency admins (not help
-  chat; that is Fin, labelled **Help**). The model runs in SSO; this package gives every app three
+- **Unified Assistant** — the one platform-wide assistant: it *does tasks* for agency admins, answers
+  how-do-I questions for everyone from the wiki, and hands a conversation to our team (**Talk to our
+  team**). Intercom was removed from every app on 2026-11-19 (James: "rely solely on this new assistant
+  for both chat and assistant"); nothing in the widget references it. The model runs in SSO; this package gives every app three
   things (`routes/assistant.php`, `src/Assistant/*`, config `sso.assistant`):
   1. **The drawer.** `<x-unified-assistant />` renders
      `<script src="/assistant/widget.js?v=…" defer data-unified-assistant='{…proxy paths, csrf}'>` when
      `sso.assistant.enabled` and a user is signed in; nothing otherwise. Inertia/React apps put it in the
-     root `app.blade.php` next to `<x-intercom-widget />`; Blade apps in the main layout; Filament panels
-     via a `panels::body.end` render hook (same as the Intercom widget). Optional `setup-app="crew-scheduling"`
+     root `app.blade.php`; Blade apps in the main layout; Filament panels via a `panels::body.end` render
+     hook. Optional `setup-app="crew-scheduling"`
      prop makes every turn carry `setup_app`. The bundle is `dist/assistant.js` (vanilla TypeScript,
      shadow DOM, one runtime dependency (pusher-js, bundled, for our team's live replies), committed; rebuild with `npm ci && npm run build`, `npm run typecheck`
      first). **SSO is the bundle's origin.** An app's `GET /assistant/widget.js`
@@ -359,59 +361,48 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      until the first widget request warms the cache), so a changed bundle is a new URL and browsers refetch. The widget boots from
      `GET /assistant/bootstrap`: a **204** (no `sso_id`, no selected company) or `{enabled: false}` (SSO
      says this person is not a member of the agency, or the Assistant is off) leaves the page untouched. `window.UnifiedAssistant = {open, close, ask(text),
-     setSetupApp(slug)}` for an "Ask the assistant" button. While open it hides the Intercom launcher
-     (`Intercom('update', {hide_default_launcher: true})`) and restores it on close / `pagehide`.
-     **Launcher layout + page padding:** the closed-state launcher is a round 44px icon-only button
-     (sparkles, `aria-label` and `title` "Assistant", hover tooltip with the word; neutral gray-900, brand
-     accent on hover) fixed at right 20px / bottom 92px so it stacks directly ABOVE the Intercom bubble
-     (default bottom-right 20px) in one column, never side by side; under 640px it is 40px at right 16px /
-     bottom 80px. While the launchers are showing (bootstrap enabled, drawer closed) the widget sets
+     setSetupApp(slug)}` for an "Ask the assistant" button.
+     **Launcher layout + page padding (2026-11-19):** the closed-state launcher is a round 44px icon-only
+     button (sparkles, `aria-label` and `title` "Assistant", hover tooltip with the word; neutral gray-900,
+     brand accent on hover) fixed in the bottom-right corner at right 20px / bottom 20px; under 640px it is
+     40px at right 16px / bottom 16px. (Until 2026-11-19 it sat at bottom 92px / 80px, stacked above the
+     Intercom bubble.) While the launcher is showing (bootstrap enabled, drawer closed) the widget sets
      `html[data-unified-assistant="docked"]` and injects one `<style id="unified-assistant-dock">` giving
-     **the element that scrolls the page** 150px of extra bottom padding (120px under 640px) so a page's own
-     bottom-right buttons can scroll above both bubbles; the attribute is removed while the drawer is open
-     (it hides Intercom) and never set when the widget does not boot. `BarAvoidance` marks that element with
+     **the element that scrolls the page** 90px of extra bottom padding (70px under 640px) so a page's own
+     bottom-right buttons can scroll above the launcher; the attribute is removed while the drawer is open
+     (it hides the launcher) and never set when the widget does not boot. `BarAvoidance` marks that element with
      `data-unified-assistant-scroller` on every measure: the body when html and body scroll, otherwise the
-     outermost `overflow-y: auto|scroll` ancestor under the bubble column, then a scrolling `<main>`, then
-     the body. The rule is `calc(var(--ua-scroller-padding) + 150px) !important`, the variable holding the
+     outermost `overflow-y: auto|scroll` ancestor under the launcher, then a scrolling `<main>`, then
+     the body. The rule is `calc(var(--ua-scroller-padding) + 90px) !important`, the variable holding the
      element's own computed padding (app shells set safe-area insets inline), and a swapped `<main>`
      (wire:navigate, Inertia) is re-marked on the next measure. It was body padding until 2026-11-01: every
      Unified app shell is a fixed-height `overflow-hidden` body with its own scrolling `<main>`, so the
-     padding shrank the shell instead and cut every list page off 150px above the fold (CloudPCR, James).
-     Verified headless at 1280 and 390 (stacked column, padding on `<main>` only when docked, none while
-     lifted or open, re-marked after a main swap, body padding on a body-scrolling page).
-     **Pinned-bar avoidance** (`avoid.ts`, `BarAvoidance`): the body padding only helps content that
+     padding shrank the shell instead and cut every list page off above the fold (CloudPCR, James).
+     **Pinned-bar avoidance** (`avoid.ts`, `BarAvoidance`): the page padding only helps content that
      scrolls, so a bar pinned to the bottom of the viewport (fixed or sticky form action bars, Filament /
-     Livewire footers, modal footers) still had both bubbles on its buttons. While the launchers are showing
+     Livewire footers, modal footers) would still sit under the launcher. While the launcher is showing
      the widget measures at start, on `resize` (150 ms), after scrolling (150 ms, capture, so inner
      scrollers count) and on body mutations (`MutationObserver`, childList + class/style/hidden, 250 ms,
-     ignoring our host and Intercom's containers). `measure()` probes `document.elementsFromPoint()` in a
-     column strip at the Intercom corner (x = edge minus `horizontal_padding` 20 / 50 / 80, y every 40px
-     from the bottom up to 160px; `window.intercomSettings` `alignment` / `horizontal_padding` /
-     `vertical_padding` are honored when set) and, for every element that is not ours, not Intercom's
-     (`#intercom-container`, `.intercom-lightweight-app`, `intercom-*` ids / classes, iframes with an
-     Intercom src) and not html/body, walks up to the nearest `position: fixed|sticky` ancestor and takes
-     the outermost element on that path whose box reaches the bottom 200px and is no taller than 40% of
-     the viewport; the smallest `rect.top` among them is the bar top. Found: the whole column lifts as one,
-     `Intercom('update', {vertical_padding: viewport height - bar top + 12})` (never below 20) so the Help
-     bubble sits 12px above the bar, the launcher follows through `--ua-lift` on the host element (`bottom:
-     calc(92px + var(--ua-lift))`, 80px under 640px; the first-run callout inherits the same variable), and the html attribute becomes
-     `data-unified-assistant="lifted"`, which carries no body padding (the bar already keeps the bubbles off
-     the content). Not found: `vertical_padding` goes back to its base and the attribute to `docked`.
-     `Intercom('update')` is only sent when the value changes, never while the drawer is open (the drawer
-     deactivates measuring; closing re-measures) and never after the Ask Help handoff (`hold()` until
-     Intercom's `onHide` fires, because an update would wipe the prefilled question, see below). A lift
-     that would exceed 40% of the viewport height (a full-screen scrim, a right-hand slide-over) is a layer,
-     not a bar: the defaults stay and nothing is logged. Verified headless at 1280 and 390 against a 64px
-     fixed bar: one `update {vertical_padding: 76}` on load, bubble 12px above the bar and the launcher 12px
-     above the bubble, padding 0 while lifted, removing the bar sends `{vertical_padding: 20}` once and
-     restores the padding, a re-added bar lifts again, nothing is sent while the drawer is open, and a
-     full-screen overlay leaves the defaults.
-     **Ask Help prefill** (`intercom.ts askHelp()`): the Messenger drops the text of the `showNewMessage`
-     call that opens it and only inserts text once it is already showing, so the handoff restores the
-     launcher, registers a one-shot `onShow`, calls `showNewMessage(question)` to open, and re-sends the
-     same call from `onShow` (or a 900 ms timer when the Messenger was already open). Nothing may send
-     `Intercom('update', …)` after that: an update resets the composer, which is why the handoff closes
-     the drawer through `setOpen(false, true, false)` instead of the normal close.
+     ignoring our own host). `measure()` probes `document.elementsFromPoint()` in a strip under the
+     launcher's corner (x = right edge minus inset, inset + size/2, inset + size, i.e. 20 / 42 / 64, or
+     16 / 36 / 56 under 640px; y every 40px from the bottom up to 160px) and, for every element that is
+     not ours and not html/body, walks up to the nearest `position: fixed|sticky` ancestor and takes the
+     outermost element on that path whose box reaches the bottom 200px and is no taller than 40% of the
+     viewport; the smallest `rect.top` among them is the bar top. Found: the launcher lifts so its bottom
+     edge sits 12px above the bar (`--ua-lift` on the host element = viewport height - bar top + 12 - the
+     launcher's inset; `bottom: calc(20px + var(--ua-lift))`, 16px under 640px; the first-run callout
+     inherits the same variable), and the html attribute becomes `data-unified-assistant="lifted"`, which
+     carries no page padding (the bar already keeps the launcher off the content). Not found: lift 0 and
+     the attribute back to `docked`. The drawer deactivates measuring; closing re-measures. A lift that
+     would exceed 40% of the viewport height (a full-screen scrim, a right-hand slide-over) is a layer, not
+     a bar: the default stays and nothing is logged. Verified headless at 1280 and 390 (2026-11-19):
+     launcher at 20/20 (16/16 at 390), dock padding 90px / 70px, and against a 64px fixed bar the
+     launcher's bottom edge sits 12px above it.
+     **Handoff:** when the Assistant cannot finish, its reply carries `handoff: {question}`. With our team
+     behind the Assistant (`support.enabled`) the card offers **Talk to our team** (below). Without it the
+     card reads "I can't do that one, but our team can help.", quotes the question, and offers a **Copy**
+     button (copies the question) and an "Email support@unified-solutions.io" mailto link with the question
+     as the body. There is no Help / Ask Help path any more.
      **Threads + suggestions (2026-10-30):** bootstrap answers `{enabled, conversation: {id, title,
      started_at, messages}, conversations: [{id, title, last_activity_at, message_count}], suggestions:
      [{label, prompt}], review, notice}`; `GET /assistant/bootstrap?conversation=ID` reopens a previous
@@ -422,8 +413,8 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      message count; the current thread is left out) or "No previous conversations yet." Picking one loads
      it and shows a thin "Reopened: <title>" bar under the header until the next new thread. On an empty
      thread the `suggestions` render as wrap-around pill buttons under the intro bubble, titled "Things I
-     can do"; a pill sends its `prompt` as the user's message. **Ideas** in the footer row (next to "Ask
-     Help instead", hidden when SSO sends no suggestions, reads "Hide ideas" while on) toggles the pills at
+     can do"; a pill sends its `prompt` as the user's message. **Ideas** in the footer row (hidden when
+     SSO sends no suggestions, reads "Hide ideas" while on) toggles the pills at
      any time; after a reply they stay hidden unless toggled. Verified headless at 1280 and 390 against a
      mocked proxy.
      **First-run callout (2026-10-30):** bootstrap may carry `intro: {show, title, body, cta, badge}`. With
@@ -554,8 +545,8 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      `support: {enabled, status: assistant | needs_teammate | resolved, last_message_id}` (absent from an older
      SSO). With `support.enabled` the handoff card reads "I can't finish this one, but our team can." with
      **Talk to our team** (`POST {escalate} {conversation_id, question}`; the answer is the bootstrap shape with
-     the "Handed to our team" line, applied in place) instead of Ask Help; with it off (or absent) the Ask Help
-     card is exactly as before. While `status === 'needs_teammate'` the widget polls
+     the "Handed to our team" line, applied in place); with it off (or absent) the card offers Copy and the
+     support email address (see **Handoff** above). While `status === 'needs_teammate'` the widget polls
      `GET {updates}?conversation=ID&after=<newest numeric message id it has>` every 5 s while the drawer is open
      and the page is showing, every 20 s otherwise (`visibilitychange` and open/close reschedule it), appends
      the staff / assistant / system messages it does not have (by id), badges the launcher for a staff reply
@@ -593,7 +584,7 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      carries `reach: full | apps | none` (SSO's `AssistantReach`; absent from an older SSO = `full`). For
      `reach: none` (no admin role anywhere: crews, dispatchers, billers) SSO only answers how-do-I questions
      and passes everything else to our team, and the widget follows it: subtitle "Ask how something works, or
-     talk to our team." ("Ask how something works. For anything else, use Help." when `support.enabled` is
+     talk to our team." ("Ask how something works in your apps." when `support.enabled` is
      off), an intro bubble that never says "tell me what to do", placeholder "Ask a question", and the file
      button (`.composer` paperclip) hidden until the thread is `needs_teammate` (files are then for our team;
      the same rule hides it for `reach: apps`, whose uploads SSO refuses). A suggestion with `kind: 'team'`
@@ -712,7 +703,7 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      `ValidateCoreApiKey`. Implement `Contracts\AssistantToolProvider::tools(AssistantActor): list<AssistantTool>`
      and bind it (`$this->app->bind(AssistantToolProvider::class, \App\Assistant\CrewAssistantTools::class)`
      or `'tool_provider' => FQCN` in config). Nothing bound → `{app, tools: []}` (normal answer: SSO's own
-     tools, how-do-I and the Help handoff still work everywhere).
+     tools, how-do-I answers and Talk to our team still work everywhere).
      - **Actor preparation (package, before any provider call):** `AssistantActorResolver` finds the local
        company by `companies.sso_company_id` and the user by `users.sso_id` (the Metrics model/column
        config in `config/metrics.php`), checks membership (`$user->companies()` if the model has it, else
@@ -754,11 +745,11 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      - **Never log `args`** (may carry PHI). The wire format: ok → `{ok: true, content, summary, undo}`;
        confirm → `{ok: false, needs_confirmation: true, question, content}`; failed → `{ok: false, message}`;
        unknown tool / not a member → 404 `{ok: false, message}`; malformed body → 422.
-  - **Wording (rendered UI, binding, DEV_GUIDELINES §2d):** the feature is **Assistant**, Intercom/Fin is
-    **Help**; never "chat", "bot", "AI", "support". Subtitle "Does tasks for you. For questions about how
-    something works, use Help." Handoff "I can't do that one, but Help can take it from here." / **Ask
-    Help**, or with our team behind the Assistant "I can't finish this one, but our team can." / **Talk to
-    our team**; a teammate's reply carries a "Unified" tag. The standing entry: **Talk to our team** (menu item
+  - **Wording (rendered UI, binding, DEV_GUIDELINES §2d):** the feature is **Assistant**; never "chat",
+    "bot", "AI", "support" (the address support@unified-solutions.io is fine). There is no "Help" any more.
+    Subtitle "Tell me what to do, or ask how something works." Handoff with our team behind the Assistant
+    "I can't finish this one, but our team can." / **Talk to our team**; without it "I can't do that one,
+    but our team can help." / **Copy** + "Email support@unified-solutions.io"; a teammate's reply carries a "Unified" tag. The standing entry: **Talk to our team** (menu item
     and last pill), "Tell me what you need and I will pass it to our team.", chip "To our team", and "Our team
     has this conversation". Chips "Undo" / "Undone". No em dashes, US English, no developer words, no tenant-isolation
     narration. Tool `summary` and `failed()` text are rendered UI too.
@@ -767,7 +758,7 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     body, 204 cases, pass-through, 502, multipart upload, widget headers, component hidden when disabled /
     signed out). An app's own test: bind its provider, seed a member, hit both routes with the core key.
   - **Install sweep per app:** `composer update unified/sso-client --prefer-dist`; add
-    `<x-unified-assistant />` next to `<x-intercom-widget />`; confirm `SSO_APP_SLUG` and
+    `<x-unified-assistant />` (and remove any `<x-intercom-widget />`); confirm `SSO_APP_SLUG` and
     `CORE_APP_API_KEY`; nothing else. Tools are optional and come later per app.
 - **`Concerns\SyncsCompanyRoles`** — `loadRolesForCompany()`, `hasRoleInCompany()`, `companyRoleNames()`
   plus staff helpers `isStaff()`, `hasStaffRole()`, `isGlobalAdmin()` reading the package-managed

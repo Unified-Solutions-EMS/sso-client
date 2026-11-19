@@ -141,7 +141,7 @@ describe('widget: the drawer for every member of the agency', () => {
         shadow().querySelector<HTMLButtonElement>('.new-conversation')!.click();
         await flush();
 
-        expect(shadow().querySelector('.header .subtitle')!.textContent).toBe('Does tasks for you. For questions about how something works, use Help.');
+        expect(shadow().querySelector('.header .subtitle')!.textContent).toBe('Tell me what to do, or ask how something works.');
         expect(composer().placeholder).toBe('Tell me what to do');
         expect(attach().hidden).toBe(false);
         expect(pillLabels()).toEqual(['Add a person', 'Talk to our team']);
@@ -152,7 +152,7 @@ describe('widget: the drawer for every member of the agency', () => {
         shadow().querySelector<HTMLButtonElement>('.new-conversation')!.click();
         await flush();
 
-        expect(shadow().querySelector('.header .subtitle')!.textContent).toBe('Ask how something works. For anything else, use Help.');
+        expect(shadow().querySelector('.header .subtitle')!.textContent).toBe('Ask how something works in your apps.');
         expect(pillLabels()).toEqual(['How do I ...', 'Something is not working']);
         expect(attach().hidden).toBe(true);
     });

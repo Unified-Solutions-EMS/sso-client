@@ -217,20 +217,22 @@ capabilities:
     name: "Assistant drawer and app tools"
     aliases: [assistant button missing, assistant not showing, assistant can't do it in this app, assistant says it can't reach the app, undo not working]
     what_it_does: >
-      Mounts the Assistant drawer (the one that does tasks for agency admins)
+      Mounts the Assistant drawer (it does tasks for agency admins, answers
+      how-do-I questions for everyone and hands a conversation to our team)
       in every app, passes its messages to SSO with the signed-in user's
       identity, and lets SSO run this app's own tools as that user.
     state: live
     entry_points: [routes/assistant.php, src/Assistant/Http/AssistantProxyController.php, src/Assistant/Http/AssistantToolsController.php, src/Assistant/AssistantActorResolver.php]
     diagnostic_questions:
       - "Is the Assistant button missing in one app or in every app? Every app points at the person's role, one app at that app's install."
-      - "Is the person an administrator of the agency? Only admins get the Assistant; Help is for everyone."
+      - "Is the person a member of the agency? Every member gets the Assistant; only admins get it to do tasks."
       - "Did the assistant say it could not reach the app, or that it could not do the task?"
     known_causes:
       - >
-        No button anywhere: SSO decides who is an administrator for the agency
-        and answers "not enabled" for everyone else. That is expected for
-        non-admin users; they still have Help.
+        No button anywhere: SSO answers "not enabled" for anyone who is not a
+        member of the agency, or when the Assistant is switched off. Members
+        who are not administrators still get it for questions and Talk to our
+        team.
       - >
         No button in one app only: that app has not mounted the drawer yet, or
         the person has no selected agency in that app. Signing in to the app

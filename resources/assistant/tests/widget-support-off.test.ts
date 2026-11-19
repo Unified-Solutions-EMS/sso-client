@@ -119,17 +119,35 @@ describe('widget: our team switched off', () => {
         expect(shadow().querySelector('.talk-to-team')).toBeNull();
     });
 
-    it('keeps the Ask Help handoff and never calls escalate or polls', async () => {
+    it('offers Copy and the support email on a handoff and never calls escalate or polls', async () => {
         vi.useFakeTimers();
         replies.messages.push({ status: 200, body: { reply: "I can't see that from here.", message_id: 2, handoff: { question: 'How do I export?' }, support: support('assistant', false) } });
         await type('export last month');
 
         const card = shadow().querySelector('.card')!;
-        expect(card.textContent).toContain("I can't do that one, but Help can take it from here.");
+        expect(card.textContent).toContain("I can't do that one, but our team can help.");
+        expect(card.querySelector('.quote')!.textContent).toBe('How do I export?');
         expect(card.textContent).not.toContain('Talk to our team');
+        expect(card.textContent).not.toMatch(/\bHelp\b/);
+
+        const email = card.querySelector<HTMLAnchorElement>('a.email')!;
+        expect(email.textContent).toBe('Email support@unified-solutions.io');
+        expect(email.getAttribute('href')).toBe('mailto:support@unified-solutions.io?body=How%20do%20I%20export%3F');
+
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+        const copy = [...card.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Copy')!;
+        copy.click();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(writeText).toHaveBeenCalledWith('How do I export?');
+        expect(copy.textContent).toBe('Copied');
 
         await vi.advanceTimersByTimeAsync(30000);
         expect(escalated).toHaveLength(0);
         expect(polled).toHaveLength(0);
+    });
+
+    it('has no Help link in the footer', () => {
+        expect(shadow().querySelector('.footer')!.textContent).not.toMatch(/\bHelp\b/);
     });
 });

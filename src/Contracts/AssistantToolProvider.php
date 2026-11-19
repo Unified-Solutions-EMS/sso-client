@@ -23,7 +23,7 @@ use Unified\SsoClient\Assistant\AssistantTool;
  * that to establish the tenant.
  *
  * Apps that bind nothing answer an empty catalog, which is a normal answer:
- * SSO's own tools, how-do-I answers and the Help handoff still work there.
+ * SSO's own tools, how-do-I answers and Talk to our team still work there.
  */
 interface AssistantToolProvider
 {

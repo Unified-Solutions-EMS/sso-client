@@ -2,7 +2,6 @@ import { ApiError, AssistantApi, type ReviewVerb } from './api';
 import { pendingChoices, renderChoice, setRowBusy, showRowError, stillNeedText } from './choice';
 import { BarAvoidance, SCROLLER_ATTRIBUTE, SCROLLER_PADDING_VAR } from './avoid';
 import { dayLabel, fileSize, h, icons, link, paragraphs, shortUrl, svg, timeLabel } from './dom';
-import { askHelp, hasIntercom, setIntercomHidden } from './intercom';
 import { BusyPoller, DRAFT_NAME_PREFIX, type FailedTurnHandlers, SlowTurnTimer, clearDraftIfSent, draftName, failedTurnError, isBusy, readDraft, renderFailedTurn, saveDraft, showRetryButtons } from './retry';
 import { type LiveConversation, type LiveMessage, type LiveTyping, SupportSocket, liveToMessage } from './realtime';
 import { RatingCard } from './rating';
@@ -12,19 +11,21 @@ import { styles } from './styles';
 import { UPLOAD_COPY, stillReading, waitUntilRead } from './upload';
 import type { Action, BootstrapResponse, CallbackResponse, Conversation, ConversationSummary, Handoff, Intro, Message, MessageAttachment, MessageLink, PlanChange, Rating, Reach, ReviewPlan, ReviewResponse, Suggestion, Support, Tour, TourStep, TurnResponse, WidgetSettings } from './types';
 
+/** Where the handoff points when no team is behind the Assistant. */
+const SUPPORT_EMAIL = 'support@unified-solutions.io';
+
 const COPY = {
     launcher: 'Assistant',
     title: 'Assistant',
-    subtitle: 'Does tasks for you. For questions about how something works, use Help.',
-    intro: "I'm your assistant. Tell me what to do and I'll do it: add people, set up facilities, fill a shift, change a setting. If you want to know how something works, Help is the place to ask.",
+    subtitle: 'Tell me what to do, or ask how something works.',
+    intro: "I'm your assistant. Tell me what to do and I'll do it: add people, set up facilities, fill a shift, change a setting. You can also ask me how something works.",
     placeholder: 'Tell me what to do',
     send: 'Send',
     attach: 'Add a file',
     close: 'Close',
     working: 'Working on it',
-    askHelpInstead: 'Ask Help instead',
-    handoff: "I can't do that one, but Help can take it from here.",
-    askHelp: 'Ask Help',
+    handoff: "I can't do that one, but our team can help.",
+    emailUs: `Email ${SUPPORT_EMAIL}`,
     teamHandoff: "I can't finish this one, but our team can.",
     talkToTeam: 'Talk to our team',
     teamPrompt: 'Tell me what you need and I will pass it to our team.',
@@ -35,7 +36,6 @@ const COPY = {
     resolved: 'Our team marked this resolved.',
     teamTag: 'Unified',
     removeFile: 'Remove',
-    noHelp: 'Open Help from the menu to send this.',
     copy: 'Copy',
     copied: 'Copied',
     undo: 'Undo',
@@ -88,7 +88,7 @@ const COPY = {
  */
 const MEMBER_COPY = {
     subtitle: 'Ask how something works, or talk to our team.',
-    subtitleNoTeam: 'Ask how something works. For anything else, use Help.',
+    subtitleNoTeam: 'Ask how something works in your apps.',
     intro: 'Hi. Ask me how something works in your apps, or tell me what is going on and I will pass it to our team.',
     introNoTeam: 'Hi. Ask me how something works in your apps.',
     placeholder: 'Ask a question',
@@ -221,8 +221,8 @@ function ensureDockStyle(): void {
     const target = `html[${DOCK_ATTRIBUTE}="docked"] [${SCROLLER_ATTRIBUTE}]`;
     const padding = (extra: number): string => `padding-bottom: calc(var(${SCROLLER_PADDING_VAR}, 0px) + ${extra}px) !important;`;
 
-    style.textContent = `${target} { ${padding(150)} }
-@media (max-width: 639px) { ${target} { ${padding(120)} } }`;
+    style.textContent = `${target} { ${padding(90)} }
+@media (max-width: 639px) { ${target} { ${padding(70)} } }`;
     document.head.append(style);
 }
 
@@ -555,7 +555,6 @@ class AssistantWidget {
             this.setOpen(true, false);
         }
 
-        window.addEventListener('pagehide', () => setIntercomHidden(false));
         document.addEventListener('visibilitychange', () => {
             this.reschedulePoll();
             this.seen.check();
@@ -972,7 +971,6 @@ class AssistantWidget {
                     'span',
                     { class: 'footer-links' },
                     h('button', { class: 'link ideas', type: 'button', 'aria-pressed': 'false', onclick: () => this.toggleIdeas() }, COPY.ideas),
-                    h('button', { class: 'link', type: 'button', onclick: () => this.askHelpInstead() }, COPY.askHelpInstead),
                 ),
             ),
             this.fileInput,
@@ -1000,7 +998,7 @@ class AssistantWidget {
         this.root.append(style, this.launcher, this.scrim, this.drawer);
     }
 
-    private setOpen(open: boolean, persist = true, toggleIntercom = true): void {
+    private setOpen(open: boolean, persist = true): void {
         if (open === this.open) {
             return;
         }
@@ -1019,10 +1017,6 @@ class AssistantWidget {
         this.launcher.setAttribute('aria-expanded', open ? 'true' : 'false');
         this.launcher.hidden = open;
         this.syncDock();
-
-        if (toggleIntercom) {
-            setIntercomHidden(open);
-        }
 
         if (this.booted) {
             this.avoidance.setActive(!open);
@@ -1501,37 +1495,22 @@ class AssistantWidget {
             return this.renderTeamHandoff(handoff);
         }
 
-        const card = h('div', { class: 'card' }, h('div', { class: 'card-title' }, COPY.handoff));
-
-        if (hasIntercom()) {
-            card.append(
-                h('div', { class: 'quote' }, handoff.question),
-                h(
-                    'div',
-                    { class: 'row-actions' },
-                    h(
-                        'button',
-                        {
-                            class: 'btn primary',
-                            type: 'button',
-                            onclick: () => this.handOffToHelp(handoff.question),
-                        },
-                        COPY.askHelp,
-                    ),
-                ),
-            );
-        } else {
-            const copyButton = h('button', { class: 'btn secondary sm', type: 'button' }, svg(icons.copy, 14), COPY.copy);
-            copyButton.addEventListener('click', () => {
-                void navigator.clipboard?.writeText(handoff.question).then(() => {
-                    copyButton.replaceChildren(svg(icons.check, 14), COPY.copied);
-                });
+        const copyButton = h('button', { class: 'btn secondary sm', type: 'button' }, svg(icons.copy, 14), COPY.copy);
+        copyButton.addEventListener('click', () => {
+            void navigator.clipboard?.writeText(handoff.question).then(() => {
+                copyButton.replaceChildren(svg(icons.check, 14), COPY.copied);
             });
+        });
 
-            card.append(h('div', { class: 'quote' }, handoff.question), h('div', { class: 'row-actions' }, copyButton, h('span', { class: 'hint' }, COPY.noHelp)));
-        }
+        const email = h('a', { class: 'link email', href: `mailto:${SUPPORT_EMAIL}?body=${encodeURIComponent(handoff.question)}` }, COPY.emailUs);
 
-        return card;
+        return h(
+            'div',
+            { class: 'card' },
+            h('div', { class: 'card-title' }, COPY.handoff),
+            h('div', { class: 'quote' }, handoff.question),
+            h('div', { class: 'row-actions' }, copyButton, email),
+        );
     }
 
     /**
@@ -2666,37 +2645,15 @@ class AssistantWidget {
         return false;
     }
 
-    private askHelpInstead(): void {
-        if (!this.handOffToHelp('')) {
-            this.appendNotice(COPY.noHelp);
-        }
-    }
-
-    /**
-     * Closes the drawer first, then opens Help. askHelp() restores the Intercom
-     * launcher itself and nothing may send Intercom('update') after it: an update
-     * resets the Messenger composer and loses the prefilled question.
-     */
-    private handOffToHelp(question: string): boolean {
-        if (!hasIntercom()) {
-            return false;
-        }
-
-        this.avoidance.hold();
-        this.setOpen(false, true, false);
-
-        return askHelp(question);
-    }
-
     /**
      * While the launchers are showing (widget enabled, drawer closed) the page's
      * scroll container (marked by BarAvoidance; the body only when the body
-     * scrolls) gets bottom padding so its own buttons can scroll above the two
-     * bubbles. The rule is !important because app shells set the container's
+     * scrolls) gets bottom padding so its own buttons can scroll above the
+     * launcher. The rule is !important because app shells set the container's
      * padding inline (safe-area insets); that value is carried in the variable.
-     * The drawer hides the Intercom bubble, so an open drawer needs none; and
-     * when the column has been lifted over a pinned bar the bar already keeps
-     * the bubbles off the content, so the padding is dropped too ("lifted").
+     * The drawer hides the launcher, so an open drawer needs none; and when the
+     * launcher has been lifted over a pinned bar the bar already keeps it off
+     * the content, so the padding is dropped too ("lifted").
      */
     private syncDock(): void {
         const docked = this.booted && !this.open;

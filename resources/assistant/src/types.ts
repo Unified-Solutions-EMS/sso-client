@@ -48,8 +48,8 @@ export interface MessageAttachment {
 }
 
 /**
- * Our team behind the Assistant. `enabled` swaps the handoff card's Ask Help
- * for Talk to our team; `needs_teammate` means a teammate has the
+ * Our team behind the Assistant. `enabled` gives the handoff card Talk to our
+ * team (otherwise it offers Copy and the support email address); `needs_teammate` means a teammate has the
  * conversation and the widget polls for their replies. Absent from an older
  * SSO: no team, and an added file is sent at once as before.
  */

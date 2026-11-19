@@ -1,9 +1,8 @@
-import { intercomSettings, onIntercomHide, updateIntercom } from './intercom';
-
-/** Intercom's default bubble: 60px square, 20px from the corner. */
-const INTERCOM_SIZE = 60;
-const DEFAULT_PADDING = 20;
-/** Space kept between the bubble and the top of a pinned bar. */
+/** The launcher's size and its inset from the bottom-right corner (styles.ts), wide and under 640px. */
+const LAUNCHER = { size: 44, inset: 20 };
+const LAUNCHER_SMALL = { size: 40, inset: 16 };
+const SMALL_QUERY = '(max-width: 639px)';
+/** Space kept between the launcher and the top of a pinned bar. */
 const GAP = 12;
 /** Probe column: from the viewport bottom up to this many px above it. */
 const PROBE_DEPTH = 160;
@@ -16,19 +15,9 @@ const RESIZE_MS = 150;
 const SCROLL_MS = 150;
 const MUTATION_MS = 250;
 
-const INTERCOM_SELECTOR = '#intercom-container, .intercom-lightweight-app, [id^="intercom-"], [class*="intercom-"]';
-
 /** Marks the element the dock padding goes on; `--ua-scroller-padding` carries its own padding. */
 export const SCROLLER_ATTRIBUTE = 'data-unified-assistant-scroller';
 export const SCROLLER_PADDING_VAR = '--ua-scroller-padding';
-
-function isIntercomElement(element: Element): boolean {
-    if (element.closest(INTERCOM_SELECTOR)) {
-        return true;
-    }
-
-    return element instanceof HTMLIFrameElement && element.src.includes('intercom');
-}
 
 function isPinned(element: Element): boolean {
     const position = getComputedStyle(element).position;
@@ -51,29 +40,23 @@ function bodyScrolls(): boolean {
     });
 }
 
+function launcherBox(): { size: number; inset: number } {
+    return window.matchMedia?.(SMALL_QUERY).matches ? LAUNCHER_SMALL : LAUNCHER;
+}
+
 /**
- * Keeps the launcher column (Assistant launcher above the Intercom bubble)
- * clear of bars pinned to the bottom of the viewport: fixed or sticky form
- * action bars, Filament / Livewire footers, modal footers. The page's own
- * bottom padding only helps content that scrolls; a pinned bar needs the
- * column lifted above it.
- *
- * The column moves as one: Intercom gets `vertical_padding` so its bubble
- * sits GAP above the bar, and the launcher (plus the first-run callout above
- * it) follows through `--ua-lift`, set on the host so every child inherits it.
+ * Keeps the launcher clear of bars pinned to the bottom of the viewport: fixed
+ * or sticky form action bars, Filament / Livewire footers, modal footers. The
+ * page's own bottom padding only helps content that scrolls; a pinned bar
+ * needs the launcher lifted above it. The launcher (plus the first-run callout
+ * above it) follows `--ua-lift`, set on the host so every child inherits it.
  */
 export class BarAvoidance {
-    private readonly basePadding: number;
-
-    private padding: number;
-
     private lifted = false;
 
     private scroller: HTMLElement | null = null;
 
     private active = false;
-
-    private held = false;
 
     private timers: Record<'resize' | 'scroll' | 'mutation', number | null> = { resize: null, scroll: null, mutation: null };
 
@@ -82,12 +65,7 @@ export class BarAvoidance {
     constructor(
         private readonly host: HTMLElement,
         private readonly onLift: (lifted: boolean) => void,
-    ) {
-        const settings = intercomSettings();
-        const configured = Number(settings.vertical_padding);
-        this.basePadding = Number.isFinite(configured) && configured >= DEFAULT_PADDING ? configured : DEFAULT_PADDING;
-        this.padding = this.basePadding;
-    }
+    ) {}
 
     start(): void {
         this.active = true;
@@ -102,11 +80,6 @@ export class BarAvoidance {
         });
         this.observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
 
-        onIntercomHide(() => {
-            this.held = false;
-            this.schedule('mutation', MUTATION_MS);
-        });
-
         this.measure();
 
         if (document.readyState !== 'complete') {
@@ -114,7 +87,7 @@ export class BarAvoidance {
         }
     }
 
-    /** The drawer hides the Intercom bubble and the launcher: nothing to lift while it is open. */
+    /** The drawer hides the launcher: nothing to lift while it is open. */
     setActive(active: boolean): void {
         this.active = active;
 
@@ -125,34 +98,26 @@ export class BarAvoidance {
         }
     }
 
-    /**
-     * After the Help handoff the Messenger holds a prefilled question that any
-     * `Intercom('update')` would wipe, so the column stays put until Help closes.
-     */
-    hold(): void {
-        this.held = true;
-        this.cancelAll();
-    }
-
     measure(): void {
-        if (!this.active || this.held) {
+        if (!this.active) {
             return;
         }
 
         const viewportWidth = document.documentElement.clientWidth;
         const viewportHeight = window.innerHeight;
         const barTop = this.findBarTop(viewportWidth, viewportHeight);
-        let padding = this.basePadding;
+        const { inset } = launcherBox();
+        let lift = 0;
 
         if (barTop !== null) {
-            const wanted = Math.max(this.basePadding, Math.round(viewportHeight - barTop + GAP));
+            const bottom = Math.round(viewportHeight - barTop + GAP);
 
-            if (wanted <= viewportHeight * MAX_LIFT_RATIO) {
-                padding = wanted;
+            if (bottom <= viewportHeight * MAX_LIFT_RATIO) {
+                lift = Math.max(0, bottom - inset);
             }
         }
 
-        this.apply(padding);
+        this.apply(lift);
         this.markScroller(viewportWidth, viewportHeight);
     }
 
@@ -186,7 +151,7 @@ export class BarAvoidance {
 
     /**
      * The body when the page scrolls on it. Otherwise the outermost scrolling
-     * ancestor of whatever sits under the bubble column (a pinned toast or bar
+     * ancestor of whatever sits under the launcher (a pinned toast or bar
      * on top of it is skipped; the main area beneath is still in the stack),
      * then a scrolling <main>, then the body as a last resort.
      */
@@ -223,13 +188,7 @@ export class BarAvoidance {
         return main instanceof HTMLElement && isScroller(main) ? main : document.body;
     }
 
-    private apply(padding: number): void {
-        if (padding !== this.padding) {
-            this.padding = padding;
-            updateIntercom({ vertical_padding: padding });
-        }
-
-        const lift = padding - this.basePadding;
+    private apply(lift: number): void {
         this.host.style.setProperty('--ua-lift', `${lift}px`);
 
         const lifted = lift > 0;
@@ -240,13 +199,10 @@ export class BarAvoidance {
         }
     }
 
-    /** The column strip at the Intercom corner, every point inside the viewport. */
+    /** The strip under the launcher's corner, every point inside the viewport. */
     private probePoints(viewportWidth: number, viewportHeight: number): Array<[number, number]> {
-        const settings = intercomSettings();
-        const horizontal = Number(settings.horizontal_padding);
-        const inset = Number.isFinite(horizontal) && horizontal >= 0 ? horizontal : DEFAULT_PADDING;
-        const fromLeft = settings.alignment === 'left';
-        const xs = [inset, inset + INTERCOM_SIZE / 2, inset + INTERCOM_SIZE].map((offset) => (fromLeft ? offset : viewportWidth - offset));
+        const { size, inset } = launcherBox();
+        const xs = [inset, inset + size / 2, inset + size].map((offset) => viewportWidth - offset);
         const points: Array<[number, number]> = [];
 
         for (const x of xs) {
@@ -322,18 +278,18 @@ export class BarAvoidance {
         return null;
     }
 
-    /** A change to the page itself, not to our host or Intercom's containers. */
+    /** A change to the page itself, not to our host. */
     private isForeignMutation(record: MutationRecord): boolean {
         if (record.type === 'childList') {
             const nodes = [...record.addedNodes, ...record.removedNodes];
 
-            return nodes.some((node) => node instanceof Element && node !== this.host && !isIntercomElement(node)) || this.isForeign(record.target);
+            return nodes.some((node) => node instanceof Element && node !== this.host) || this.isForeign(record.target);
         }
 
         return this.isForeign(record.target);
     }
 
-    /** Not ours, not Intercom's, not the document itself. */
+    /** Not ours, not the document itself. */
     private isForeign(node: Node): boolean {
         const element = node instanceof Element ? node : node.parentElement;
 
@@ -341,15 +297,11 @@ export class BarAvoidance {
             return false;
         }
 
-        if (element === this.host || this.host.contains(element)) {
-            return false;
-        }
-
-        return !isIntercomElement(element);
+        return element !== this.host && !this.host.contains(element);
     }
 
     private schedule(kind: 'resize' | 'scroll' | 'mutation', delay: number): void {
-        if (!this.active || this.held) {
+        if (!this.active) {
             return;
         }
 

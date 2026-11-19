@@ -120,7 +120,7 @@ describe('widget: our team behind the Assistant', () => {
 
         const card = shadow().querySelector('.card')!;
         expect(card.textContent).toContain("I can't finish this one, but our team can.");
-        expect(card.textContent).not.toContain('Ask Help');
+        expect(card.textContent).not.toContain('support@unified-solutions.io');
 
         vi.useFakeTimers();
         replies.escalate.push({

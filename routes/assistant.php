@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 use Unified\SsoClient\Assistant\Http\AssistantProxyController;
 use Unified\SsoClient\Assistant\Http\AssistantToolsController;
 use Unified\SsoClient\Assistant\Http\AssistantWidgetController;
+use Unified\SsoClient\Assistant\Http\AuthenticateAssistant;
 use Unified\SsoClient\Middleware\ValidateCoreApiKey;
 
 // Tool catalog + execute: SSO calls these with CORE_APP_API_KEY while the
@@ -30,7 +31,14 @@ if (config('sso.assistant.enabled', true)) {
     // Same-origin proxy for the widget. SSO hosts the service itself and
     // serves these paths from its own controllers (assistant.proxy = false).
     if (config('sso.assistant.proxy', true)) {
-        Route::middleware(config('sso.assistant.middleware', ['web', 'auth']))
+        // `auth` becomes AuthenticateAssistant: the same for a signed-in user,
+        // and lets a website visitor through when sso.assistant.visitor is on.
+        $middleware = array_map(
+            fn (mixed $entry): mixed => $entry === 'auth' ? AuthenticateAssistant::class : $entry,
+            (array) config('sso.assistant.middleware', ['web', 'auth']),
+        );
+
+        Route::middleware($middleware)
             ->prefix($base)
             ->group(function (): void {
                 Route::get('bootstrap', [AssistantProxyController::class, 'bootstrap'])->name('sso.assistant.bootstrap');

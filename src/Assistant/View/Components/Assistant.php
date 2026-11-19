@@ -7,10 +7,12 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\View\View;
 use Illuminate\View\Component;
 use Unified\SsoClient\Assistant\AssistantBundle;
+use Unified\SsoClient\Assistant\AssistantVisitor;
 
 /**
  * <x-unified-assistant /> mounts the assistant drawer. Renders nothing when
- * the feature is off or nobody is signed in; whether this user gets the
+ * the feature is off or nobody is signed in, except on the public website
+ * (sso.assistant.visitor), where a guest gets it with `visitor: true`; whether this user gets the
  * launcher at all (admin for the company, SSO decides) is settled by the
  * bootstrap call the script makes.
  */
@@ -27,7 +29,13 @@ class Assistant extends Component
 
     public function render(): View|string
     {
-        if (! $this->config->get('sso.assistant.enabled', true) || ! $this->auth->guard()->check()) {
+        if (! $this->config->get('sso.assistant.enabled', true)) {
+            return '';
+        }
+
+        $visitor = ! $this->auth->guard()->check();
+
+        if ($visitor && ! AssistantVisitor::enabled()) {
             return '';
         }
 
@@ -51,6 +59,10 @@ class Assistant extends Component
             'escalate_message' => true,
             'csrf' => csrf_token(),
         ];
+
+        if ($visitor) {
+            $settings['visitor'] = true;
+        }
 
         if ($this->setupApp !== null && $this->setupApp !== '') {
             $settings['setup_app'] = $this->setupApp;

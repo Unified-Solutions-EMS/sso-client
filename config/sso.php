@@ -355,6 +355,10 @@ return [
     | tool_provider  FQCN implementing Contracts\AssistantToolProvider, or
     |                bind the interface in AppServiceProvider instead
     | path           URL prefix for the widget bundle and proxy routes
+    | visitor        public website only (ASSISTANT_VISITOR_MODE): the drawer
+    |                also renders for guests, who are identified by an
+    |                anonymous id kept in the encrypted `unified_visitor`
+    |                cookie and limited to 60 proxy requests a minute per IP
     |
     | The local user and company rows are found through the same model
     | classes and sso id columns Metrics uses (config/metrics.php).
@@ -369,6 +373,7 @@ return [
         'timeout' => (int) env('SSO_ASSISTANT_TIMEOUT', 120),
         'tool_provider' => null,
         'path' => '/assistant',
+        'visitor' => (bool) env('ASSISTANT_VISITOR_MODE', false),
     ],
 
     /*

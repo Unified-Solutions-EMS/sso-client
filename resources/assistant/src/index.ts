@@ -95,6 +95,18 @@ const MEMBER_COPY = {
 };
 
 /**
+ * The words for a visitor on the public website (component `visitor: true` or
+ * SSO's `reach: visitor`): product, pricing and test drive questions, never
+ * "does tasks for you".
+ */
+const VISITOR_COPY = {
+    title: 'Unified Assistant',
+    subtitle: 'Ask about our products, pricing, or a test drive.',
+    intro: 'Hi. Ask me about our products, pricing, or a test drive, or talk to our team.',
+    placeholder: 'Ask a question',
+};
+
+/**
  * An Assistant-only conversation is offered the rating card once the person
  * has done nothing for this long after a reply.
  */
@@ -323,6 +335,8 @@ class AssistantWidget {
 
     private subtitleEl!: HTMLElement;
 
+    private titleEl!: HTMLElement;
+
     /** SSO's AssistantReach for this person; null from an older SSO (the admin drawer). */
     private reach: Reach | null = null;
 
@@ -360,6 +374,9 @@ class AssistantWidget {
     private booted = false;
 
     private setupApp: string | null;
+
+    /** The component rendered the drawer for a guest on the public website. */
+    private visitorPage = false;
 
     private waitingRow: HTMLElement | null = null;
 
@@ -470,6 +487,7 @@ class AssistantWidget {
     constructor(settings: SettingsWithContext) {
         this.api = new AssistantApi(settings);
         this.setupApp = settings.setup_app ?? null;
+        this.visitorPage = settings.visitor === true;
         this.host = document.createElement('unified-assistant');
         this.root = this.host.attachShadow({ mode: 'open' });
         this.syncTheme();
@@ -914,11 +932,12 @@ class AssistantWidget {
         );
 
         this.subtitleEl = h('div', { class: 'subtitle' }, COPY.subtitle);
+        this.titleEl = h('span', {}, COPY.title);
 
         const header = h(
             'header',
             { class: 'header' },
-            h('div', { class: 'title-wrap' }, h('h2', { id: 'ua-title' }, svg(icons.sparkles, 16), COPY.title), this.subtitleEl),
+            h('div', { class: 'title-wrap' }, h('h2', { id: 'ua-title' }, svg(icons.sparkles, 16), this.titleEl), this.subtitleEl),
             this.historyButton,
             h('button', { class: 'icon-btn', type: 'button', 'aria-label': COPY.close, onclick: () => this.setOpen(false) }, svg(icons.close)),
         );
@@ -1053,7 +1072,7 @@ class AssistantWidget {
             this.list.append(this.renderTurn(message));
         }
 
-        if (this.pendingReview && !this.messages.some((m) => m.review?.id === this.pendingReview?.id)) {
+        if (this.pendingReview && !this.visitor() && !this.messages.some((m) => m.review?.id === this.pendingReview?.id)) {
             this.list.append(h('div', { class: 'turn assistant' }, this.renderReview(this.pendingReview)));
         }
 
@@ -1302,7 +1321,21 @@ class AssistantWidget {
         return this.reach === 'none';
     }
 
+    /** An anonymous visitor on the public website: no review, no undo, no setup app. */
+    private visitor(): boolean {
+        return this.visitorPage || this.reach === 'visitor';
+    }
+
+    /** A visitor never has a setup page open. */
+    private activeSetupApp(): string | null {
+        return this.visitor() ? null : this.setupApp;
+    }
+
     private copyFor(key: 'subtitle' | 'intro' | 'placeholder'): string {
+        if (this.visitor()) {
+            return VISITOR_COPY[key];
+        }
+
         if (!this.memberOnly()) {
             return COPY[key];
         }
@@ -1318,6 +1351,7 @@ class AssistantWidget {
 
     /** Header, composer and the file button follow the person's reach. */
     private applyReach(): void {
+        this.titleEl.textContent = this.visitor() ? VISITOR_COPY.title : COPY.title;
         this.subtitleEl.textContent = this.copyFor('subtitle');
         this.input.placeholder = this.copyFor('placeholder');
         this.input.setAttribute('aria-label', this.copyFor('placeholder'));
@@ -1330,7 +1364,7 @@ class AssistantWidget {
      * only once our team has the conversation.
      */
     private syncAttach(): void {
-        const admin = this.reach === null || this.reach === 'full';
+        const admin = this.reach === null || this.reach === 'full' || this.visitor();
         const withTeam = this.support?.enabled === true && this.support.status === 'needs_teammate';
 
         this.attachButton.hidden = !(admin || withTeam);
@@ -1373,7 +1407,7 @@ class AssistantWidget {
             turn.append(h('div', { class: 'chips' }, ...actions.map((action) => this.renderChip(action))));
         }
 
-        if (message.review) {
+        if (message.review && !this.visitor()) {
             turn.append(this.renderReview(message.review));
         }
 
@@ -1431,7 +1465,7 @@ class AssistantWidget {
 
         if (undone) {
             chip.append(h('span', { class: 'status' }, COPY.undone));
-        } else if (action.undoable) {
+        } else if (action.undoable && !this.visitor()) {
             const button = h('button', { class: 'btn ghost sm', type: 'button' }, COPY.undo);
             button.addEventListener('click', () => void this.undo(action, chip, button));
             chip.append(button);
@@ -1759,7 +1793,7 @@ class AssistantWidget {
         this.slowTimer.start((label) => this.setWaitingLabel(label));
 
         try {
-            const turn = await this.api.send(text, this.setupApp, this.conversation?.id ?? null, files.map((file) => file.id));
+            const turn = await this.api.send(text, this.activeSetupApp(), this.conversation?.id ?? null, files.map((file) => file.id));
             const failure = failedTurnError(turn);
 
             if (failure !== null) {
@@ -2558,7 +2592,7 @@ class AssistantWidget {
         this.setBusy(true, COPY.uploading);
 
         try {
-            const result = await this.api.upload(file, this.setupApp);
+            const result = await this.api.upload(file, this.activeSetupApp());
 
             if (result.ok === false || result.error) {
                 throw new ApiError(200, result.error || 'That file did not go through.');

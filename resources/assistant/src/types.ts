@@ -30,6 +30,8 @@ export interface WidgetSettings {
     callback?: string | null;
     /** POST: read receipts for our team's replies. Absent from an older component: none are sent. */
     seen?: string | null;
+    /** The public website's drawer for a guest (sso.assistant.visitor). Absent: a signed-in member. */
+    visitor?: boolean | null;
     csrf: string | null;
 }
 
@@ -223,9 +225,10 @@ export interface Suggestion {
  * `full` for an agency administrator or staff, `apps` for an administrator
  * inside some apps only, `none` for every other member of the agency (how-do-I
  * questions and Talk to our team, nothing changed for them). Absent from an
- * older SSO: treated as `full`, the drawer as before.
+ * older SSO: treated as `full`, the drawer as before. `visitor` is an anonymous
+ * person on the public website (sales questions, a test drive, our team).
  */
-export type Reach = 'full' | 'apps' | 'none';
+export type Reach = 'full' | 'apps' | 'none' | 'visitor';
 
 /**
  * First-run callout above the launcher. SSO sends show=true on every login

@@ -663,9 +663,31 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      `POST /assistant/seen` (throttle 60/min, forwards `conversation_id` + `last_message_id` with the stamped
      identity; SSO ignores receipts while impersonating) and component setting `seen`; an older component sends
      neither and the widget sends no receipts. Tests: `seen.test.ts`, `widget-seen.test.ts`, `AssistantProxyTest`.
+     **Website visitors (2026-11-19, James: "get it installed on the public website; those users will not be
+     logged in"; contract `VISITOR-CONTRACT.md`, SSO / Public_Website / CRM on `feature/visitor-assistant`).**
+     `sso.assistant.visitor` (env `ASSISTANT_VISITOR_MODE`, default false; only Public_Website turns it on).
+     With it on, `<x-unified-assistant />` also renders for a guest and adds `"visitor": true` to the settings,
+     and the proxy stamps a guest as `{visitor_id, app_slug, impersonating: false}` (no `sso_user_id` /
+     `sso_company_id`). `visitor_id` is a UUID v4 from the cookie `unified_visitor` (`AssistantVisitor::COOKIE`),
+     encrypted by the web group's EncryptCookies; missing or not a UUID → a new one is minted and queued for one
+     year (HttpOnly, SameSite=Lax). Never read from the body. The proxy group's `auth` is swapped for
+     `AuthenticateAssistant`: a signed-in user passes as before (same identity, same 204 without a selected
+     company); a guest passes only in visitor mode, at most 60 requests a minute per IP (429 after); with
+     visitor mode off a guest goes through Laravel's own `auth` exactly as before. Uploads work for visitors
+     with the same 20 MB limit. The widget switches when the settings say `visitor` or SSO's bootstrap says
+     `reach: 'visitor'`: title "Unified Assistant", subtitle "Ask about our products, pricing, or a test
+     drive.", intro bubble "Hi. Ask me about our products, pricing, or a test drive, or talk to our team.",
+     placeholder "Ask a question", file button shown, no review cards, no Undo on action chips (the chip and
+     its summary still show), no `setup_app` on turns or uploads; Conversations, suggestions, Talk to our
+     team, rating, realtime and SSO's `intro` callout work as for members. SSO should send its "Talk to
+     someone on your team" pill as `kind: 'team'` so the widget does not add a second team pill. Tool calls:
+     SSO sends `visitor_id` instead of `sso_user_id` / `sso_company_id`; see Visitor actors under item 3.
+     Verified headless at 1280 and 390 against a mocked proxy. Tests: `AssistantVisitorTest`,
+     `widget-visitor.test.ts`, `widget-visitor-reach.test.ts`.
   2. **The same-origin proxy** `/assistant/{bootstrap, messages, escalate, updates, seen, uploads, uploads/{id}, actions/{id}/undo,
      review/{plan}/{approve|remove|choose|set-aside}, intro/dismiss, feedback, feedback/{id}/follow-up, DELETE conversation}` under `sso.assistant.middleware`
-     (`['web','auth']`), registered only when `assistant.enabled && assistant.proxy`. It forwards to
+     (`['web','auth']`, with `auth` swapped for `AuthenticateAssistant`, which lets website visitors through
+     in visitor mode), registered only when `assistant.enabled && assistant.proxy`. It forwards to
      `SSO_BASE_URL/api/internal/assistant/{conversation, turn, escalate, updates, seen, uploads, uploads/{id}, actions/…, review/…, intro/dismiss, feedback, feedback/{id}/follow-up}` with
      `Http::withToken(config('app.core_api_key'))` and stamps `sso_user_id` (auth user's `sso_id`),
      `sso_company_id` (`session('selected_company_id')` → `companies.sso_company_id`), `app_slug`
@@ -700,6 +722,16 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
        whose login establishes the tenant differently). Company or user missing locally → empty catalog /
        404 on execute; user present but **not a member** → 404 + `SecurityEvents::warning('assistant.tool_denied')`.
        `HasCompanyScope` therefore works inside tools exactly as it does for the signed-in UI.
+     - **Visitor actors (public website):** `GET tools?visitor_id=` / `POST tools/{name} {visitor_id, args}`
+       (`visitor_id` a UUID, `required_without:sso_user_id`; the sso ids become `required_without:visitor_id`)
+       build `AssistantActor::visitor($id)`: `isVisitor()` true, `visitorId` set, `user`, `company`,
+       `ssoUserId`, `ssoCompanyId` null, `impersonating` false. Nobody is signed in, no
+       `selected_company_id` is set and the provider's `prepare()` is not called. Only tools implementing
+       `Assistant\VisitorAssistantTool` (marker interface extending `AssistantTool`) are listed for a visitor;
+       calling any other tool as a visitor answers `failed('Sign in to do that.')` without running it, so
+       app tools that read `$actor->user` are safe. With `sso.assistant.visitor` off in the app, a visitor
+       gets an empty catalog and a 404 on execute. A provider's `tools()` receives the visitor actor, so a
+       provider in visitor mode must not assume `$actor->user` there.
      - **`AssistantTool`:** `name()` (snake_case, unique in the app), `definition()` (`{description,
        parameters}` JSON Schema, same shape as ai-core `Tool::definition()`; description written for the
        model: what it does, needs, returns; fixed lists as `enum`), `kind()` (`AssistantTool::READ|WRITE`),

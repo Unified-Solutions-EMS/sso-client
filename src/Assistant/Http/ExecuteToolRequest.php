@@ -23,8 +23,9 @@ class ExecuteToolRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'sso_user_id' => ['required', 'integer'],
-            'sso_company_id' => ['required', 'integer'],
+            'sso_user_id' => ['required_without:visitor_id', 'integer'],
+            'sso_company_id' => ['required_without:visitor_id', 'integer'],
+            'visitor_id' => ['required_without:sso_user_id', 'uuid'],
             'impersonating' => ['sometimes', 'boolean'],
             'args' => ['sometimes', 'array'],
         ];

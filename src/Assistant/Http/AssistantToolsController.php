@@ -10,14 +10,18 @@ use Unified\SsoClient\Assistant\AssistantActor;
 use Unified\SsoClient\Assistant\AssistantActorResolver;
 use Unified\SsoClient\Assistant\AssistantTool;
 use Unified\SsoClient\Assistant\AssistantToolResult;
+use Unified\SsoClient\Assistant\AssistantVisitor;
 use Unified\SsoClient\Assistant\HiddenAssistantTool;
 use Unified\SsoClient\Assistant\NotAMemberException;
+use Unified\SsoClient\Assistant\VisitorAssistantTool;
 use Unified\SsoClient\Contracts\AssistantToolProvider;
 
 /**
  * SSO's view of this app's assistant tools. Both routes run behind
  * CORE_APP_API_KEY with no session user; the actor comes from the sso ids
- * SSO sends, never from a cookie.
+ * SSO sends, never from a cookie. On the public website (sso.assistant.visitor)
+ * SSO may send `visitor_id` instead: the actor is then a visitor, nobody is
+ * signed in, and only VisitorAssistantTool tools are listed or run.
  */
 class AssistantToolsController extends Controller
 {
@@ -26,8 +30,9 @@ class AssistantToolsController extends Controller
     public function index(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'sso_user_id' => ['required', 'integer'],
-            'sso_company_id' => ['required', 'integer'],
+            'sso_user_id' => ['required_without:visitor_id', 'integer'],
+            'sso_company_id' => ['required_without:visitor_id', 'integer'],
+            'visitor_id' => ['required_without:sso_user_id', 'uuid'],
             'impersonating' => ['sometimes', 'boolean'],
             'include_hidden' => ['sometimes', 'boolean'],
         ]);
@@ -38,21 +43,29 @@ class AssistantToolsController extends Controller
             return $this->catalog([]);
         }
 
-        try {
-            $actor = $this->resolver->resolve(
-                (int) $validated['sso_user_id'],
-                (int) $validated['sso_company_id'],
-                (bool) ($validated['impersonating'] ?? false),
-            );
-        } catch (NotAMemberException) {
-            return $this->notAMember();
-        }
+        if (isset($validated['visitor_id'])) {
+            if (! AssistantVisitor::enabled()) {
+                return $this->catalog([]);
+            }
 
-        if ($actor === null) {
-            return $this->catalog([]);
-        }
+            $actor = AssistantActor::visitor(strtolower((string) $validated['visitor_id']));
+        } else {
+            try {
+                $actor = $this->resolver->resolve(
+                    (int) $validated['sso_user_id'],
+                    (int) $validated['sso_company_id'],
+                    (bool) ($validated['impersonating'] ?? false),
+                );
+            } catch (NotAMemberException) {
+                return $this->notAMember();
+            }
 
-        $this->resolver->prepare($actor, $provider);
+            if ($actor === null) {
+                return $this->catalog([]);
+            }
+
+            $this->resolver->prepare($actor, $provider);
+        }
 
         $includeHidden = (bool) ($validated['include_hidden'] ?? false);
 
@@ -60,6 +73,10 @@ class AssistantToolsController extends Controller
 
         foreach ($provider->tools($actor) as $tool) {
             if ($tool instanceof HiddenAssistantTool && ! $includeHidden) {
+                continue;
+            }
+
+            if ($actor->isVisitor() && ! $tool instanceof VisitorAssistantTool) {
                 continue;
             }
 
@@ -81,26 +98,39 @@ class AssistantToolsController extends Controller
             return $this->unknownTool();
         }
 
-        try {
-            $actor = $this->resolver->resolve(
-                (int) $request->integer('sso_user_id'),
-                (int) $request->integer('sso_company_id'),
-                $request->boolean('impersonating'),
-            );
-        } catch (NotAMemberException) {
-            return $this->notAMember();
-        }
+        if ($request->filled('visitor_id')) {
+            if (! AssistantVisitor::enabled()) {
+                return $this->notAMember();
+            }
 
-        if ($actor === null) {
-            return $this->notAMember();
-        }
+            // Nobody is signed in and no company is selected for a visitor.
+            $actor = AssistantActor::visitor(strtolower((string) $request->string('visitor_id')));
+        } else {
+            try {
+                $actor = $this->resolver->resolve(
+                    (int) $request->integer('sso_user_id'),
+                    (int) $request->integer('sso_company_id'),
+                    $request->boolean('impersonating'),
+                );
+            } catch (NotAMemberException) {
+                return $this->notAMember();
+            }
 
-        $this->resolver->prepare($actor, $provider);
+            if ($actor === null) {
+                return $this->notAMember();
+            }
+
+            $this->resolver->prepare($actor, $provider);
+        }
 
         $tool = $this->findTool($provider, $actor, $name);
 
         if ($tool === null) {
             return $this->unknownTool();
+        }
+
+        if ($actor->isVisitor() && ! $tool instanceof VisitorAssistantTool) {
+            return response()->json(AssistantToolResult::failed('Sign in to do that.')->toArray());
         }
 
         try {
@@ -110,6 +140,7 @@ class AssistantToolsController extends Controller
                 'app' => config('sso.app_slug'),
                 'tool' => $name,
                 'sso_company_id' => $actor->ssoCompanyId,
+                'visitor' => $actor->isVisitor(),
                 'error' => $e->getMessage(),
             ]);
 

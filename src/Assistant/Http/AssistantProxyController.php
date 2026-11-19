@@ -11,6 +11,7 @@ use Illuminate\Http\Response;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Unified\SsoClient\Assistant\AssistantVisitor;
 
 /**
  * Same-origin face of the assistant for the widget. Every request is
@@ -18,6 +19,9 @@ use Illuminate\Support\Facades\Log;
  * identity stamped from this app's session: the signed-in user's sso_id,
  * the selected company's sso_company_id, this app's slug and whether staff
  * are impersonating. Nothing identifying is ever read from the request body.
+ * On the public website (sso.assistant.visitor) a guest is stamped as a
+ * visitor instead: the anonymous id from the encrypted `unified_visitor`
+ * cookie, minted on the first request.
  *
  * SSO itself turns these routes off (sso.assistant.proxy = false) and serves
  * the same paths in-process.
@@ -306,11 +310,20 @@ class AssistantProxyController extends Controller
      * Null when this session cannot be vouched for: the widget then stays
      * hidden (204).
      *
-     * @return array{sso_user_id: int, sso_company_id: int, app_slug: string, impersonating: bool}|null
+     * @return array{sso_user_id: int, sso_company_id: int, app_slug: string, impersonating: bool}|array{visitor_id: string, app_slug: string, impersonating: false}|null
      */
     private function identity(Request $request): ?array
     {
         $user = $request->user();
+
+        if ($user === null && AssistantVisitor::enabled()) {
+            return [
+                'visitor_id' => AssistantVisitor::id($request),
+                'app_slug' => (string) config('sso.app_slug'),
+                'impersonating' => false,
+            ];
+        }
+
         $ssoUserId = $user?->getAttribute((string) config('metrics.user_sso_id_column', 'sso_id'));
         $companyId = $request->session()->get('selected_company_id');
 

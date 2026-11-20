@@ -41,6 +41,13 @@ abstract class CatalogMirror implements EntityMirror
      */
     public const LINK_PENDING_COLUMN = 'sso_link_pending';
 
+    /**
+     * Tries for one delivered row before the webhook fails. A deadlock rolls
+     * the row back whole and MySQL asks for the transaction to be run again;
+     * the row is idempotent, so running it again is safe (UNI-1668).
+     */
+    public const DELIVERY_ATTEMPTS = 5;
+
     public function __construct(
         protected readonly LocalTenantResolver $tenants,
         protected readonly MasterDataClient $client,
@@ -439,7 +446,7 @@ abstract class CatalogMirror implements EntityMirror
      */
     protected function applyUpsertWebhook(string $event, int $localCompanyId, array $record): array
     {
-        $result = $this->upsert($localCompanyId, $record, delivery: true);
+        $result = $this->upsertDelivery($localCompanyId, $record);
 
         if ($result === 'stale') {
             Log::info("SSO master data: stale {$this->recordKey()} delivery ignored", [
@@ -460,7 +467,9 @@ abstract class CatalogMirror implements EntityMirror
      * push, "Add from state list") as one event per 200 rows instead of an
      * event per row per app. Each row is upserted like a delivery (the stale
      * and pending guards apply, child rows follow their parent) and nothing
-     * is turned off, because a batch lists only the rows that changed.
+     * is turned off, because a batch lists only the rows that changed. Each
+     * row commits on its own, so a failure part way leaves every row either
+     * written whole or not at all, and SSO resending the batch finishes it.
      *
      * @param  array<int|string, mixed>  $records
      * @return array{status: string, counts: array<string, int>}
@@ -470,11 +479,24 @@ abstract class CatalogMirror implements EntityMirror
         $counts = ['created' => 0, 'updated' => 0, 'linked' => 0, 'unchanged' => 0, 'stale' => 0, 'pending' => 0];
 
         foreach ($this->snapshotRecords([$this->entity() => array_values($records)]) as $record) {
-            $result = $this->upsert($localCompanyId, $record, delivery: true);
+            $result = $this->upsertDelivery($localCompanyId, $record);
             $counts[$result] = ($counts[$result] ?? 0) + 1;
         }
 
         return ['status' => 'ok', 'counts' => $counts];
+    }
+
+    /**
+     * A delivered row and what the mirror writes beside it (phones, child
+     * rows) in one transaction, run again on a deadlock. Without it a row
+     * whose child write deadlocked stayed inserted with no children, and the
+     * next delivery found it unchanged and never wrote them.
+     *
+     * @param  array<string, mixed>  $record
+     */
+    protected function upsertDelivery(int $localCompanyId, array $record): string
+    {
+        return DB::transaction(fn (): string => $this->upsert($localCompanyId, $record, delivery: true), self::DELIVERY_ATTEMPTS);
     }
 
     /**
@@ -507,7 +529,7 @@ abstract class CatalogMirror implements EntityMirror
         $linkedMap = $this->linkedMap($localCompanyId);
         foreach ($records as $record) {
             if (! isset($linkedMap[(int) $record['id']])) {
-                $this->upsert($localCompanyId, $record, delivery: true);
+                $this->upsertDelivery($localCompanyId, $record);
             }
         }
 

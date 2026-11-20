@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Unified\SsoClient\MasterData;
 
 use Illuminate\Support\Facades\Log;
+use Unified\SsoClient\MasterData\Support\MirrorApplyLock;
 
 /**
  * Routes master-data webhook events (qualification.*, user.qualifications_changed,
@@ -19,12 +20,16 @@ use Illuminate\Support\Facades\Log;
  * heals anything skipped here. An event that finishes a push (a code list's
  * `review_completed`) is applied while the entity is still off: the push runs
  * before the flag is turned on.
+ *
+ * Deliveries for one company and entity are applied one at a time
+ * (MirrorApplyLock): SSO sends a bulk change as several batches at once.
  */
 class MasterDataWebhookHandler
 {
     public function __construct(
         private readonly MasterDataRegistry $registry,
         private readonly LocalTenantResolver $tenants,
+        private readonly MirrorApplyLock $lock,
     ) {}
 
     /**
@@ -61,6 +66,6 @@ class MasterDataWebhookHandler
             return ['status' => 'skipped', 'action' => $event, 'reason' => 'company_not_found'];
         }
 
-        return ['action' => $event] + $mirror->applyWebhook($event, $localCompanyId, $payload);
+        return ['action' => $event] + $this->lock->run($entity, $localCompanyId, fn (): array => $mirror->applyWebhook($event, $localCompanyId, $payload));
     }
 }

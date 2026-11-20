@@ -867,6 +867,24 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   or review, and every other 4xx/5xx, still fails and reports as before.
   Every mirror write is query-builder SQL pinned to the local company resolved from the
   authoritative SSO company id (§4a); rows SSO deleted or dropped are deactivated, never deleted.
+  **Deliveries for one company and entity are applied one at a time, and each row is retried on a
+  deadlock (UNI-1668).** SSO's queue POSTs a bulk change's `{entity}.batch_updated` events (200 rows
+  each) in parallel, and a facility import is followed seconds later by a second wave announcing the
+  resolved state codes. On 2026-11-20 CloudPCR applied eight such batches for one company at once; its
+  phone write (delete then insert, one transaction) took the same gap lock for every new entry, the
+  inserts deadlocked, five deliveries answered 500 and SSO never resends a 5xx, so the agency had 440 of
+  618 facilities until a manual resync. `MasterDataWebhookHandler` now runs `applyWebhook()` inside
+  `Support\MirrorApplyLock` (`Cache::lock("sso-master-data-apply:{entity}:{local company}")` in
+  `sso.coordination_store`, waits `sso.master_data.apply_lock_wait_seconds` (20, under SSO's 30 s
+  timeout), TTL `apply_lock_ttl_seconds` (120)). It **fails open**: a lock still held after the wait, or
+  a cache that cannot be reached, lets the delivery run unserialized with a log line. And
+  `CatalogMirror::upsertDelivery()` (used by `applyBatch()`, `applyUpsertWebhook()` and
+  `fetchMissingCatalogRows()`, so every catalog and projected mirror) writes each delivered row and its
+  projection's `written()` children in one `DB::transaction(..., CatalogMirror::DELIVERY_ATTEMPTS)` (5),
+  which reruns the row on a deadlock or lock wait timeout. A row is now written whole or not at all:
+  before, a row whose child write failed stayed inserted without its phones and every later delivery
+  found it `unchanged`, so only a resync wrote them. Personnel's webhook path is not wrapped yet (it
+  takes the lock, not the per-row retry). Test: `FacilityBatchConcurrencyTest`.
   **Child rows SSO removes are never hard-deleted unless the table says so** (`Support\ChildRowPolicy`).
   A child-table definition (`PersonnelChildTable`, `VehicleChildTable`) implements
   `Support\DeclaresChildRowPolicy::onRemoved()` to choose: `unlink()` (clear the SSO child id, stamp

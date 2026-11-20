@@ -327,6 +327,13 @@ return [
         // Seconds for the resync fetch and the push import. SSO's import fans
         // out per user synchronously, far beyond the 10 s login timeout.
         'timeout' => env('SSO_MASTER_DATA_TIMEOUT', 120),
+
+        // Webhook deliveries for one company and entity run one at a time
+        // (MirrorApplyLock, in the coordination store). A delivery waits this
+        // long for the one ahead of it, then runs anyway: SSO gives up on an
+        // answer after 30 s. The lock expires on its own after the TTL.
+        'apply_lock_wait_seconds' => env('SSO_MASTER_DATA_APPLY_LOCK_WAIT', 20),
+        'apply_lock_ttl_seconds' => env('SSO_MASTER_DATA_APPLY_LOCK_TTL', 120),
     ],
 
     /*

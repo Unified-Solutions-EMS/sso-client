@@ -9,7 +9,7 @@ use Unified\SsoClient\MasterData\Support\StandardRecordProjection;
 /**
  * The default projection: the package-owned `sso_agency_profiles` read
  * model, one row per company, children (service areas, yearly statistics,
- * custom values) kept as JSON text on the row.
+ * custom values, state licenses) kept as JSON text on the row.
  */
 class StandardAgencyProjection extends StandardRecordProjection implements AgencyProjection
 {
@@ -61,6 +61,7 @@ class StandardAgencyProjection extends StandardRecordProjection implements Agenc
             'service_areas' => 'service_areas',
             'year_stats' => 'year_stats',
             'custom_values' => 'custom_values',
+            'licenses' => 'licenses',
         ];
     }
 
@@ -71,6 +72,6 @@ class StandardAgencyProjection extends StandardRecordProjection implements Agenc
 
     protected function jsonColumns(): array
     {
-        return ['other_service_types', 'address', 'mailing', 'service_areas', 'year_stats', 'custom_values'];
+        return ['other_service_types', 'address', 'mailing', 'service_areas', 'year_stats', 'custom_values', 'licenses'];
     }
 }

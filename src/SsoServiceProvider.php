@@ -189,7 +189,10 @@ class SsoServiceProvider extends ServiceProvider
         ], 'sso-master-data-personnel');
 
         foreach ([
-            'agency' => '2026_10_14_100000_create_or_extend_agency_mirror.php',
+            'agency' => [
+                '2026_10_14_100000_create_or_extend_agency_mirror.php',
+                '2026_11_13_100000_add_licenses_to_agency_mirror.php',
+            ],
             'contacts' => '2026_10_14_100100_create_or_extend_contacts_mirror.php',
             'devices' => '2026_10_14_100200_create_or_extend_devices_mirror.php',
             'state-configurations' => '2026_10_14_100300_create_or_extend_state_configurations_mirror.php',

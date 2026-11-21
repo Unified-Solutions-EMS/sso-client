@@ -156,12 +156,28 @@ export interface MessageLink {
     url: string;
 }
 
+/**
+ * The question under an automated update ("Is it working for you now?") and
+ * its answer, given once. Any other state reads as answered: no buttons.
+ */
+export interface Confirm {
+    state: 'pending' | 'fixed' | 'not_fixed' | string;
+    answered_at?: string | null;
+}
+
 export interface Message {
     id: number | string;
     role: 'user' | 'assistant' | 'staff' | 'system';
     content: string;
     /** A teammate's name (role staff). */
     author?: string | null;
+    /**
+     * `automated`: an update sent for our team (role staff) telling the person
+     * a fix shipped. Missing, null or anything else: an ordinary message.
+     */
+    kind?: 'automated' | string | null;
+    /** The automated update's question. Missing or null: none is asked. */
+    confirm?: Confirm | null;
     /** The CRM's id for a teammate's reply, so one heard live and the same one polled later render once. */
     crm_message_id?: number | null;
     /** Heard on the socket and not yet confirmed by a poll: never counts toward the poll's `after`. */
@@ -355,11 +371,18 @@ export interface UploadStatusResponse {
     error?: string | null;
 }
 
-/** POST /assistant/feedback and …/feedback/{id}/follow-up answer. */
+/**
+ * POST /assistant/feedback and …/feedback/{id}/follow-up answer. When the
+ * message answered was an automated update, SSO answers `confirm`, `status`
+ * and `rating` instead of `id`.
+ */
 export interface FeedbackResponse {
     ok?: boolean;
     id?: number | null;
     helpful?: boolean | null;
     follow_up?: boolean | null;
     error?: string | null;
+    confirm?: Confirm | null;
+    status?: Support['status'] | null;
+    rating?: Rating | null;
 }

@@ -1,5 +1,5 @@
 import Pusher from 'pusher-js';
-import type { Message, MessageAttachment, Realtime, Support } from './types';
+import type { Confirm, Message, MessageAttachment, Realtime, Support } from './types';
 
 /** `message.created` on the conversation channel (REALTIME-CONTRACT.md). */
 export interface LiveMessage {
@@ -11,6 +11,14 @@ export interface LiveMessage {
     attachments?: Array<{ name: string; size?: number | null; url?: string | null }> | null;
     created_at?: string | null;
     sso_message_id?: number | null;
+    kind?: string | null;
+    confirm?: Confirm | null;
+}
+
+/** `message.updated` on the conversation channel: the CRM's message id and what changed about it. */
+export interface LiveMessageUpdate {
+    id: number;
+    confirm?: Confirm | null;
 }
 
 /** `conversation.updated` on the conversation channel. */
@@ -30,6 +38,8 @@ export interface SocketHandlers {
     /** Connected and subscribed (true), or not any more (false). */
     live(live: boolean): void;
     message(message: LiveMessage): void;
+    /** An answer to an automated update was recorded (here, on another device, or from a link). */
+    updated(update: LiveMessageUpdate): void;
     conversation(update: LiveConversation): void;
     typing(typing: LiveTyping): void;
 }
@@ -50,7 +60,7 @@ export function liveToMessage(live: LiveMessage): Message | null {
 
     const attachments: MessageAttachment[] = (live.attachments ?? []).map((file) => ({ name: file.name, size: file.size ?? null, url: file.url ?? null }));
 
-    return {
+    const message: Message = {
         id: typeof live.sso_message_id === 'number' ? live.sso_message_id : `crm-${live.id}`,
         role: live.author_type,
         content: (live.text ?? '').trim(),
@@ -60,6 +70,13 @@ export function liveToMessage(live: LiveMessage): Message | null {
         crm_message_id: live.id,
         live: true,
     };
+
+    if (live.author_type === 'staff' && typeof live.kind === 'string') {
+        message.kind = live.kind;
+        message.confirm = live.confirm ?? null;
+    }
+
+    return message;
 }
 
 /**
@@ -159,6 +176,12 @@ export class SupportSocket {
         channel.bind('message.created', (data: { message?: LiveMessage } | null) => {
             if (this.pusher === pusher && data?.message) {
                 this.handlers.message(data.message);
+            }
+        });
+
+        channel.bind('message.updated', (data: { message?: LiveMessageUpdate } | null) => {
+            if (this.pusher === pusher && typeof data?.message?.id === 'number') {
+                this.handlers.updated(data.message);
             }
         });
 

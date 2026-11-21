@@ -174,7 +174,16 @@ export class AssistantApi {
         return Boolean(this.settings.feedback && this.settings.feedback_follow_up);
     }
 
-    /** "Did I handle that correctly?" Null when this component has no feedback route. */
+    /** Whether the answer to an automated update can be sent from this app (an older component has no feedback route). */
+    canAnswerUpdate(): boolean {
+        return Boolean(this.settings.feedback);
+    }
+
+    /**
+     * "Did I handle that correctly?" Null when this component has no feedback
+     * route. The same route carries the answer to an automated update: with
+     * that message's id, `helpful` means "Yes, it's fixed".
+     */
     async feedback(conversationId: number | string, messageId: number | string | null, helpful: boolean): Promise<FeedbackResponse | null> {
         if (!this.settings.feedback) {
             return null;

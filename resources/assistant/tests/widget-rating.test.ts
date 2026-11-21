@@ -111,11 +111,14 @@ describe('widget: rating at the end of a conversation', () => {
     it('asks for a rating on a conversation our team resolved, with five labeled faces', () => {
         const shown = card()!;
         expect(shown).not.toBeNull();
-        expect(shown.textContent).toContain('Thanks for talking with us. If you can, rate this conversation from 1 to 5 and leave a note.');
+        expect(shown.textContent).toContain('Thanks for talking with us. If you can, rate this conversation and leave a note.');
+        expect(shown.querySelector('.question')!.textContent).not.toContain('from 1 to 5');
 
         const faces = Array.from(shown.querySelectorAll<HTMLButtonElement>('.face'));
         expect(faces.map((face) => face.getAttribute('aria-label'))).toEqual(['1 of 5, very poor', '2 of 5, poor', '3 of 5, okay', '4 of 5, good', '5 of 5, great']);
         expect(faces.map((face) => face.querySelector('.emoji')!.textContent)).toEqual(['\u{1F61E}', '\u{1F615}', '\u{1F610}', '\u{1F642}', '\u{1F604}']);
+        expect(faces.map((face) => face.querySelector('.face-number')!.textContent)).toEqual(['1', '2', '3', '4', '5']);
+        expect(faces.every((face) => face.lastElementChild === face.querySelector('.face-number'))).toBe(true);
         expect(shown.querySelector('[role=radiogroup]')!.getAttribute('aria-label')).toBe('Rate this conversation from 1 to 5');
         expect(shown.querySelector<HTMLInputElement>('.rating-note')!.placeholder).toBe('Anything you want to tell us? (optional)');
         expect(button('.rating-send').disabled).toBe(true);

@@ -480,16 +480,16 @@ a.file-chip:hover, a.file-chip:focus-visible { border-color: rgb(var(--ua-primar
 .rating-card .faces { display: flex; gap: 6px; flex-wrap: wrap; }
 .rating-card .face {
   display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-  min-width: 44px; min-height: 44px; padding: 4px 6px; border-radius: var(--ua-radius);
+  min-width: 44px; min-height: 48px; padding: 5px 6px; border-radius: var(--ua-radius);
   border: 1px solid rgb(var(--ua-border)); background: rgb(var(--ua-surface)); cursor: pointer;
   transition: background-color var(--ua-fast) var(--ua-ease), border-color var(--ua-fast) var(--ua-ease);
 }
 .rating-card .face .emoji { font-size: 22px; line-height: 1; filter: grayscale(0.35); }
-.rating-card .face .face-number { font-size: 11px; color: rgb(var(--ua-text-muted)); }
+.rating-card .face .face-number { font-size: 12px; font-weight: 600; line-height: 1.2; color: rgb(var(--ua-text-secondary)); }
 .rating-card .face:hover:not(:disabled) { background: rgb(var(--ua-bg-muted)); }
 .rating-card .face[aria-checked="true"] { border-color: rgb(var(--ua-primary)); background: rgb(var(--ua-primary-subtle)); box-shadow: 0 0 0 1px rgb(var(--ua-primary)); }
 .rating-card .face[aria-checked="true"] .emoji { filter: none; }
-.rating-card .face[aria-checked="true"] .face-number { color: rgb(var(--ua-primary)); font-weight: 600; }
+.rating-card .face[aria-checked="true"] .face-number { color: rgb(var(--ua-text)); font-weight: 700; }
 .rating-card input {
   width: 100%; min-height: 36px; padding: 6px 10px; font-size: 13px;
   border: 1px solid rgb(var(--ua-border-strong)); border-radius: var(--ua-radius); background: rgb(var(--ua-surface));

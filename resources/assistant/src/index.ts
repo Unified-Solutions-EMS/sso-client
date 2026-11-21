@@ -35,7 +35,7 @@ const COPY = {
     assigned: 'from our team has your conversation',
     resolved: 'Our team marked this resolved.',
     teamTag: 'Unified',
-    automatedTag: 'Automated update',
+    automatedTag: 'AI agent',
     updateYes: "Yes, it's fixed",
     updateNo: 'Not yet',
     updateSaidYes: "You said: Yes, it's fixed. Thanks for letting us know.",

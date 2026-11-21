@@ -487,8 +487,10 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      rating overwrites. Bootstrap (and clear, escalate, callback, updates) carry `rating: {enabled, score, note,
      rated_at, phone}` (`phone` = the person's number on file, formatted, to prefill the call form). `rating.ts`
      renders the closing card (`.card.rating-card`, a light inline card at the bottom of the thread, never a
-     modal): "Thanks for talking with us. If you can, rate this conversation from 1 to 5 and leave a note.", five
-     emoji faces as a radio group (arrow keys move and pick, `aria-label` "1 of 5, very poor" … "5 of 5, great"),
+     modal): "Thanks for talking with us. If you can, rate this conversation and leave a note." (the sentence
+     named the scale, "from 1 to 5", until 2026-11-21; James: the numbers belong under the faces), five emoji
+     faces as a radio group, each with its number 1 to 5 under it (`.face-number`, `aria-hidden`; arrow keys move
+     and pick, `aria-label` "1 of 5, very poor" … "5 of 5, great"),
      an optional note, **Send** and **Skip**. 4 or 5 → "Thanks, glad it helped." for 3 s, then "You rated this n
      of 5."; 3 or less → "Sorry about that. Want someone from our team to call you?" **Yes, call me** / **No
      thanks** (only with `support.enabled` and the `callback` route; otherwise "Thanks for telling us. Our team
@@ -668,7 +670,9 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      the CRM chooses; the widget never hardcodes it) with two optional keys: `kind: 'automated'` and `confirm:
      {state: pending | fixed | not_fixed, answered_at}`. `renderStaffTurn` gives it `.turn.staff.automated`
      (teal tokens `--ua-auto-*` in both token blocks of `styles.ts`, never the teammate blue), the first letter of
-     the name as the avatar, and the tag "Automated update" in place of "Unified". Under the text
+     the name as the avatar, and the tag "AI agent" in place of "Unified" (`COPY.automatedTag`; "Automated
+     update" until 2026-11-21, when James decided Halligan is named plainly as an AI agent: the one exception to
+     the never-"AI" wording rule, and only for Halligan). Under the text
      (`renderConfirm`, state read from the message, so a reload shows the recorded answer): while `pending`,
      **Yes, it's fixed** (filled) and **Not yet** (outlined); after `fixed`, "You said: Yes, it's fixed. Thanks
      for letting us know."; after `not_fixed`, "You said: Not yet. A person from our team will follow up with you
@@ -783,11 +787,13 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
        confirm → `{ok: false, needs_confirmation: true, question, content}`; failed → `{ok: false, message}`;
        unknown tool / not a member → 404 `{ok: false, message}`; malformed body → 422.
   - **Wording (rendered UI, binding, DEV_GUIDELINES §2d):** the feature is **Assistant**; never "chat",
-    "bot", "AI", "support" (the address support@unified-solutions.io is fine). There is no "Help" any more.
+    "bot", "AI", "support" (the address support@unified-solutions.io is fine; the Halligan tag below is the one
+    exception). There is no "Help" any more.
     Subtitle "Tell me what to do, or ask how something works." Handoff with our team behind the Assistant
     "I can't finish this one, but our team can." / **Talk to our team**; without it "I can't do that one,
     but our team can help." / **Copy** + "Email support@unified-solutions.io"; a teammate's reply carries a "Unified" tag; an automated update carries the sender's name and an
-    "Automated update" tag, never "Unified", with the buttons **Yes, it's fixed** / **Not yet**. The standing entry: **Talk to our team** (menu item
+    "AI agent" tag, never "Unified", with the buttons **Yes, it's fixed** / **Not yet** (Halligan is labelled
+    "AI agent" by James's decision of 2026-11-21; the never-"AI" rule still stands for the Assistant itself). The standing entry: **Talk to our team** (menu item
     and last pill), "Tell me what you need and I will pass it to our team.", chip "To our team", and "Our team
     has this conversation". Chips "Undo" / "Undone". No em dashes, US English, no developer words, no tenant-isolation
     narration. Tool `summary` and `failed()` text are rendered UI too.

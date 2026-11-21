@@ -2,9 +2,9 @@ import { ApiError } from './api';
 import { h } from './dom';
 import type { BestTime, CallbackResponse, Rating, RatingResponse } from './types';
 
-/** Rendered UI (§18): plain, no em dashes, never "AI", "bot", "chat" or "ticket". Same strings as Unified Mobile. */
+/** Rendered UI (§18): plain, no em dashes, never "AI", "bot", "chat" or "ticket". Same strings as Unified Mobile. The sentence names no scale: each face shows its number. */
 export const RATING_COPY = {
-    title: 'Thanks for talking with us. If you can, rate this conversation from 1 to 5 and leave a note.',
+    title: 'Thanks for talking with us. If you can, rate this conversation and leave a note.',
     groupLabel: 'Rate this conversation from 1 to 5',
     notePlaceholder: 'Anything you want to tell us? (optional)',
     send: 'Send',

@@ -201,11 +201,11 @@ afterAll(() => {
 });
 
 describe('widget: an automated update from our team', () => {
-    it('shows the sender by name with the Automated update tag, in its own style', () => {
+    it('shows the sender by name with the AI agent tag, in its own style', () => {
         const turn = automated();
 
         expect(turn.querySelector('.staff-name')!.textContent).toBe('Halligan');
-        expect(turn.querySelector('.tag')!.textContent).toBe('Automated update');
+        expect(turn.querySelector('.tag')!.textContent).toBe('AI agent');
         expect(turn.querySelector('.avatar')!.textContent).toBe('H');
         expect(turn.querySelector('.bubble')!.textContent).toContain('Is it working for you now?');
         expect(shadow().textContent).not.toContain('Halligan Unified');
@@ -259,7 +259,7 @@ describe('widget: an automated update from our team', () => {
 
         expect(buttons()).toHaveLength(0);
         expect(automated().querySelector('.confirm-said')!.textContent).toBe("You said: Yes, it's fixed. Thanks for letting us know.");
-        expect(automated().querySelector('.tag')!.textContent).toBe('Automated update');
+        expect(automated().querySelector('.tag')!.textContent).toBe('AI agent');
     });
 
     it('sends "Not yet", says a person will follow up and offers no rating', async () => {
@@ -286,7 +286,7 @@ describe('widget: an automated update from our team', () => {
         expect(turn.querySelector('.confirm')).toBeNull();
 
         await load(thread([...history, update('withdrawn')], 'resolved', null, 4));
-        expect(automated().querySelector('.tag')!.textContent).toBe('Automated update');
+        expect(automated().querySelector('.tag')!.textContent).toBe('AI agent');
         expect(automated().querySelector('.confirm')).toBeNull();
 
         await load(thread([...history, update(null)], 'resolved', null, 4));
@@ -320,7 +320,7 @@ describe('widget: an automated update from our team', () => {
 
         expect(shadow().querySelectorAll('.turn.staff.automated')).toHaveLength(1);
         expect(automated().getAttribute('data-id')).toBe('610');
-        expect(automated().querySelector('.tag')!.textContent).toBe('Automated update');
+        expect(automated().querySelector('.tag')!.textContent).toBe('AI agent');
         expect(buttons()).toHaveLength(2);
     });
 
@@ -360,7 +360,7 @@ describe('widget: an automated update from our team', () => {
 
         expect(automated()).toBe(plain);
         expect(automated().getAttribute('data-id')).toBe('611');
-        expect(automated().querySelector('.tag')!.textContent).toBe('Automated update');
+        expect(automated().querySelector('.tag')!.textContent).toBe('AI agent');
         expect(buttons()).toHaveLength(2);
     });
 

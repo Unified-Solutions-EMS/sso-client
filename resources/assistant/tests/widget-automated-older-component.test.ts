@@ -46,7 +46,7 @@ describe('widget: an automated update with an older component', () => {
     it('shows the reply line instead of buttons without the feedback route', () => {
         const turn = document.querySelector('unified-assistant')!.shadowRoot!.querySelector<HTMLElement>('.turn.staff.automated')!;
 
-        expect(turn.querySelector('.tag')!.textContent).toBe('Automated update');
+        expect(turn.querySelector('.tag')!.textContent).toBe('AI agent');
         expect(turn.querySelectorAll('button')).toHaveLength(0);
         expect(turn.querySelector('.confirm-hint')!.textContent).toBe('Reply here to tell us if it is working.');
     });

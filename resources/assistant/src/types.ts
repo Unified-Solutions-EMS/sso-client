@@ -61,6 +61,8 @@ export interface Support {
     realtime?: Realtime | null;
     /** How far the person has read our team's replies (absent from an older SSO). Only used to skip a receipt already sent. */
     seen?: Seen | null;
+    /** A teammate wrote past that pointer: a conversation our team started, or a reply not opened yet (absent from an older SSO). */
+    unseen_from_team?: boolean | null;
 }
 
 export interface Seen {

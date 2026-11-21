@@ -484,6 +484,9 @@ class AssistantWidget {
     /** Read receipts: tells our team which of their replies the person has had on screen. */
     private seen!: SeenTracker;
 
+    /** The person has opened the thread on this page since it was loaded: SSO's `unseen_from_team` no longer badges (new replies still do). */
+    private threadOpened = false;
+
     constructor(settings: SettingsWithContext) {
         this.api = new AssistantApi(settings);
         this.setupApp = settings.setup_app ?? null;
@@ -1022,6 +1025,10 @@ class AssistantWidget {
             this.avoidance.setActive(!open);
         }
 
+        if (open) {
+            this.threadOpened = true;
+        }
+
         if (open && !this.introPending) {
             this.badge.hidden = true;
         }
@@ -1096,6 +1103,8 @@ class AssistantWidget {
         this.failedRow = null;
         this.support = bootstrap.support ?? null;
         this.seen.reset(this.support?.seen?.message_id);
+        this.threadOpened = this.open;
+        this.badgeUnseenFromTeam();
         this.assignee = null;
         this.hideTyping();
         this.reach = bootstrap.reach ?? null;
@@ -1996,6 +2005,11 @@ class AssistantWidget {
                 this.support = { ...this.support, realtime: updates.support.realtime };
             }
 
+            if (updates.support?.unseen_from_team !== undefined && this.support) {
+                this.support = { ...this.support, unseen_from_team: updates.support.unseen_from_team };
+                this.badgeUnseenFromTeam();
+            }
+
             if (updates.status && this.support && updates.status !== this.support.status) {
                 this.support = { ...this.support, status: updates.status };
                 this.supportChanged();
@@ -2058,6 +2072,23 @@ class AssistantWidget {
             this.badge.textContent = '1';
             this.badge.hidden = false;
         }
+    }
+
+    /**
+     * Badges the launcher when SSO says a teammate wrote past the person's
+     * seen pointer (a conversation our team started from the CRM, or a reply
+     * they have not opened) and the drawer is closed. Opening the thread
+     * clears it for this page; SSO keeps reporting it until the read receipt
+     * lands (or forever, from an app whose component sends none), so a later
+     * poll badges again only for a new reply (badgeFor).
+     */
+    private badgeUnseenFromTeam(): void {
+        if (this.open || this.threadOpened || this.support?.unseen_from_team !== true) {
+            return;
+        }
+
+        this.badge.textContent = '1';
+        this.badge.hidden = false;
     }
 
     /* Our team's replies, live */

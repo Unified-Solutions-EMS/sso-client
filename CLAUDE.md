@@ -654,6 +654,14 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      `POST /assistant/seen` (throttle 60/min, forwards `conversation_id` + `last_message_id` with the stamped
      identity; SSO ignores receipts while impersonating) and component setting `seen`; an older component sends
      neither and the widget sends no receipts. Tests: `seen.test.ts`, `widget-seen.test.ts`, `AssistantProxyTest`.
+     **Badge for an unopened reply (2026-11-20; SSO #312 added `support.unseen_from_team`).** SSO's bootstrap,
+     turn and updates `support` block carries `unseen_from_team: true` when a staff message is newer than the
+     person's seen pointer (a conversation our team started from the CRM, or a reply they have not opened). With
+     the drawer closed the launcher badges on load and on an updates poll that reports it; opening the drawer
+     clears the badge for this page (`threadOpened`), and because SSO keeps reporting the flag until the receipt
+     lands (forever, from an app whose component sends none), a later poll badges again only for a new staff
+     reply (`badgeFor`). Tests: `widget-badge-unseen.test.ts`, `widget-badge-unseen-poll.test.ts`,
+     `widget-badge-unseen-open.test.ts`.
      **Website visitors (2026-11-19, James: "get it installed on the public website; those users will not be
      logged in"; contract `VISITOR-CONTRACT.md`, SSO / Public_Website / CRM on `feature/visitor-assistant`).**
      `sso.assistant.visitor` (env `ASSISTANT_VISITOR_MODE`, default false; only Public_Website turns it on).

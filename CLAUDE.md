@@ -662,6 +662,35 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
      lands (forever, from an app whose component sends none), a later poll badges again only for a new staff
      reply (`badgeFor`). Tests: `widget-badge-unseen.test.ts`, `widget-badge-unseen-poll.test.ts`,
      `widget-badge-unseen-open.test.ts`.
+     **Automated updates from our team (2026-11-20, UNI-1672, contract `HALLIGAN-CONTRACT.md`; CRM sends, SSO
+     relays, Unified Mobile mirrors).** When a fix ships, the CRM posts one message into the person's
+     conversation. On the wire it stays a teammate message (`role: 'staff'`, `author` = the sender's name, which
+     the CRM chooses; the widget never hardcodes it) with two optional keys: `kind: 'automated'` and `confirm:
+     {state: pending | fixed | not_fixed, answered_at}`. `renderStaffTurn` gives it `.turn.staff.automated`
+     (teal tokens `--ua-auto-*` in both token blocks of `styles.ts`, never the teammate blue), the first letter of
+     the name as the avatar, and the tag "Automated update" in place of "Unified". Under the text
+     (`renderConfirm`, state read from the message, so a reload shows the recorded answer): while `pending`,
+     **Yes, it's fixed** (filled) and **Not yet** (outlined); after `fixed`, "You said: Yes, it's fixed. Thanks
+     for letting us know."; after `not_fixed`, "You said: Not yet. A person from our team will follow up with you
+     here."; any other state, or no `confirm`, nothing. A tap disables both buttons and posts the EXISTING
+     feedback route, `POST {feedback} {conversation_id, message_id, helpful}` (`helpful: true` = fixed), so no
+     app needs a package bump; SSO answers `{ok, confirm, status, rating}` (no `id`), the widget stores
+     `confirm` on the message, takes `rating` and `status`, and runs `supportChanged()`: `resolved` brings the
+     existing rating card, `needs_teammate` puts the thread back with our team (no rating). Any failure
+     re-enables the buttons under "That did not go through. Try again.". A component without the `feedback`
+     setting shows "Reply here to tell us if it is working." and no buttons. An update heard on the socket
+     before SSO has given it an id (`crm-{id}`) is polled once before the answer is sent. **Compatibility
+     rules:** `kind` missing, null or unknown = an ordinary teammate message ("Unified" tag, no question); the
+     message is never dropped. `liveToMessage` copies `kind` and `confirm`; `confirmLive` now merges both from
+     the polled row into a message first heard live (it used to swap the id only, so anything the socket copy
+     lacked was lost); the socket's `message.updated` `{message: {id (CRM's), confirm}}` updates the matching
+     turn by `crm_message_id` (an answer given on another device or from the link in the email), and one
+     without `confirm` (a delivery status) is ignored. An answer is final: a recorded one never goes back to
+     pending (`mergeConfirm`). **Rating:** while the newest message in the thread is an update still waiting
+     for its answer, the rating card is held back (the rating comes after "Yes, it's fixed"); once the person
+     writes anything after it the usual rules apply. The update never triggers "Did I handle that correctly?".
+     Tests: `widget-automated.test.ts`, `widget-automated-older-component.test.ts`, `AssistantProxyTest`
+     (the feedback proxy passes SSO's answer through unchanged).
      **Website visitors (2026-11-19, James: "get it installed on the public website; those users will not be
      logged in"; contract `VISITOR-CONTRACT.md`, SSO / Public_Website / CRM on `feature/visitor-assistant`).**
      `sso.assistant.visitor` (env `ASSISTANT_VISITOR_MODE`, default false; only Public_Website turns it on).
@@ -757,7 +786,8 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     "bot", "AI", "support" (the address support@unified-solutions.io is fine). There is no "Help" any more.
     Subtitle "Tell me what to do, or ask how something works." Handoff with our team behind the Assistant
     "I can't finish this one, but our team can." / **Talk to our team**; without it "I can't do that one,
-    but our team can help." / **Copy** + "Email support@unified-solutions.io"; a teammate's reply carries a "Unified" tag. The standing entry: **Talk to our team** (menu item
+    but our team can help." / **Copy** + "Email support@unified-solutions.io"; a teammate's reply carries a "Unified" tag; an automated update carries the sender's name and an
+    "Automated update" tag, never "Unified", with the buttons **Yes, it's fixed** / **Not yet**. The standing entry: **Talk to our team** (menu item
     and last pill), "Tell me what you need and I will pass it to our team.", chip "To our team", and "Our team
     has this conversation". Chips "Undo" / "Undone". No em dashes, US English, no developer words, no tenant-isolation
     narration. Tool `summary` and `failed()` text are rendered UI too.

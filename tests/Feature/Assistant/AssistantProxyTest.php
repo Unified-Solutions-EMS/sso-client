@@ -174,6 +174,34 @@ class AssistantProxyTest extends AssistantTestCase
         $this->postJson('/assistant/feedback', ['conversation_id' => 31])->assertUnprocessable();
     }
 
+    public function test_feedback_passes_the_answer_to_an_automated_update_back_unchanged(): void
+    {
+        $answer = [
+            'ok' => true,
+            'confirm' => ['state' => 'fixed', 'answered_at' => '2026-11-21T14:05:00+00:00'],
+            'status' => 'resolved',
+            'rating' => ['enabled' => true, 'score' => null, 'note' => null, 'rated_at' => null, 'phone' => '(814) 555-0100'],
+        ];
+        Http::fake(['https://sso.test/api/internal/assistant/feedback' => Http::sequence()
+            ->push($answer, 200)
+            ->push(['ok' => false, 'error' => 'That did not go through. Try again.'], 503)]);
+        $this->signedInMember();
+
+        $this->postJson('/assistant/feedback', ['conversation_id' => 31, 'message_id' => 501, 'helpful' => true])
+            ->assertOk()
+            ->assertExactJson($answer);
+
+        Http::assertSent(fn (ClientRequest $request): bool => $request->url() === 'https://sso.test/api/internal/assistant/feedback'
+            && $request->data()['conversation_id'] === 31
+            && $request->data()['message_id'] === 501
+            && $request->data()['helpful'] === true
+            && $request->data()['sso_user_id'] === 7);
+
+        $this->postJson('/assistant/feedback', ['conversation_id' => 31, 'message_id' => 501, 'helpful' => false])
+            ->assertStatus(503)
+            ->assertExactJson(['ok' => false, 'error' => 'That did not go through. Try again.']);
+    }
+
     public function test_feedback_follow_up_forwards_to_the_answer_route(): void
     {
         Http::fake(['https://sso.test/api/internal/assistant/feedback/5/follow-up' => Http::response(['ok' => true, 'id' => 5, 'follow_up' => true], 200)]);

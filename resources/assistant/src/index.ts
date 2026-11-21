@@ -3,13 +3,13 @@ import { pendingChoices, renderChoice, setRowBusy, showRowError, stillNeedText }
 import { BarAvoidance, SCROLLER_ATTRIBUTE, SCROLLER_PADDING_VAR } from './avoid';
 import { dayLabel, fileSize, h, icons, link, paragraphs, shortUrl, svg, timeLabel } from './dom';
 import { BusyPoller, DRAFT_NAME_PREFIX, type FailedTurnHandlers, SlowTurnTimer, clearDraftIfSent, draftName, failedTurnError, isBusy, readDraft, renderFailedTurn, saveDraft, showRetryButtons } from './retry';
-import { type LiveConversation, type LiveMessage, type LiveTyping, SupportSocket, liveToMessage } from './realtime';
+import { type LiveConversation, type LiveMessage, type LiveMessageUpdate, type LiveTyping, SupportSocket, liveToMessage } from './realtime';
 import { RatingCard } from './rating';
 import { SeenTracker } from './seen';
 import { MessageSound } from './sound';
 import { styles } from './styles';
 import { UPLOAD_COPY, stillReading, waitUntilRead } from './upload';
-import type { Action, BootstrapResponse, CallbackResponse, Conversation, ConversationSummary, Handoff, Intro, Message, MessageAttachment, MessageLink, PlanChange, Rating, Reach, ReviewPlan, ReviewResponse, Suggestion, Support, Tour, TourStep, TurnResponse, WidgetSettings } from './types';
+import type { Action, BootstrapResponse, CallbackResponse, Confirm, Conversation, ConversationSummary, Handoff, Intro, Message, MessageAttachment, MessageLink, PlanChange, Rating, Reach, ReviewPlan, ReviewResponse, Suggestion, Support, Tour, TourStep, TurnResponse, WidgetSettings } from './types';
 
 /** Where the handoff points when no team is behind the Assistant. */
 const SUPPORT_EMAIL = 'support@unified-solutions.io';
@@ -35,6 +35,13 @@ const COPY = {
     assigned: 'from our team has your conversation',
     resolved: 'Our team marked this resolved.',
     teamTag: 'Unified',
+    automatedTag: 'Automated update',
+    updateYes: "Yes, it's fixed",
+    updateNo: 'Not yet',
+    updateSaidYes: "You said: Yes, it's fixed. Thanks for letting us know.",
+    updateSaidNo: 'You said: Not yet. A person from our team will follow up with you here.',
+    updateReply: 'Reply here to tell us if it is working.',
+    updateFailed: 'That did not go through. Try again.',
     removeFile: 'Remove',
     copy: 'Copy',
     copied: 'Copied',
@@ -111,6 +118,8 @@ const VISITOR_COPY = {
  * has done nothing for this long after a reply.
  */
 const RATING_IDLE_MS = 2 * 60 * 1000;
+
+const SUPPORT_STATUSES: Array<Support['status']> = ['assistant', 'needs_teammate', 'resolved'];
 
 /** After a 4 or 5 sent from New conversation, the thanks shows this long before the new thread. */
 const RATING_THEN_NEW_MS = 1500;
@@ -245,6 +254,32 @@ const TEAM_POLL_HIDDEN_MS = 20000;
 const TEAM_POLL_LIVE_MS = 60000;
 /** "{name} is typing" goes when no typing event has come for this long. */
 const TYPING_SHOWN_MS = 6000;
+
+/** An update sent for our team that a fix shipped. Any other `kind` is an ordinary teammate message. */
+function isAutomated(message: Message): boolean {
+    return message.role === 'staff' && message.kind === 'automated';
+}
+
+/**
+ * Takes a newer answer state onto a message the widget already shows. An
+ * answer is final, so one that is already recorded never goes back to
+ * pending (a poll can lag the socket). True when something changed.
+ */
+function mergeConfirm(known: Message, incoming: Confirm | null | undefined): boolean {
+    if (!incoming || typeof incoming.state !== 'string') {
+        return false;
+    }
+
+    const current = known.confirm?.state;
+
+    if (current === incoming.state || (current !== undefined && current !== 'pending' && incoming.state === 'pending')) {
+        return false;
+    }
+
+    known.confirm = incoming;
+
+    return true;
+}
 
 function initials(name: string): string {
     const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -508,6 +543,7 @@ class AssistantWidget {
         this.socket = new SupportSocket({
             live: (live) => this.onLive(live),
             message: (message) => this.onLiveMessage(message),
+            updated: (update) => this.onLiveUpdated(update),
             conversation: (update) => this.onLiveConversation(update),
             typing: (typing) => this.onLiveTyping(typing),
         });
@@ -1427,18 +1463,38 @@ class AssistantWidget {
         return turn;
     }
 
-    /** A reply from someone on our team: their initials, name and a small Unified tag. */
+    /**
+     * A reply from someone on our team: their initials, name and a small
+     * Unified tag. An automated update keeps the sender's name and carries
+     * its own tag and color, with its question under the text.
+     */
     private renderStaffTurn(message: Message): HTMLElement {
         const name = message.author?.trim() || COPY.teamTag;
+        const automated = isAutomated(message);
         const turn = h(
             'div',
-            { class: 'turn staff', 'data-id': String(message.id) },
-            h('div', { class: 'staff-head' }, h('span', { class: 'avatar', 'aria-hidden': 'true' }, initials(name)), h('span', { class: 'staff-name' }, name), h('span', { class: 'tag' }, COPY.teamTag)),
+            { class: `turn staff${automated ? ' automated' : ''}`, 'data-id': String(message.id) },
+            h(
+                'div',
+                { class: 'staff-head' },
+                h('span', { class: 'avatar', 'aria-hidden': 'true' }, automated ? name.charAt(0).toUpperCase() : initials(name)),
+                h('span', { class: 'staff-name' }, name),
+                h('span', { class: 'tag' }, automated ? COPY.automatedTag : COPY.teamTag),
+            ),
         );
+        const confirm = automated ? this.renderConfirm(message) : null;
 
-        if (message.content) {
+        if (message.content || confirm) {
             const bubble = h('div', { class: 'bubble' });
-            bubble.append(paragraphs(message.content));
+
+            if (message.content) {
+                bubble.append(paragraphs(message.content));
+            }
+
+            if (confirm) {
+                bubble.append(confirm);
+            }
+
             turn.append(bubble);
         }
 
@@ -1455,6 +1511,134 @@ class AssistantWidget {
         this.seen.watch(turn);
 
         return turn;
+    }
+
+    /**
+     * The question under an automated update. What shows comes from the
+     * message alone, so a reload shows the recorded answer: both buttons
+     * while it waits, the person's own answer once given, nothing for a state
+     * this bundle does not know.
+     */
+    private renderConfirm(message: Message): HTMLElement | null {
+        const state = message.confirm?.state;
+
+        if (state === 'fixed' || state === 'not_fixed') {
+            return h('div', { class: 'confirm' }, h('div', { class: 'confirm-said', role: 'status' }, state === 'fixed' ? COPY.updateSaidYes : COPY.updateSaidNo));
+        }
+
+        if (state !== 'pending') {
+            return null;
+        }
+
+        if (!this.api.canAnswerUpdate()) {
+            return h('div', { class: 'confirm' }, h('div', { class: 'confirm-hint' }, COPY.updateReply));
+        }
+
+        const block = h('div', { class: 'confirm' });
+
+        block.append(
+            h(
+                'div',
+                { class: 'confirm-actions' },
+                h('button', { class: 'btn yes', type: 'button', onclick: () => void this.answerUpdate(message, true, block) }, COPY.updateYes),
+                h('button', { class: 'btn not-yet', type: 'button', onclick: () => void this.answerUpdate(message, false, block) }, COPY.updateNo),
+            ),
+        );
+
+        return block;
+    }
+
+    /**
+     * Sends the answer over the feedback route (every app's proxy already has
+     * it). SSO answers with the recorded state, who has the conversation now
+     * and the rating, so "Yes, it's fixed" is followed by the rating card and
+     * "Not yet" puts the thread back with our team.
+     */
+    private async answerUpdate(message: Message, fixed: boolean, block: HTMLElement): Promise<void> {
+        const buttons = Array.from(block.querySelectorAll('button'));
+        const conversationId = this.conversation?.id ?? null;
+
+        buttons.forEach((button) => (button.disabled = true));
+        block.querySelector('.confirm-error')?.remove();
+
+        try {
+            if (typeof message.id !== 'number') {
+                // Heard on the socket only: SSO's id for it comes with a poll.
+                this.stopPolling();
+                await this.pollTeam();
+            }
+
+            if (conversationId === null || typeof message.id !== 'number') {
+                throw new ApiError(0, COPY.updateFailed);
+            }
+
+            const result = await this.api.feedback(conversationId, message.id, fixed);
+
+            if (!result || result.ok === false || typeof result.confirm?.state !== 'string') {
+                throw new ApiError(200, COPY.updateFailed);
+            }
+
+            if (String(this.conversation?.id ?? '') !== String(conversationId)) {
+                return;
+            }
+
+            message.confirm = result.confirm;
+
+            if (result.rating) {
+                this.rating = result.rating;
+            }
+
+            if (this.support && result.status && SUPPORT_STATUSES.includes(result.status)) {
+                this.support = { ...this.support, status: result.status };
+            }
+
+            this.refreshUpdate(message);
+            this.supportChanged();
+            this.syncPolling();
+        } catch {
+            if (!block.isConnected) {
+                return;
+            }
+
+            buttons.forEach((button) => (button.disabled = false));
+            block.append(h('div', { class: 'confirm-error', role: 'alert' }, COPY.updateFailed));
+            this.scrollToEnd();
+        }
+    }
+
+    /** Redraws what an automated update adds to a teammate's turn, in place (the turn itself stays, so read receipts keep watching it). */
+    private refreshUpdate(message: Message): void {
+        const row = Array.from(this.list.querySelectorAll<HTMLElement>('.turn.staff[data-id]')).find((el) => el.dataset.id === String(message.id));
+
+        if (!row) {
+            return;
+        }
+
+        const automated = isAutomated(message);
+        const tag = row.querySelector('.staff-head .tag');
+        const shown = row.querySelector('.confirm');
+        const confirm = automated ? this.renderConfirm(message) : null;
+
+        row.classList.toggle('automated', automated);
+
+        if (tag) {
+            tag.textContent = automated ? COPY.automatedTag : COPY.teamTag;
+        }
+
+        if (shown && confirm) {
+            shown.replaceWith(confirm);
+        } else if (shown) {
+            shown.remove();
+        } else if (confirm) {
+            let bubble = row.querySelector('.bubble');
+
+            if (!bubble) {
+                bubble = h('div', { class: 'bubble' });
+                row.querySelector('.staff-head')?.after(bubble);
+            }
+
+            bubble.append(confirm);
+        }
     }
 
     private renderChip(action: Action): HTMLElement {
@@ -2037,17 +2221,35 @@ class AssistantWidget {
         );
     }
 
-    /** A line first heard on the socket, now given by SSO: it takes SSO's id so the next poll starts after it. */
+    /**
+     * A line the widget already shows, now given by SSO. One first heard on
+     * the socket takes SSO's id so the next poll starts after it. Either way
+     * it keeps what SSO says about an automated update, which the socket copy
+     * may not have carried.
+     */
     private confirmLive(known: Message, message: Message): void {
-        if (!known.live) {
-            return;
+        const wasLive = known.live === true;
+        let changed = mergeConfirm(known, message.confirm);
+
+        if (typeof message.kind === 'string' && message.kind !== known.kind) {
+            known.kind = message.kind;
+            changed = true;
         }
 
-        const row = Array.from(this.list.querySelectorAll<HTMLElement>('[data-id]')).find((el) => el.dataset.id === String(known.id));
-        known.id = message.id;
-        known.live = false;
-        row?.setAttribute('data-id', String(message.id));
-        this.seen.check();
+        if (wasLive) {
+            const row = Array.from(this.list.querySelectorAll<HTMLElement>('[data-id]')).find((el) => el.dataset.id === String(known.id));
+            known.id = message.id;
+            known.live = false;
+            row?.setAttribute('data-id', String(message.id));
+        }
+
+        if (changed) {
+            this.refreshUpdate(known);
+        }
+
+        if (wasLive) {
+            this.seen.check();
+        }
     }
 
     /* Read receipts */
@@ -2136,6 +2338,21 @@ class AssistantWidget {
         this.chimeFor(message);
     }
 
+    /** An answer to an automated update was recorded somewhere else (another device, a link in the email): show it here too. */
+    private onLiveUpdated(update: LiveMessageUpdate): void {
+        const known = this.messages.find((message) => message.crm_message_id === update.id);
+
+        if (!known || !isAutomated(known) || !mergeConfirm(known, update.confirm)) {
+            return;
+        }
+
+        this.refreshUpdate(known);
+
+        if (this.support?.status === 'resolved') {
+            this.offerRating();
+        }
+    }
+
     /** Only a reply from our team the widget did not have yet; never history, the person's own lines, the Assistant or status lines. */
     private chimeFor(message: Message): void {
         if (message.role === 'staff') {
@@ -2157,7 +2374,7 @@ class AssistantWidget {
 
         this.assignee = assignee;
 
-        if (status && ['assistant', 'needs_teammate', 'resolved'].includes(status) && status !== this.support.status) {
+        if (status && SUPPORT_STATUSES.includes(status) && status !== this.support.status) {
             this.support = { ...this.support, status };
 
             if (status === 'resolved') {
@@ -2361,11 +2578,22 @@ class AssistantWidget {
             return false;
         }
 
-        if (this.support?.status === 'needs_teammate' || this.ratingSkipped()) {
+        if (this.support?.status === 'needs_teammate' || this.ratingSkipped() || this.awaitingUpdateAnswer()) {
             return false;
         }
 
         return this.messages.some((message) => (message.role === 'assistant' || message.role === 'staff') && typeof message.id === 'number' && (message.content ?? '').trim() !== '');
+    }
+
+    /**
+     * The newest message is an automated update still waiting for its answer:
+     * the rating comes after "Yes, it's fixed", never beside the question.
+     * Once the person writes anything after it, the usual rules apply again.
+     */
+    private awaitingUpdateAnswer(): boolean {
+        const last = [...this.messages].reverse().find((message) => message.role !== 'system');
+
+        return last !== undefined && isAutomated(last) && last.confirm?.state === 'pending' && this.api.canAnswerUpdate();
     }
 
     /**

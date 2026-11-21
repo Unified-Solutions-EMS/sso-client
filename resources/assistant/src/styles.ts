@@ -29,6 +29,13 @@ export const styles = `
   --ua-danger-subtle: 254 242 242;
   --ua-ring: 37 99 235;
   --ua-scrim: 15 23 42;
+  --ua-auto-bg: 240 253 250;
+  --ua-auto-border: 13 148 136;
+  --ua-auto-accent: 17 94 89;
+  --ua-auto-tag-bg: 204 251 241;
+  --ua-auto-tag-text: 17 94 89;
+  --ua-auto-solid: 15 118 110;
+  --ua-auto-on-solid: 255 255 255;
   --ua-radius: 0.5rem;
   --ua-radius-lg: 0.75rem;
   --ua-shadow: 0 10px 15px -3px rgb(15 23 42 / 0.10), 0 4px 6px -4px rgb(15 23 42 / 0.05);
@@ -303,6 +310,25 @@ p + p { margin-top: 0.5em; }
   background: rgb(var(--ua-surface)); border: 1px solid rgb(var(--ua-primary) / 0.45);
   border-bottom-left-radius: 4px; box-shadow: var(--ua-shadow-sm);
 }
+/* An automated update sent for our team: its own teal, never the teammate blue */
+.turn.staff.automated .avatar { background: rgb(var(--ua-auto-solid)); color: rgb(var(--ua-auto-on-solid)); }
+.turn.staff.automated .staff-name { color: rgb(var(--ua-auto-accent)); }
+.turn.staff.automated .tag { background: rgb(var(--ua-auto-tag-bg)); color: rgb(var(--ua-auto-tag-text)); }
+.turn.staff.automated .bubble { background: rgb(var(--ua-auto-bg)); border: 1px solid rgb(var(--ua-auto-border)); }
+.confirm { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.confirm:first-child { margin-top: 0; }
+.confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.confirm .btn { min-height: 36px; }
+.confirm .btn.yes { background: rgb(var(--ua-auto-solid)); color: rgb(var(--ua-auto-on-solid)); }
+.confirm .btn.yes:hover:not(:disabled) { background: rgb(var(--ua-auto-accent)); }
+.confirm .btn.not-yet { border-color: rgb(var(--ua-auto-border)); color: rgb(var(--ua-auto-accent)); }
+.confirm .btn.not-yet:hover:not(:disabled) { background: rgb(var(--ua-auto-tag-bg)); }
+.confirm-said { font-size: 13px; font-weight: 500; color: rgb(var(--ua-auto-accent)); }
+.confirm-hint { font-size: 13px; color: rgb(var(--ua-text-secondary)); }
+.confirm-error { font-size: 12px; color: rgb(var(--ua-danger)); }
+@media (pointer: coarse) {
+  .confirm .btn { min-height: 44px; padding: 0 16px; }
+}
 .system-line { align-self: center; max-width: 88%; font-size: 12px; color: rgb(var(--ua-text-muted)); text-align: center; padding: 2px 8px; }
 .typing { align-self: flex-start; font-size: 12px; font-style: italic; color: rgb(var(--ua-text-muted)); padding: 0 4px; }
 .typing[hidden] { display: none; }
@@ -535,6 +561,13 @@ function darkTokens(): string {
   --ua-danger-subtle: 69 10 10;
   --ua-ring: 96 165 250;
   --ua-scrim: 0 0 0;
+  --ua-auto-bg: 4 47 46;
+  --ua-auto-border: 20 184 166;
+  --ua-auto-accent: 94 234 212;
+  --ua-auto-tag-bg: 19 78 74;
+  --ua-auto-tag-text: 153 246 228;
+  --ua-auto-solid: 45 212 191;
+  --ua-auto-on-solid: 4 47 46;
   --ua-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.6), 0 4px 6px -4px rgb(0 0 0 / 0.5);
   --ua-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.4);`;
 }

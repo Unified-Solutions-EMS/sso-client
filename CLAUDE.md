@@ -1205,6 +1205,16 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     `FacilityMirror::withOwnPending()` writes this app's own kept value over SSO's empty one, so a resync or
     delivery never blanks what the app sent (another app's kept values are never applied). Events
     `facility.created|updated|deactivated` (full row) and `facility.batch_updated` `{ids, facilities: [...]}` (state-list adds and an app's push, up to 200, applied like a resync page).
+    **`facility.deleted`** `{company, ids: [sso id], facilities: [{id, uuid, name, location_code}], deleted_at}`
+    (up to 200 ids, UNI-1723/1725): SSO deletes a facility from its list only after every app that can hold a
+    reference (CloudPCR, CAD, Billing: their `POST /api/internal/facilities/usage`) said nothing uses it, and
+    turns used ones off instead. The mirror checks again here: a projection that implements
+    `Facilities\DeletesFacilities::deleteUnreferenced($company, $localIds)` deletes the rows it confirms nothing
+    references (with their child rows) and returns their ids; every other linked row is turned off and
+    unlinked (`sso_facility_id` null, `sso_link_pending` false), so records that hold its id keep it and a
+    later SSO facility with the same code can adopt it again. A projection without the interface never loses
+    a row. CloudPCR handles the event in its own `AppWebhookController` (it was built before this package
+    version), so only apps that mirror facilities through the package need the update (Billing).
     Every list's batch goes through `CatalogMirror::applyBatch()` (the code lists add their projection on top).
   - Read side: `FacilityCatalog::usableForCompany()` (active rows, SSO order, through the projection's scope).
 

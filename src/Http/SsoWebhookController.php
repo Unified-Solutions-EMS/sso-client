@@ -88,6 +88,7 @@ class SsoWebhookController extends Controller
                 'facility.updated',
                 'facility.deactivated',
                 'facility.batch_updated',
+                'facility.deleted',
                 'medication.created',
                 'medication.updated',
                 'medication.deactivated',

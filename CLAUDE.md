@@ -829,7 +829,8 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   `/api/internal/security-events/ingest` (CORE_APP_API_KEY auth, endpoint derived from `SSO_BASE_URL`,
   app key falls back to `METRICS_APP_KEY` → `SSO_APP_SLUG`, so already-wired apps need zero config).
   Auto-recorded with no per-app wiring: failed logins / lockouts / password resets (Laravel auth events),
-  `internal_api.auth_failed` (`ValidateCoreApiKey`), and `webhook.signature_failed` (the package's HMAC
+  `internal_api.auth_failed` and, during a key rotation, `internal_api.previous_key_used`
+  (`ValidateCoreApiKey`; see "Rotating CORE_APP_API_KEY"), and `webhook.signature_failed` (the package's HMAC
   endpoints, now verified via the shared `VerifiesSsoWebhookSignature` trait). Honeytokens:
   `SECURITY_HONEYTOKEN_KEYS` (decoy API keys) and `SECURITY_CANARY_EMAILS` (decoy accounts) — any use
   records a critical event. Severities info/warning/critical; critical alerts immediately on the SSO side.
@@ -1529,6 +1530,56 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     unreachable or answers an error (15 s timeout), or the link is refused (another row holds that SSO id).
     It never throws; it logs a warning and leaves the row unlinked, and the next resync adopts it by name +
     state. Call it after the local row is committed, never inside the chart save transaction.
+
+## Rotating CORE_APP_API_KEY (UNI-1777)
+
+`CORE_APP_API_KEY` is one symmetric key shared by every app, and every app both sends it and checks it.
+Changing it everywhere at the same instant is impossible, so the package's `ValidateCoreApiKey` accepts a
+second key during a rotation window:
+
+- `config('app.core_api_key')` (`CORE_APP_API_KEY`) is the current key. It is the only key the package
+  ever **sends** (Assistant proxy, master data, trial checks, metrics, security events).
+- `config('sso.core_api_key_previous')` (`CORE_APP_API_KEY_PREVIOUS`) is a second key that is
+  **accepted** too, compared with `hash_equals`. Empty or unset never matches anything, including a request
+  with no key or an empty one.
+- A request that authenticates with the second key passes and records an info
+  `internal_api.previous_key_used` security event (app key + route, nothing else in context), at most once
+  per route per five minutes (cache-gated; a cache failure records anyway). A wrong key still records
+  `internal_api.auth_failed`; a honeytoken still records the critical `honeytoken.api_key_used`.
+
+This is a permanent rotation mechanism, not a compatibility shim (DEV_GUIDELINES §21).
+
+**Prerequisite.** Every receiving endpoint must check the key through this middleware (or the same
+two-key rule). App-local validators that compare only `CORE_APP_API_KEY` reject the second key and break
+the rotation: as of 2026-11-23 these are the `core.api` aliases in CloudPCR, Billing, CAD, HR, Fire,
+Crew-Scheduling, CheckSheets, Drug-Tracking, Truck-Checks, Fleet-Management and account (each points
+at its own `App\Http\Middleware\ValidateCoreApiKey`), SSO's `ValidateInternalApiKey`, CloudPCR's
+`OdataAccess`, and Reporting's inline check in `SavedReportController::importFromBilling`. The simplest fix
+is pointing each app's `core.api` alias at `Unified\SsoClient\Middleware\ValidateCoreApiKey` and deleting
+the local class. SSO signs the CRM drawer's channel token with the key (`CrmRealtime`) and CRM verifies it
+with its own (`SupportChannelToken`): during the window a token minted by one side under the other key is
+refused until both sides hold the same current key, so switch SSO and CRM back to back.
+
+**Runbook.** Each app both sends and receives, so the new key must be accepted everywhere before anyone
+sends it:
+
+1. **Accept the new key everywhere.** On every app set `CORE_APP_API_KEY_PREVIOUS` = NEW and leave
+   `CORE_APP_API_KEY` = OLD; redeploy (Laravel Cloud and Vapor both need a deploy for an env change to
+   land). Every app still sends OLD, every app now accepts both. Expect no `previous_key_used` events yet.
+2. **Switch every app to send the new key.** On every app set `CORE_APP_API_KEY` = NEW and
+   `CORE_APP_API_KEY_PREVIOUS` = OLD; redeploy. Apps switched so far send NEW (accepted everywhere since
+   step 1); apps not yet switched send OLD (accepted everywhere, and the receiver records
+   `internal_api.previous_key_used`).
+3. **Watch the events.** In SSO's security events, filter `internal_api.previous_key_used`. Each one names
+   the receiving app and route that still saw OLD, which points at a caller that has not been switched (or
+   is running with a stale config cache or an old queue worker). Fix those until no event has arrived for
+   at least a day.
+4. **Remove the previous key.** Unset `CORE_APP_API_KEY_PREVIOUS` on every app and redeploy. Optionally add
+   OLD to `SECURITY_HONEYTOKEN_KEYS` afterwards, so any later use of the exposed key raises a critical
+   event; only do that once step 3 has been quiet, or a missed straggler will page.
+5. **Local development** gets its own dev-only key, never the production value: set a fresh random
+   `CORE_APP_API_KEY` in every local `.env` (the same one across local apps, so they can still call each
+   other) and keep it out of `.env.example`.
 
 ## Release discipline
 

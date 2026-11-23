@@ -83,6 +83,22 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Previous internal API key (rotation window)
+    |--------------------------------------------------------------------------
+    |
+    | While CORE_APP_API_KEY is being rotated, ValidateCoreApiKey also accepts
+    | the key that was current before the rotation. The current key itself is
+    | read from config('app.core_api_key') as always. Each request that still
+    | presents the previous key records an info-level
+    | internal_api.previous_key_used security event (at most once per route
+    | every five minutes), so the previous key can be removed once those
+    | stop. Leave unset outside a rotation; an empty value never matches.
+    |
+    */
+    'core_api_key_previous' => env('CORE_APP_API_KEY_PREVIOUS'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Dashboard Data Provider
     |--------------------------------------------------------------------------
     |

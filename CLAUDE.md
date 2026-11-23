@@ -103,6 +103,13 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   logs a warning, and records a `trial.purge_blocked` security event — a malformed, replayed, or
   mistargeted delivery can no longer wipe a live customer. Against an SSO that predates
   `purge_pending`, conversion purges are skipped (data retained) until SSO ships the intent marker.
+  **A seeder that is safe to repeat says so (UNI-1754).** `Contracts\RepeatableTrialSeeder` is a marker an
+  app's `App\Services\TrialDataSeeder` implements only when a second `trial.seed_data` writes nothing,
+  two overlapping ones write one set (shared-cache lock + guard re-read in the seed's transaction under a
+  row lock), a seed that failed part way is completed by the next, and a company SSO no longer lists as a
+  trial is never seeded. Every `trial.seed_data` answer carries `seed_repeatable` (`AppTrialJobs::seederIsRepeatable()`;
+  true for an app with no seeder); SSO records it per app and only then re-sends the seed after a timeout
+  or a 502/504, not just after the app's own 429/500/503.
   **Trial sample lists come from SSO** (`src/Trial/`, design `/Sites/docs/design/trial-seed-data-design.md`).
   SSO seeds the new trial's shared lists itself, then fans out. Payload contract (both keys are optional;
   without them the handlers do exactly what they did before, so an older SSO keeps working):
@@ -822,7 +829,8 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   `/api/internal/security-events/ingest` (CORE_APP_API_KEY auth, endpoint derived from `SSO_BASE_URL`,
   app key falls back to `METRICS_APP_KEY` → `SSO_APP_SLUG`, so already-wired apps need zero config).
   Auto-recorded with no per-app wiring: failed logins / lockouts / password resets (Laravel auth events),
-  `internal_api.auth_failed` (`ValidateCoreApiKey`), and `webhook.signature_failed` (the package's HMAC
+  `internal_api.auth_failed` and, during a key rotation, `internal_api.previous_key_used`
+  (`ValidateCoreApiKey`; see "Rotating CORE_APP_API_KEY"), and `webhook.signature_failed` (the package's HMAC
   endpoints, now verified via the shared `VerifiesSsoWebhookSignature` trait). Honeytokens:
   `SECURITY_HONEYTOKEN_KEYS` (decoy API keys) and `SECURITY_CANARY_EMAILS` (decoy accounts) — any use
   records a critical event. Severities info/warning/critical; critical alerts immediately on the SSO side.
@@ -1195,7 +1203,10 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   in `dem_facility_entry_phones` with SSO's `fax` kept as a 9913001 phone). Entry ids never change (CAD
   incidents, Billing claims, mobile bundles hold them); a type change moves the entry to another group.
   - Adoption mirrors SSO's import match: code (ignoring case), then exact name with the same ZIP, exactly one
-    candidate each, pending until confirmed; no name-only adoption. `--link-by-name` links by code, then name.
+    candidate each, pending until confirmed; no name-only adoption. Since SSO allows several facilities to
+    share a code that does not name one place (a state's catch-all such as PA OTH00001, or a code the state's
+    list uses for several places; UNI-1741, facilities are unique by code, not by name), a code already held
+    by a linked local row no longer adopts by code: the next SSO facility with it adopts only by name + ZIP. `--link-by-name` links by code, then name.
   - Migration (`vendor:publish --tag=sso-master-data-facilities`) adds `sso_facility_id`, `is_active`,
     `sort_order`, `sso_updated_at`, `sso_link_pending` (each skipped when present); the SSO link is unique per
     company where the table has company_id, else on its own (`{table}_sso_facility_unique`).
@@ -1611,6 +1622,56 @@ their own non-credentialed settings; none of those needs the change.
 cross-site top-level navigation and must see the session), `SESSION_ENCRYPT=true` (turning it on makes
 existing unencrypted sessions unreadable, so everyone signs in once more; do it out of hours). Vapor apps also
 keep `SESSION_DRIVER=database` and a distinct `SESSION_COOKIE` (DEV_GUIDELINES §12).
+
+## Rotating CORE_APP_API_KEY (UNI-1777)
+
+`CORE_APP_API_KEY` is one symmetric key shared by every app, and every app both sends it and checks it.
+Changing it everywhere at the same instant is impossible, so the package's `ValidateCoreApiKey` accepts a
+second key during a rotation window:
+
+- `config('app.core_api_key')` (`CORE_APP_API_KEY`) is the current key. It is the only key the package
+  ever **sends** (Assistant proxy, master data, trial checks, metrics, security events).
+- `config('sso.core_api_key_previous')` (`CORE_APP_API_KEY_PREVIOUS`) is a second key that is
+  **accepted** too, compared with `hash_equals`. Empty or unset never matches anything, including a request
+  with no key or an empty one.
+- A request that authenticates with the second key passes and records an info
+  `internal_api.previous_key_used` security event (app key + route, nothing else in context), at most once
+  per route per five minutes (cache-gated; a cache failure records anyway). A wrong key still records
+  `internal_api.auth_failed`; a honeytoken still records the critical `honeytoken.api_key_used`.
+
+This is a permanent rotation mechanism, not a compatibility shim (DEV_GUIDELINES §21).
+
+**Prerequisite.** Every receiving endpoint must check the key through this middleware (or the same
+two-key rule). App-local validators that compare only `CORE_APP_API_KEY` reject the second key and break
+the rotation: as of 2026-11-23 these are the `core.api` aliases in CloudPCR, Billing, CAD, HR, Fire,
+Crew-Scheduling, CheckSheets, Drug-Tracking, Truck-Checks, Fleet-Management and account (each points
+at its own `App\Http\Middleware\ValidateCoreApiKey`), SSO's `ValidateInternalApiKey`, CloudPCR's
+`OdataAccess`, and Reporting's inline check in `SavedReportController::importFromBilling`. The simplest fix
+is pointing each app's `core.api` alias at `Unified\SsoClient\Middleware\ValidateCoreApiKey` and deleting
+the local class. SSO signs the CRM drawer's channel token with the key (`CrmRealtime`) and CRM verifies it
+with its own (`SupportChannelToken`): during the window a token minted by one side under the other key is
+refused until both sides hold the same current key, so switch SSO and CRM back to back.
+
+**Runbook.** Each app both sends and receives, so the new key must be accepted everywhere before anyone
+sends it:
+
+1. **Accept the new key everywhere.** On every app set `CORE_APP_API_KEY_PREVIOUS` = NEW and leave
+   `CORE_APP_API_KEY` = OLD; redeploy (Laravel Cloud and Vapor both need a deploy for an env change to
+   land). Every app still sends OLD, every app now accepts both. Expect no `previous_key_used` events yet.
+2. **Switch every app to send the new key.** On every app set `CORE_APP_API_KEY` = NEW and
+   `CORE_APP_API_KEY_PREVIOUS` = OLD; redeploy. Apps switched so far send NEW (accepted everywhere since
+   step 1); apps not yet switched send OLD (accepted everywhere, and the receiver records
+   `internal_api.previous_key_used`).
+3. **Watch the events.** In SSO's security events, filter `internal_api.previous_key_used`. Each one names
+   the receiving app and route that still saw OLD, which points at a caller that has not been switched (or
+   is running with a stale config cache or an old queue worker). Fix those until no event has arrived for
+   at least a day.
+4. **Remove the previous key.** Unset `CORE_APP_API_KEY_PREVIOUS` on every app and redeploy. Optionally add
+   OLD to `SECURITY_HONEYTOKEN_KEYS` afterwards, so any later use of the exposed key raises a critical
+   event; only do that once step 3 has been quiet, or a missed straggler will page.
+5. **Local development** gets its own dev-only key, never the production value: set a fresh random
+   `CORE_APP_API_KEY` in every local `.env` (the same one across local apps, so they can still call each
+   other) and keep it out of `.env.example`.
 
 ## Release discipline
 

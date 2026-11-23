@@ -6,6 +6,7 @@ namespace Unified\SsoClient\Trial;
 
 use Illuminate\Support\Facades\Bus;
 use Unified\SsoClient\Contracts\ReceivesTrialContext;
+use Unified\SsoClient\Contracts\RepeatableTrialSeeder;
 use Unified\SsoClient\Trial\Jobs\ReportTrialSeedFailure;
 use Unified\SsoClient\Trial\Jobs\ReportTrialSeedStatus;
 
@@ -36,6 +37,16 @@ class AppTrialJobs
     public const PURGER = 'App\\Services\\TrialDataPurger';
 
     public const PURGER_JOB = 'App\\Jobs\\RunTrialPurger';
+
+    /**
+     * Whether SSO may send `trial.seed_data` again after a timeout: the app's
+     * seeder declares it ({@see RepeatableTrialSeeder}), and an app with no
+     * seeder has nothing to duplicate.
+     */
+    public function seederIsRepeatable(): bool
+    {
+        return ! class_exists(self::SEEDER) || is_a(self::SEEDER, RepeatableTrialSeeder::class, true);
+    }
 
     /**
      * Queued, so the app's job keeps its own retry settings.

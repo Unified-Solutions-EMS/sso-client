@@ -105,6 +105,18 @@ class FacilityWebhookTest extends FacilitiesTestCase
             ->assertJson(['result' => 'pending']);
     }
 
+    public function test_a_shared_code_another_sso_facility_already_holds_here_adopts_only_by_name_and_zip(): void
+    {
+        $this->deliver('facility.created', 70, $this->facilityRecord(611, 'Other - Healthcare Facility, Institution or Location', ['location_code' => 'OTH00001']))->assertJson(['result' => 'created']);
+        $local = $this->localFacility($this->companyId, 'Butler Wound Clinic', ['dfacility_03' => 'OTH00001', 'dfacility_10' => '16001']);
+
+        $this->deliver('facility.created', 70, $this->facilityRecord(612, 'Allegheny Valley Dialysis', ['location_code' => 'OTH00001']))->assertJson(['result' => 'created']);
+        $this->assertNotSame($local, (int) $this->mirrored(612)->id, 'A second facility under a shared code never takes a local row by code alone.');
+
+        $this->deliver('facility.created', 70, $this->facilityRecord(613, 'Butler Wound Clinic', ['location_code' => 'OTH00001', 'address' => ['zip' => '16001']]))->assertJson(['result' => 'linked']);
+        $this->assertSame($local, (int) $this->mirrored(613)->id);
+    }
+
     public function test_the_state_list_batch_upserts_every_row(): void
     {
         $this->postWebhook('facility.batch_updated', [

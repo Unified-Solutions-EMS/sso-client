@@ -67,9 +67,9 @@ capabilities:
         the old state. This is expected and is usually the whole answer.
       - >
         A brand new user may not exist inside an app at all until their first
-        sign-in there. A scheduled roster pull (sso:sync-users) exists on the
-        unmerged feature/roster-reconcile branch; until it lands, sign-in is
-        the only sync path.
+        sign-in there. SSO's nightly roster reconcile re-sends anyone an app
+        is missing (people with a role in that app at an active agency), so a
+        gap left by an app outage closes within a day.
     related: ["sso:user-management", "sso:company-switching"]
 
   - id: role-sync

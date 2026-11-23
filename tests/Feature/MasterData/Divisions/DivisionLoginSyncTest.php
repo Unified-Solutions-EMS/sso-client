@@ -6,7 +6,7 @@ use Illuminate\Support\Facades\DB;
 use Unified\SsoClient\Tests\Stubs\StubSynchronizer;
 
 /**
- * /api/user (and the roster endpoint sso:sync-users reads) carries
+ * /api/user (and SSO's roster endpoint) carries
  * companies[].division: {id, name} or null.
  */
 class DivisionLoginSyncTest extends DivisionsTestCase

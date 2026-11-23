@@ -1520,6 +1520,98 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     It never throws; it logs a warning and leaves the row unlinked, and the next resync adopts it by name +
     state. Call it after the local row is committed, never inside the chart save transaction.
 
+## Security headers, HTTPS and CORS (UNI-1778)
+
+Config `config/security-headers.php` (key `security-headers`, publish tag `security-headers-config`).
+Nothing changes in an app until it adds the middleware, except forced HTTPS URLs (below).
+
+**What production sent on 2026-11-23** (`curl -D -` on each app's `/login`): no app sends
+`Strict-Transport-Security`, `Referrer-Policy` or `Permissions-Policy`. Laravel Cloud's edge adds
+`X-Content-Type-Options: nosniff` and `X-Frame-Options` (DENY on SSO, Fire, Crew-Scheduling, CheckSheets,
+account, CRM, Reporting, Transport-Portal, the website; SAMEORIGIN on CloudPCR and CAD; only nosniff on the wiki; nothing
+on Billing or Drug-Tracking). The Vapor apps (HR, Fleet-Management, Truck-Checks) send none of them. App code
+sets headers only on single routes: Billing's `frame.self` previews (`frame-ancestors 'self'` + SAMEORIGIN),
+CloudPCR's PCR PDF (SAMEORIGIN), and file downloads in CRM, Reporting, Bridge and the website (nosniff, a
+locked-down CSP on Bridge's document view and CRM's email preview).
+
+**`Middleware\SecurityHeaders`** (alias `sso.security-headers`). Append it to the `web` group:
+`->withMiddleware(fn (Middleware $m) => $m->appendToGroup('web', 'sso.security-headers'))`. It never
+overwrites a header already on the response, so a route middleware that sets its own framing keeps it.
+
+| Header | Default | Config / env |
+|---|---|---|
+| `X-Content-Type-Options` | `nosniff` | `nosniff` |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | `SECURITY_REFERRER_POLICY` |
+| `Content-Security-Policy` | `frame-ancestors 'self'` (+ extra parents) | `SECURITY_FRAME_PROTECTION`, `SECURITY_FRAME_ANCESTORS` (comma list) |
+| `X-Frame-Options` | `SAMEORIGIN` (fallback for browsers without frame-ancestors) | `SECURITY_FRAME_PROTECTION` |
+| `Permissions-Policy` | `camera=(self), microphone=(self), geolocation=(self), usb=(), serial=(), hid=(), midi=(), browsing-topics=()` | `SECURITY_PERMISSIONS_POLICY` |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` when `APP_ENV=production`; never `preload` | `SECURITY_HSTS` (true/false overrides), `SECURITY_HSTS_INCLUDE_SUBDOMAINS`, `SECURITY_HSTS_MAX_AGE` |
+| `Content-Security-Policy-Report-Only` | off | `SECURITY_CSP_REPORT_ONLY`, `SECURITY_CSP_REPORT`, `SECURITY_CSP_REPORT_SAMPLE_RATE` (0.1) |
+
+`SECURITY_HEADERS_ENABLED=false` turns the middleware into a no-op.
+
+- **Framing.** `'self'` because apps frame their own pages (Billing claim previews, CloudPCR QA review PDF,
+  HR document preview, account terms, Reporting's document viewer). The only cross-origin embed is the public
+  website framing the wiki's Unified University (`/university?embed=1`), so the **wiki** must set
+  `SECURITY_FRAME_ANCESTORS=https://unified-solutions.io,https://www.unified-solutions.io` before enabling.
+  SSO dashboard widgets are server-to-server JSON, and the Assistant drawer is a script on the app's own page,
+  so neither is framed. SSO's trial welcome modal opens each app's sign-in in hidden frames (`SessionWarmUp`)
+  only for its cookies; most apps already answer DENY at the edge today, so `'self'` changes nothing there.
+- **Permissions.** Camera / microphone are used for chart photos, license and med scans, Billing's mail
+  capture and dictation; geolocation by CAD, Fire hydrants, SSO dispatch and mobile web views. `payment` is
+  left alone for Stripe (Billing, account).
+- **HSTS and the Vapor apps.** HR, Truck-Checks and Fleet-Management run live in their Vapor `staging`
+  environment, where `APP_ENV` is `staging`: set `SECURITY_HSTS=true` and `SECURITY_FORCE_HTTPS=true` there.
+  `includeSubDomains` covers subdomains of the app's own host only (`*.cad2.unified-apps.com`), except on the
+  website's apex `unified-solutions.io`, where it covers every subdomain: check that each one serves https
+  before enabling it there, or set `SECURITY_HSTS_INCLUDE_SUBDOMAINS=false` for that app.
+- **Report-only CSP.** `csp_report_only.directives` is a starting point covering Livewire / Alpine
+  (`'unsafe-inline' 'unsafe-eval'`), Vite builds, Google Maps, Stripe, Sentry, PostHog, Google Fonts / Bunny,
+  YouTube / Vimeo frames, websockets, and `{sso}` (the origin of `sso.base_url`, needed in `form-action`
+  because sign-out posts then redirects to SSO). Report-only never blocks anything (and browsers ignore
+  `frame-ancestors` in it, which is why framing has its own enforced header). Violations post to
+  `POST /api/security/csp-report` (`sso.csp-report`, no session, throttle 120/min per IP, 204 always, 64 KB
+  cap, up to 10 reports a request) and `sample_rate` of them become info `csp.violation` events with context
+  `{blocked, directive}` only: the blocked host or keyword (`inline`, `eval`, `data`, `other`), never the
+  page URL, referrer or script sample. Enforcing a CSP is a later, per-app step after tuning from the events.
+- **Rollout order** (lowest risk first; deploy one, look at the app in a browser, then the next): CRM (staff
+  only) → Reporting → Crew-Scheduling → Fire → CheckSheets → account → Transport-Portal → Drug-Tracking → SSO → CAD →
+  Billing → CloudPCR → HR, Fleet-Management, Truck-Checks (Vapor: also the two env flags above) → wiki (needs
+  `SECURITY_FRAME_ANCESTORS` first) → Public_Website last (apex HSTS). Turn on `SECURITY_CSP_REPORT_ONLY` per
+  app after its headers have settled.
+
+**Forced HTTPS URLs.** The service provider calls `URL::forceScheme('https')` at boot when
+`security-headers.force_https` (`SECURITY_FORCE_HTTPS`) is true, or is unset and `APP_ENV=production`. This
+does apply to every app on its next package update. It is safe on both hosts: every live app already answers
+with https URLs (redirect `Location` headers checked 2026-11-23), so trusted-proxy detection works there and
+signed-URL checks keep matching; forcing only covers URLs built without a forwarded scheme. Only wiki and
+Bridge call `trustProxies()` explicitly; the rest rely on the host's defaults. An app served over plain http
+in production would get https links: set `SECURITY_FORCE_HTTPS=false` there.
+
+**CORS.** Eight apps (CloudPCR, Billing, HR, Fire, CheckSheets, Truck-Checks, Fleet-Management, account)
+have `config/cors.php` with `supports_credentials => true` on `api/*` and
+`allowed_origins` from `WIDGET_ALLOWED_ORIGINS` defaulting to `'*'`. With credentials on, Laravel answers
+`'*'` by echoing whatever `Origin` asked, so any website can read credentialed `api/*` responses. Replace
+the line with the package helper, which returns a named list (SSO's origin, the app's own, plus whatever
+`WIDGET_ALLOWED_ORIGINS` lists) and drops `'*'`, wildcards and non-http(s) values:
+
+```php
+'allowed_origins' => \Unified\SsoClient\Security\CorsOrigins::allowed(
+    env('WIDGET_ALLOWED_ORIGINS'),
+    env('SSO_BASE_URL', 'https://sso.unified-apps.com'),
+    env('APP_URL'),
+),
+```
+
+Apps without a `config/cors.php` use Laravel's default (`'*'` without credentials) and SSO and CRM have
+their own non-credentialed settings; none of those needs the change.
+
+**Session cookies** are per-app env; recommended in production: `SESSION_SECURE_COOKIE=true`,
+`SESSION_HTTP_ONLY=true` (Laravel's default), `SESSION_SAME_SITE=lax` (not `strict`: the SSO callback is a
+cross-site top-level navigation and must see the session), `SESSION_ENCRYPT=true` (turning it on makes
+existing unencrypted sessions unreadable, so everyone signs in once more; do it out of hours). Vapor apps also
+keep `SESSION_DRIVER=database` and a distinct `SESSION_COOKIE` (DEV_GUIDELINES §12).
+
 ## Release discipline
 
 Apps consume this package from GitHub **`dev-main`** (in `Unified-Solutions-EMS`), not Packagist.

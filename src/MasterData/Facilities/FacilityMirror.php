@@ -28,6 +28,11 @@ use Unified\SsoClient\MasterData\MasterDataClient;
  * - turn off, never delete: SSO turning a facility off, or a resync no
  *   longer listing it, sets the active flag false. CAD incidents, Billing
  *   claims, CloudPCR dispositions and mobile bundles hold facility ids;
+ * - SSO deleting facilities (`facility.deleted`, up to 200 ids): SSO deletes
+ *   a facility only after every app said nothing references it, but this
+ *   app checks again. A projection that implements DeletesFacilities removes
+ *   the rows it confirms unreferenced; every other linked row is turned off
+ *   and unlinked (the SSO id it pointed at is gone), so records keep it;
  * - the batch event: SSO's "Add from state list" and another app's push
  *   send `facility.batch_updated` with up to 200 rows, applied like a resync
  *   page (each row upserted, nothing turned off; CatalogMirror::applyBatch);
@@ -76,6 +81,7 @@ class FacilityMirror extends CatalogMirror implements SeedsSso
             'facility.updated',
             'facility.deactivated',
             'facility.batch_updated',
+            'facility.deleted',
         ];
     }
 
@@ -115,8 +121,54 @@ class FacilityMirror extends CatalogMirror implements SeedsSso
         return match ($event) {
             'facility.created', 'facility.updated', 'facility.deactivated' => $this->applyUpsertWebhook($event, $localCompanyId, (array) ($payload['facility'] ?? [])),
             'facility.batch_updated' => $this->applyBatch($localCompanyId, (array) ($payload['facilities'] ?? [])),
+            'facility.deleted' => $this->applyDeleted($localCompanyId, (array) ($payload['ids'] ?? [])),
             default => ['status' => 'ignored', 'reason' => 'unknown_event'],
         };
+    }
+
+    /**
+     * SSO deleted these facilities. Rows the projection confirms nothing
+     * references are removed by it; the rest are turned off and unlinked.
+     *
+     * @param  array<mixed>  $ssoIds
+     * @return array{status: string, deleted: int, turned_off: int}
+     */
+    protected function applyDeleted(int $localCompanyId, array $ssoIds): array
+    {
+        $ssoIds = array_values(array_unique(array_filter(array_map(fn (mixed $id): int => is_numeric($id) ? (int) $id : 0, $ssoIds), fn (int $id): bool => $id > 0)));
+
+        if ($ssoIds === []) {
+            return ['status' => 'ok', 'deleted' => 0, 'turned_off' => 0];
+        }
+
+        $localIds = $this->scoped($localCompanyId)
+            ->whereIn($this->ssoIdColumn(), $ssoIds)
+            ->pluck('id')
+            ->map(fn (mixed $id): int => (int) $id)
+            ->values()
+            ->all();
+
+        if ($localIds === []) {
+            return ['status' => 'ok', 'deleted' => 0, 'turned_off' => 0];
+        }
+
+        $deleted = $this->projection instanceof DeletesFacilities
+            ? array_values(array_intersect($localIds, $this->projection->deleteUnreferenced($localCompanyId, $localIds)))
+            : [];
+        $kept = array_values(array_diff($localIds, $deleted));
+
+        if ($kept !== []) {
+            $this->scoped($localCompanyId)
+                ->whereIn('id', $kept)
+                ->update([
+                    $this->activeColumn() => false,
+                    $this->ssoIdColumn() => null,
+                    self::LINK_PENDING_COLUMN => false,
+                    'updated_at' => now(),
+                ]);
+        }
+
+        return ['status' => 'ok', 'deleted' => count($deleted), 'turned_off' => count($kept)];
     }
 
     /**

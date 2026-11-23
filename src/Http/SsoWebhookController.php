@@ -504,7 +504,7 @@ class SsoWebhookController extends Controller
         if (! class_exists(AppTrialJobs::SEEDER)) {
             Log::info('SSO webhook: no TrialDataSeeder found, skipping trial.seed_data');
 
-            return ['status' => 'ok', 'action' => 'trial.seed_data', 'skipped' => true, 'seed_status' => 'skipped'];
+            return ['status' => 'ok', 'action' => 'trial.seed_data', 'skipped' => true, 'seed_status' => 'skipped', 'seed_repeatable' => true];
         }
 
         // An SSO that seeds the shared lists says so with `master_data`; an
@@ -515,14 +515,16 @@ class SsoWebhookController extends Controller
         if (is_array($masterData) && app(TrialMasterDataSync::class)->mirrors() !== []) {
             SeedTrialAfterMasterDataSync::dispatch($company, $userSsoIds, $adminSsoId, $masterData);
 
-            return ['status' => 'ok', 'action' => 'trial.seed_data', 'master_data' => 'syncing', 'seed_status' => 'pending'];
+            return ['status' => 'ok', 'action' => 'trial.seed_data', 'master_data' => 'syncing', 'seed_status' => 'pending', 'seed_repeatable' => app(AppTrialJobs::class)->seederIsRepeatable()];
         }
 
         // `seed_status` feeds the welcome modal's setup bar in SSO: `pending`
         // means a job will report back, `seeded` that it is already done.
         $seedStatus = app(AppTrialJobs::class)->seed($company, $userSsoIds, $adminSsoId, is_array($masterData) ? TrialContext::fromPayload($masterData) : null);
 
-        return ['status' => 'ok', 'action' => 'trial.seed_data', 'seed_status' => $seedStatus];
+        // `seed_repeatable` lets SSO re-send this after a timeout next time
+        // (Contracts\RepeatableTrialSeeder); SSO records it per app.
+        return ['status' => 'ok', 'action' => 'trial.seed_data', 'seed_status' => $seedStatus, 'seed_repeatable' => app(AppTrialJobs::class)->seederIsRepeatable()];
     }
 
     /**

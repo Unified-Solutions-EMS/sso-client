@@ -103,6 +103,13 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   logs a warning, and records a `trial.purge_blocked` security event — a malformed, replayed, or
   mistargeted delivery can no longer wipe a live customer. Against an SSO that predates
   `purge_pending`, conversion purges are skipped (data retained) until SSO ships the intent marker.
+  **A seeder that is safe to repeat says so (UNI-1754).** `Contracts\RepeatableTrialSeeder` is a marker an
+  app's `App\Services\TrialDataSeeder` implements only when a second `trial.seed_data` writes nothing,
+  two overlapping ones write one set (shared-cache lock + guard re-read in the seed's transaction under a
+  row lock), a seed that failed part way is completed by the next, and a company SSO no longer lists as a
+  trial is never seeded. Every `trial.seed_data` answer carries `seed_repeatable` (`AppTrialJobs::seederIsRepeatable()`;
+  true for an app with no seeder); SSO records it per app and only then re-sends the seed after a timeout
+  or a 502/504, not just after the app's own 429/500/503.
   **Trial sample lists come from SSO** (`src/Trial/`, design `/Sites/docs/design/trial-seed-data-design.md`).
   SSO seeds the new trial's shared lists itself, then fans out. Payload contract (both keys are optional;
   without them the handlers do exactly what they did before, so an older SSO keeps working):

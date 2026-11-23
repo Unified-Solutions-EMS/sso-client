@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use Unified\SsoClient\Http\AgencyStatus\AgencyStatusController;
+use Unified\SsoClient\Http\CspReportController;
 use Unified\SsoClient\Http\RosterMembersController;
 use Unified\SsoClient\Http\SsoActionController;
 use Unified\SsoClient\Http\SsoCallbackController;
@@ -48,3 +49,11 @@ Route::middleware(ValidateCoreApiKey::class)
 Route::middleware(ValidateCoreApiKey::class)
     ->get('/api/internal/roster/{ssoCompanyId}', RosterMembersController::class)
     ->name('sso.roster-members');
+
+// Browser reports for the report-only Content-Security-Policy that the
+// SecurityHeaders middleware sends (UNI-1778). Unauthenticated by nature
+// (browsers post it), so throttled, sampled and recorded as host +
+// directive only. Answers 204 and does nothing while report-only is off.
+Route::post('/api/security/csp-report', CspReportController::class)
+    ->middleware('throttle:120,1')
+    ->name('sso.csp-report');

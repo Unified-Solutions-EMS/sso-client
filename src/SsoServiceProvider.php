@@ -5,6 +5,7 @@ namespace Unified\SsoClient;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 use Unified\SsoClient\Contracts\AssistantToolProvider;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
@@ -51,6 +52,7 @@ class SsoServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/sso.php', 'sso');
         $this->mergeConfigFrom(__DIR__.'/../config/metrics.php', 'metrics');
         $this->mergeConfigFrom(__DIR__.'/../config/security.php', 'security');
+        $this->mergeConfigFrom(__DIR__.'/../config/security-headers.php', 'security-headers');
 
         $this->app->singleton(SsoClient::class);
         $this->app->singleton(SsoSessionState::class);
@@ -149,6 +151,12 @@ class SsoServiceProvider extends ServiceProvider
         ], 'metrics-config');
 
         $this->publishes([
+            __DIR__.'/../config/security-headers.php' => config_path('security-headers.php'),
+        ], 'security-headers-config');
+
+        $this->forceHttpsUrls();
+
+        $this->publishes([
             __DIR__.'/../config/security.php' => config_path('security.php'),
         ], 'security-config');
 
@@ -237,6 +245,7 @@ class SsoServiceProvider extends ServiceProvider
         $router->aliasMiddleware('sso.session-actions', Middleware\EnforceSsoSessionActions::class);
         $router->aliasMiddleware('sso.purge-legacy-cookies', Middleware\PurgeLegacyApexCookies::class);
         $router->aliasMiddleware('metrics.session', Metrics\Middleware\TrackSessionMetric::class);
+        $router->aliasMiddleware('sso.security-headers', Middleware\SecurityHeaders::class);
 
         // Auto-register the session-actions middleware in the `web` group
         // so every authenticated route in every consuming app picks up
@@ -250,6 +259,27 @@ class SsoServiceProvider extends ServiceProvider
         if (method_exists($kernel, 'appendMiddlewareToGroup')) {
             $kernel->appendMiddlewareToGroup('web', Middleware\EnforceSsoSessionActions::class);
             $kernel->appendMiddlewareToGroup('web', Middleware\PurgeLegacyApexCookies::class);
+        }
+    }
+
+    /**
+     * Generated URLs use https in production (UNI-1778). Both Laravel Cloud
+     * and Vapor terminate TLS in front of the app; request-time URLs already
+     * come out https there, but anything built without a trusted forwarded
+     * scheme (a misconfigured proxy list, a queued mail) would not. Null
+     * means APP_ENV=production; Vapor apps live on `staging` set
+     * SECURITY_FORCE_HTTPS=true.
+     */
+    protected function forceHttpsUrls(): void
+    {
+        $force = config('security-headers.force_https');
+
+        $enabled = $force === null || $force === ''
+            ? $this->app->isProduction()
+            : filter_var($force, FILTER_VALIDATE_BOOLEAN);
+
+        if ($enabled) {
+            URL::forceScheme('https');
         }
     }
 

@@ -372,7 +372,7 @@ class FacilityMirror extends CatalogMirror implements SeedsSso
         $code = $this->normalizeName((string) ($record['location_code'] ?? ''));
         $codeColumn = $this->projection->codeColumn();
 
-        if ($code !== '' && $codeColumn !== null) {
+        if ($code !== '' && $codeColumn !== null && ! $this->codeAlreadyLinked($localCompanyId, $codeColumn, $code)) {
             $byCode = $unlinked->filter(fn (object $row): bool => $this->normalizeName((string) $row->{$codeColumn}) === $code);
 
             if ($byCode->count() === 1) {
@@ -392,6 +392,22 @@ class FacilityMirror extends CatalogMirror implements SeedsSso
             && self::normalizeZip($row->{$zipColumn}) === $zip);
 
         return $byNameAndZip->count() === 1 ? $byNameAndZip->first() : null;
+    }
+
+    /**
+     * Whether a local row already linked to SSO carries this code. SSO lets
+     * several facilities share a code that does not name one place (a
+     * state's catch-all such as Pennsylvania's OTH00001, or a code its list
+     * uses for several places; UNI-1741), so once one SSO facility holds the
+     * code here, the next one is adopted only by name and ZIP.
+     */
+    private function codeAlreadyLinked(int $localCompanyId, string $codeColumn, string $code): bool
+    {
+        return $this->scoped($localCompanyId)
+            ->whereNotNull($this->ssoIdColumn())
+            ->whereNotNull($codeColumn)
+            ->get([$codeColumn])
+            ->contains(fn (object $row): bool => $this->normalizeName((string) $row->{$codeColumn}) === $code);
     }
 
     /**

@@ -1195,7 +1195,10 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   in `dem_facility_entry_phones` with SSO's `fax` kept as a 9913001 phone). Entry ids never change (CAD
   incidents, Billing claims, mobile bundles hold them); a type change moves the entry to another group.
   - Adoption mirrors SSO's import match: code (ignoring case), then exact name with the same ZIP, exactly one
-    candidate each, pending until confirmed; no name-only adoption. `--link-by-name` links by code, then name.
+    candidate each, pending until confirmed; no name-only adoption. Since SSO allows several facilities to
+    share a code that does not name one place (a state's catch-all such as PA OTH00001, or a code the state's
+    list uses for several places; UNI-1741, facilities are unique by code, not by name), a code already held
+    by a linked local row no longer adopts by code: the next SSO facility with it adopts only by name + ZIP. `--link-by-name` links by code, then name.
   - Migration (`vendor:publish --tag=sso-master-data-facilities`) adds `sso_facility_id`, `is_active`,
     `sort_order`, `sso_updated_at`, `sso_link_pending` (each skipped when present); the SSO link is unique per
     company where the table has company_id, else on its own (`{table}_sso_facility_unique`).

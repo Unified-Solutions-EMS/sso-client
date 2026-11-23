@@ -867,9 +867,17 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   (evidence is in the config comment). The middleware hard-refuses `XSRF-TOKEN`, `config('session.cookie')`,
   anything ending `_session`, and anything starting `remember_web` regardless of the config list —
   scrubbing those would sign every user out on every request. Empty list disables it.
-- **Roster reconcile** — `sso:sync-users` command, scheduled hourly from the provider via
-  `config('sso.roster_sync')`, `withoutOverlapping()`. Pulls each locally-known company's full roster
-  from SSO and runs every member through `SsoUserSynchronizer`, so apps see users who never logged in.
+- **Roster reconcile** — there is no `sso:sync-users` command and no scheduled pull in this package
+  (an earlier doc described one; it was never written, checked 2026-11-22). The heal runs in SSO:
+  its nightly `webhooks:reconcile-rosters` (UNI-1735) asks every app
+  `GET /api/internal/roster/{ssoCompanyId}` (`Http\RosterMembersController`, `ValidateCoreApiKey`)
+  -> `{provisioned: bool, sso_user_ids: [int]}` = the `users.sso_id` of every `company_user` member of
+  the local company with that `sso_company_id` (read with the query builder, no model scopes, so a
+  soft-deleted local user still counts as present and is never re-created), compares it with SSO's
+  members and re-sends `user.created` only for the ones missing, on SSO's backfill queue. Ids only, no
+  names. A company the app does not have answers `provisioned: false` (200). An app on an older package
+  answers 404 there, and SSO skips it. Apps need no code: `composer update unified/sso-client
+  --prefer-dist` is all. Tests: `RosterMembersEndpointTest`.
 - **Timezone propagation** — SSO owns `companies.timezone`; the package mirrors it onto the app's local
   `companies.timezone` in both the login sync and the `company.updated` webhook, guarded by
   `Schema::hasColumn()` so apps that haven't adopted the column ignore it. Apps must NOT ship their
@@ -961,8 +969,8 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   them all; `HasMirroredQualifications` / `QualificationCatalog` apply the filter when reading.
   A `user.qualifications_changed` for a user this app has not provisioned yet is acked `skipped`;
   the nightly resync (below) heals it for people who never log in.
-  `/api/user` `companies[].qualifications: [{id, name}]` (also on the roster endpoint
-  `sso:sync-users` reads) is mirrored on login by `SsoUserSynchronizer` (no-op when the key is
+  `/api/user` `companies[].qualifications: [{id, name}]` (also on SSO's roster endpoint
+  `GET /api/internal/companies/{id}/users`) is mirrored on login by `SsoUserSynchronizer` (no-op when the key is
   absent). That payload carries only ACTIVE qualifications, while webhooks and the internal
   endpoint carry the full set, so the login sync only adds/removes assignments to active rows and
   never touches assignments to inactive ones; a login cannot undo a webhook. Assignment replacement only

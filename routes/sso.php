@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use Unified\SsoClient\Http\AgencyStatus\AgencyStatusController;
+use Unified\SsoClient\Http\RosterMembersController;
 use Unified\SsoClient\Http\SsoActionController;
 use Unified\SsoClient\Http\SsoCallbackController;
 use Unified\SsoClient\Http\SsoDashboardController;
@@ -40,3 +41,10 @@ Route::post('/api/sso/actions/{action}', SsoActionController::class)
 Route::middleware(ValidateCoreApiKey::class)
     ->get('/api/internal/agency-status/{ssoCompanyId}', AgencyStatusController::class)
     ->name('sso.agency-status');
+
+// Roster members — CORE_APP_API_KEY auth. SSO's nightly roster reconcile
+// (webhooks:reconcile-rosters) asks which of a company's people this app
+// has and re-sends user.created only for the ones it is missing.
+Route::middleware(ValidateCoreApiKey::class)
+    ->get('/api/internal/roster/{ssoCompanyId}', RosterMembersController::class)
+    ->name('sso.roster-members');

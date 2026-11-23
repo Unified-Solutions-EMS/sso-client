@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Unified\SsoClient\Tests\Stubs\StubRunTrialSeeder;
 use Unified\SsoClient\Tests\Stubs\StubTrialDataSeeder;
+use Unified\SsoClient\Trial\AppTrialJobs;
 use Unified\SsoClient\Trial\Jobs\ReportTrialSeedFailure;
 use Unified\SsoClient\Trial\Jobs\ReportTrialSeedStatus;
 use Unified\SsoClient\Trial\TrialSeedStatusReporter;
@@ -121,5 +122,37 @@ class TrialSeedStatusTest extends TrialTestCase
         app(TrialSeedStatusReporter::class)->report(77, TrialSeedStatusReporter::SEEDED);
 
         Http::assertNothingSent();
+    }
+
+    public function test_the_answer_says_the_seeder_is_not_safe_to_repeat_unless_it_declares_so(): void
+    {
+        $this->noMirrors();
+        Bus::fake();
+        Http::fake();
+        $this->company(77);
+
+        $this->postTrialWebhook('trial.seed_data', 77)
+            ->assertOk()
+            ->assertJsonPath('seed_repeatable', false);
+    }
+
+    public function test_the_answer_says_a_repeatable_seeder_may_be_sent_again(): void
+    {
+        $this->noMirrors();
+        Bus::fake();
+        Http::fake();
+        $this->company(77);
+        $this->app->instance(AppTrialJobs::class, new class extends AppTrialJobs
+        {
+            public function seederIsRepeatable(): bool
+            {
+                return true;
+            }
+        });
+
+        $this->postTrialWebhook('trial.seed_data', 77)
+            ->assertOk()
+            ->assertJsonPath('seed_repeatable', true)
+            ->assertJsonPath('seed_status', 'pending');
     }
 }

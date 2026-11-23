@@ -77,7 +77,7 @@ class TrialSeedContextTest extends TrialTestCase
 
         $this->postTrialWebhook('trial.seed_data', 77, $this->payload())
             ->assertOk()
-            ->assertExactJson(['status' => 'ok', 'action' => 'trial.seed_data', 'seed_status' => 'pending']);
+            ->assertExactJson(['status' => 'ok', 'action' => 'trial.seed_data', 'seed_status' => 'pending', 'seed_repeatable' => false]);
 
         $this->assertSeededWithoutContext();
         Http::assertSentCount(1);

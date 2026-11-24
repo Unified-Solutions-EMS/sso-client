@@ -755,28 +755,54 @@ class SsoWebhookController extends Controller
 
     protected function queueRoleReloadForCompanyId($user, int $companyId, bool $removed): void
     {
+        $this->queueRoleReloads($user, [$companyId => $removed]);
+    }
+
+    /**
+     * Queue the notes for every company one delivery changed in a fixed number
+     * of queries (read, delete the superseded, one insert), however many
+     * companies changed: a full user update can touch dozens.
+     *
+     * @param  array<int, bool>  $removedByCompanyId  local company id => removed
+     */
+    protected function queueRoleReloads($user, array $removedByCompanyId): void
+    {
+        if ($removedByCompanyId === []) {
+            return;
+        }
+
         try {
             $stale = SsoSessionAction::query()
                 ->where('user_id', $user->id)
                 ->where('action', SsoSessionAction::ACTION_RELOAD_ROLES)
                 ->get()
-                ->filter(fn (SsoSessionAction $action): bool => (int) ($action->payload['company_id'] ?? 0) === $companyId)
+                ->filter(fn (SsoSessionAction $action): bool => array_key_exists((int) ($action->payload['company_id'] ?? 0), $removedByCompanyId))
                 ->modelKeys();
 
             if ($stale !== []) {
                 SsoSessionAction::query()->whereKey($stale)->delete();
             }
 
-            SsoSessionAction::create([
-                'user_id' => $user->id,
-                'action' => SsoSessionAction::ACTION_RELOAD_ROLES,
-                'payload' => ['company_id' => $companyId, 'removed' => $removed],
-                'expires_at' => now()->addMinutes(max((int) config('session.lifetime', 120), 480)),
-            ]);
+            $now = now();
+            $expiresAt = $now->copy()->addMinutes(max((int) config('session.lifetime', 120), 480));
+            $rows = [];
+
+            foreach ($removedByCompanyId as $companyId => $removed) {
+                $rows[] = [
+                    'user_id' => $user->id,
+                    'action' => SsoSessionAction::ACTION_RELOAD_ROLES,
+                    'payload' => json_encode(['company_id' => (int) $companyId, 'removed' => $removed]),
+                    'expires_at' => $expiresAt,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ];
+            }
+
+            SsoSessionAction::query()->insert($rows);
         } catch (\Throwable $e) {
             Log::warning('SSO webhook: could not queue a role reload for open sessions', [
                 'user_id' => $user->id,
-                'company_id' => $companyId,
+                'company_ids' => array_keys($removedByCompanyId),
                 'error' => $e->getMessage(),
             ]);
         }
@@ -938,13 +964,19 @@ class SsoWebhookController extends Controller
             return;
         }
 
-        foreach ($before + $after as $companyId => $unused) {
+        // Only companies the person already had: one just joined cannot be
+        // selected in an open session, and switching to it loads its roles.
+        $changes = [];
+
+        foreach ($before as $companyId => $roleIds) {
             if (! array_key_exists($companyId, $after)) {
-                $this->queueRoleReloadForCompanyId($user, $companyId, true);
-            } elseif (($before[$companyId] ?? null) !== $after[$companyId]) {
-                $this->queueRoleReloadForCompanyId($user, $companyId, false);
+                $changes[$companyId] = true;
+            } elseif ($roleIds !== $after[$companyId]) {
+                $changes[$companyId] = false;
             }
         }
+
+        $this->queueRoleReloads($user, $changes);
     }
 
     /**

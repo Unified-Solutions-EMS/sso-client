@@ -547,6 +547,89 @@ class RoleChangeTakesEffectTest extends TestCase
         $this->clickAs($user, $session, '/staff')->assertSee('staff');
     }
 
+    /**
+     * Agencies numbered from $firstSsoId, each with their own Admin and User roles, beyond the two
+     * seedCompanies() makes.
+     *
+     * @return list<int> their SSO company ids
+     */
+    private function seedMoreCompanies(int $count, int $firstSsoId = 101): array
+    {
+        $ssoIds = [];
+
+        for ($i = 0; $i < $count; $i++) {
+            $ssoId = $firstSsoId + $i;
+            $company = Company::create(['name' => "Agency {$ssoId}", 'sso_company_id' => (string) $ssoId]);
+            SpatieRole::query()->create(['name' => 'Admin', 'guard_name' => 'web', 'company_id' => $company->id]);
+            SpatieRole::query()->create(['name' => 'User', 'guard_name' => 'web', 'company_id' => $company->id]);
+            $ssoIds[] = $ssoId;
+        }
+
+        return $ssoIds;
+    }
+
+    /**
+     * @param  array<int, list<string>>  $rolesBySsoCompanyId
+     */
+    private function queriesForUserEvent(array $rolesBySsoCompanyId): int
+    {
+        DB::flushQueryLog();
+
+        return $this->countQueries(fn () => $this->sendUserEvent($rolesBySsoCompanyId));
+    }
+
+    public function test_companies_a_user_update_adds_get_no_note_and_cost_no_query_per_company(): void
+    {
+        [$a] = $this->seedCompanies();
+        $one = $this->seedMoreCompanies(1);
+        $ten = $this->seedMoreCompanies(10, 201);
+        $this->signedInMember([$a->id => 'Admin'], $a->id);
+
+        $addOne = $this->queriesForUserEvent([self::SSO_COMPANY_A => ['Admin'], $one[0] => ['User']]);
+
+        $this->assertSame(0, $this->reloadNotes());
+
+        $addTen = $this->queriesForUserEvent(
+            [self::SSO_COMPANY_A => ['Admin'], $one[0] => ['User']] + array_fill_keys($ten, ['User']),
+        );
+
+        $this->assertSame(0, $this->reloadNotes());
+        $this->assertSame($addOne, $addTen);
+    }
+
+    public function test_roles_lowered_in_many_companies_leave_one_note_each_in_a_fixed_number_of_queries(): void
+    {
+        $this->seedCompanies();
+        $two = $this->seedMoreCompanies(2);
+        $ten = $this->seedMoreCompanies(10, 201);
+        $adminsIn = fn (array $ssoIds): array => Company::query()
+            ->whereIn('sso_company_id', array_map('strval', $ssoIds))
+            ->pluck('id')
+            ->mapWithKeys(fn (int $id): array => [$id => 'Admin'])
+            ->all();
+
+        $first = $this->signedInMember($adminsIn($two), array_key_first($adminsIn($two)));
+        $lowerTwo = $this->queriesForUserEvent(array_fill_keys($two, ['User']));
+        $this->assertSame(2, $this->reloadNotes());
+
+        $first->companies()->detach();
+        DB::table('company_user_roles')->delete();
+        SsoSessionAction::query()->delete();
+        $first->delete();
+
+        $this->signedInMember($adminsIn($ten), array_key_first($adminsIn($ten)));
+        $lowerTen = $this->queriesForUserEvent(array_fill_keys($ten, ['User']));
+
+        $this->assertSame(10, $this->reloadNotes());
+        $this->assertSame($lowerTwo, $lowerTen);
+        $this->assertSame(
+            array_values(Company::query()->whereIn('sso_company_id', array_map('strval', $ten))->pluck('id')->sort()->all()),
+            SsoSessionAction::query()->get()->map(fn (SsoSessionAction $action): int => (int) $action->payload['company_id'])->sort()->values()->all(),
+        );
+        $this->assertFalse(SsoSessionAction::query()->get()->contains(fn (SsoSessionAction $action): bool => $action->payload['removed']));
+        $this->assertNotNull(SsoSessionAction::query()->value('expires_at'));
+    }
+
     private function countQueries(callable $request): int
     {
         DB::enableQueryLog();

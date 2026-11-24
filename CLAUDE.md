@@ -896,9 +896,22 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   company switch that selects it loads fresh roles. Impersonating sessions are signed in as the
   impersonated user, so they get the change too. Known limits: because `model_has_roles` is per user,
   a person with two sessions on DIFFERENT companies in one app still shares one set of Spatie rows (as
-  before); `user.updated` role changes and membership prunes do not queue a reload; and an Inertia app
-  whose `HandleInertiaRequests` runs before this middleware and computes a role flag eagerly in `share()`
-  shows that flag one click late (route guards are fresh). Tests: `RoleChangeTakesEffectTest`.
+  before); and an Inertia app whose `HandleInertiaRequests` runs before this middleware and computes a
+  role flag eagerly in `share()` shows that flag one click late (route guards are fresh).
+  **Full user updates do the same (James 2026-11-23).** Since SSO #336, `user.created` / `user.updated`
+  carry this app's role per company and leave out companies with No access here, and SSO's "left the
+  company" is a `user.updated` with the remaining list. `syncUserCompanyMemberships()` reads the person's
+  memberships and role ids before and after the write (`membershipRoleSnapshot()`, one query each) and
+  queues the same `reload_roles` note per company that changed: roles differ = reload, membership gone =
+  `removed: true` (the No-access path above). A delivery that changes nothing (name, phone, email edits)
+  writes no note, so no session does anything. A user this delivery just created gets no note (no session
+  yet). A snapshot that cannot be read skips the notes and the sync still runs (fail open). Other events,
+  checked 2026-11-23: SSO's bulk No access (`appAccessRemovedInBulk` / `appRolesSentInBulk`) is
+  `user.app_role_changed` and already queues it; `company.updated` / `company.activated` touch no roles;
+  `user.staff_role_changed` needs nothing, because `isStaff()` / `hasStaffRole()` read `users.staff_roles`
+  from the user row the guard loads on every request; `trial.seed_data` writes Admin / User for trial
+  users who are not signed in yet; `company.deleted` is each app's own handler. Tests:
+  `RoleChangeTakesEffectTest`.
 - **Legacy cookie scrub** — `Middleware\PurgeLegacyApexCookies` (`sso.purge-legacy-cookies`), also
   auto-appended to the `web` group. The legacy ASP.NET app set several cookies on `.unified-apps.com`,
   so browsers still send them to every app on the platform; its own logout only wrote host-only

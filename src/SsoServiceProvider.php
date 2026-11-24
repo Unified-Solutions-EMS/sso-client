@@ -4,11 +4,13 @@ namespace Unified\SsoClient;
 
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Http\Kernel as HttpKernel;
+use Illuminate\Mail\MailManager;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 use Unified\SsoClient\Contracts\AssistantToolProvider;
 use Unified\SsoClient\Contracts\SsoUserSynchronizerContract;
+use Unified\SsoClient\Mail\TwilioCommsTransport;
 use Unified\SsoClient\MasterData\Agency\AgencyProjection;
 use Unified\SsoClient\MasterData\Agency\StandardAgencyProjection;
 use Unified\SsoClient\MasterData\Contacts\ContactProjection;
@@ -53,6 +55,8 @@ class SsoServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/metrics.php', 'metrics');
         $this->mergeConfigFrom(__DIR__.'/../config/security.php', 'security');
         $this->mergeConfigFrom(__DIR__.'/../config/security-headers.php', 'security-headers');
+        $this->mergeConfigFrom(__DIR__.'/../config/twilio-comms.php', 'twilio-comms');
+        $this->registerTwilioCommsMailer();
 
         $this->app->singleton(SsoClient::class);
         $this->app->singleton(SsoSessionState::class);
@@ -132,8 +136,26 @@ class SsoServiceProvider extends ServiceProvider
         }
     }
 
+    /**
+     * MAIL_MAILER=twilio-comms needs a `mail.mailers.twilio-comms` entry; add
+     * one for apps whose config/mail.php has none. An app that defines its own
+     * keeps it.
+     */
+    private function registerTwilioCommsMailer(): void
+    {
+        $config = $this->app->make('config');
+
+        if (! is_array($config->get('mail.mailers.twilio-comms'))) {
+            $config->set('mail.mailers.twilio-comms', ['transport' => 'twilio-comms']);
+        }
+    }
+
     public function boot(): void
     {
+        $this->callAfterResolving('mail.manager', function (MailManager $mail): void {
+            $mail->extend('twilio-comms', fn (array $config): TwilioCommsTransport => TwilioCommsTransport::fromConfig($config));
+        });
+
         if ($this->app->runningInConsole()) {
             $this->commands([
                 Console\PurgeFakeUsersCommand::class,

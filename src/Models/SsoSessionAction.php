@@ -15,6 +15,15 @@ class SsoSessionAction extends Model
 
     public const ACTION_SET_COMPANY = 'set_company';
 
+    /**
+     * The user's roles in one company changed (payload `company_id`, and
+     * `removed: true` for No access). Unlike the other actions it is not
+     * deleted when applied: every session the user has open must see it once,
+     * so each session records the highest id it has applied and the row
+     * lives until it expires.
+     */
+    public const ACTION_RELOAD_ROLES = 'reload_roles';
+
     protected $table = 'sso_session_actions';
 
     protected $fillable = [

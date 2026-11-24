@@ -903,7 +903,11 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   company" is a `user.updated` with the remaining list. `syncUserCompanyMemberships()` reads the person's
   memberships and role ids before and after the write (`membershipRoleSnapshot()`, one query each) and
   queues the same `reload_roles` note per company that changed: roles differ = reload, membership gone =
-  `removed: true` (the No-access path above). A delivery that changes nothing (name, phone, email edits)
+  `removed: true` (the No-access path above). Only companies the person already had count: a company the
+  delivery adds gets no note (no open session can have it selected; switching to it loads its roles). All
+  of a delivery's notes are written by `queueRoleReloads()` in three queries (read, delete superseded, one
+  insert) however many companies changed (Reporting's `SsoUserWebhookN1Test` pins a user update's query
+  count against company count). A delivery that changes nothing (name, phone, email edits)
   writes no note, so no session does anything. A user this delivery just created gets no note (no session
   yet). A snapshot that cannot be read skips the notes and the sync still runs (fail open). Other events,
   checked 2026-11-23: SSO's bulk No access (`appAccessRemovedInBulk` / `appRolesSentInBulk`) is

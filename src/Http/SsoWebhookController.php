@@ -750,12 +750,17 @@ class SsoWebhookController extends Controller
      */
     protected function queueRoleReload($user, $company, bool $removed): void
     {
+        $this->queueRoleReloadForCompanyId($user, (int) $company->id, $removed);
+    }
+
+    protected function queueRoleReloadForCompanyId($user, int $companyId, bool $removed): void
+    {
         try {
             $stale = SsoSessionAction::query()
                 ->where('user_id', $user->id)
                 ->where('action', SsoSessionAction::ACTION_RELOAD_ROLES)
                 ->get()
-                ->filter(fn (SsoSessionAction $action): bool => (int) ($action->payload['company_id'] ?? 0) === (int) $company->id)
+                ->filter(fn (SsoSessionAction $action): bool => (int) ($action->payload['company_id'] ?? 0) === $companyId)
                 ->modelKeys();
 
             if ($stale !== []) {
@@ -765,13 +770,13 @@ class SsoWebhookController extends Controller
             SsoSessionAction::create([
                 'user_id' => $user->id,
                 'action' => SsoSessionAction::ACTION_RELOAD_ROLES,
-                'payload' => ['company_id' => (int) $company->id, 'removed' => $removed],
+                'payload' => ['company_id' => $companyId, 'removed' => $removed],
                 'expires_at' => now()->addMinutes(max((int) config('session.lifetime', 120), 480)),
             ]);
         } catch (\Throwable $e) {
             Log::warning('SSO webhook: could not queue a role reload for open sessions', [
                 'user_id' => $user->id,
-                'company_id' => $company->id,
+                'company_id' => $companyId,
                 'error' => $e->getMessage(),
             ]);
         }
@@ -907,9 +912,89 @@ class SsoWebhookController extends Controller
      * SSO-linked; entries that carry no usable id are treated as a
      * malformed payload and leave memberships untouched.
      *
+     * Since SSO #336 the list is per receiving app: `roles` is this app's
+     * role and a company where the person has No access here is left out,
+     * so a full user update can lower a role or take a company away. When
+     * it did, open sessions get the same note `user.app_role_changed`
+     * leaves (UNI-1818); when it changed nothing (a name, phone or email
+     * edit, most of these deliveries) no note is written and no session
+     * reloads anything. A user created by this delivery has no session yet.
+     *
      * @param  array<int, array<string, mixed>>  $companies
      */
     protected function syncUserCompanyMemberships($user, array $companies): void
+    {
+        $before = $user->wasRecentlyCreated ? null : $this->membershipRoleSnapshot($user);
+
+        $this->writeUserCompanyMemberships($user, $companies);
+
+        if ($before === null) {
+            return;
+        }
+
+        $after = $this->membershipRoleSnapshot($user);
+
+        if ($after === null) {
+            return;
+        }
+
+        foreach ($before + $after as $companyId => $unused) {
+            if (! array_key_exists($companyId, $after)) {
+                $this->queueRoleReloadForCompanyId($user, $companyId, true);
+            } elseif (($before[$companyId] ?? null) !== $after[$companyId]) {
+                $this->queueRoleReloadForCompanyId($user, $companyId, false);
+            }
+        }
+    }
+
+    /**
+     * The person's memberships here and the role ids held in each, as
+     * [local company id => sorted role ids]. Null when it cannot be read:
+     * the sync then runs without leaving notes (fail open).
+     *
+     * @return array<int, list<int>>|null
+     */
+    protected function membershipRoleSnapshot($user): ?array
+    {
+        try {
+            $rows = DB::table('company_user')
+                ->leftJoin('company_user_roles', function ($join): void {
+                    $join->on('company_user_roles.company_id', '=', 'company_user.company_id')
+                        ->on('company_user_roles.user_id', '=', 'company_user.user_id');
+                })
+                ->where('company_user.user_id', $user->id)
+                ->get(['company_user.company_id', 'company_user_roles.role_id']);
+        } catch (\Throwable $e) {
+            Log::warning('SSO webhook: could not read memberships to compare a user update', [
+                'user_id' => $user->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+
+        $snapshot = [];
+
+        foreach ($rows as $row) {
+            $snapshot[(int) $row->company_id] ??= [];
+
+            if ($row->role_id !== null) {
+                $snapshot[(int) $row->company_id][] = (int) $row->role_id;
+            }
+        }
+
+        foreach ($snapshot as &$roleIds) {
+            $roleIds = array_values(array_unique($roleIds));
+            sort($roleIds);
+        }
+
+        return $snapshot;
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $companies
+     */
+    protected function writeUserCompanyMemberships($user, array $companies): void
     {
         $ssoIds = array_values(array_filter(array_map(
             fn ($c) => isset($c['id']) ? (string) $c['id'] : null,

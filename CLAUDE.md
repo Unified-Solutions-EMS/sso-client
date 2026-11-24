@@ -844,6 +844,51 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   Best-effort like Metrics: unconfigured apps log-and-noop, the send job swallows all failures (on a
   sync queue it runs inside the calling request, so it must never raise), and recording defaults to
   OFF under unit tests — pipeline tests opt back in with `config(['security.enabled' => true])`.
+- **Email through Twilio (`twilio-comms` mail transport, 2026-11-24)** — `Mail\TwilioCommsTransport`, registered by
+  `SsoServiceProvider` (`Mail::extend('twilio-comms')` once `mail.manager` resolves) along with a default
+  `mail.mailers.twilio-comms` entry when the app's `config/mail.php` has none, so an app needs no code. It posts to
+  Twilio's Comms email API (`POST https://comms.twilio.com/v1/Emails`, Basic auth with the account SID + auth token,
+  202 + `operationId` = accepted, not delivered; the `operationId` becomes the sent message's id). Config
+  `config/twilio-comms.php`. **Env an app sets:** `MAIL_MAILER=twilio-comms`, `TWILIO_ACCOUNT_SID`,
+  `TWILIO_AUTH_TOKEN`, `MAIL_FROM_ADDRESS` (a domain verified in Twilio, e.g. `noreply@unified-apps.com`),
+  `MAIL_FROM_NAME`; optional `TWILIO_COMMS_EMAIL_ENDPOINT`, `TWILIO_COMMS_EMAIL_TIMEOUT` (30 s),
+  `TWILIO_COMMS_EMAIL_CONNECT_TIMEOUT` (5 s). These are the env names SSO, Public_Website and Bridge already use,
+  so their own copies can be deleted with no env change; an endpoint in the app's own mailer entry still wins.
+  **What Twilio accepts decides the mapping** (its documented body: `from {address, name}` (name required),
+  `to [{address, name?}]` (up to 10,000, each its own copy), `content {subject, html (required), text?, headers?,
+  attachments? [{filename, contentType, content base64, cid?}]}`, 10 MB per request; no cc / bcc / reply-to field,
+  and To / CC / BCC / Reply-To are headers it refuses):
+  - **to + cc** go in one request, de-duplicated; each address gets its own copy, so recipients no longer see each
+    other on the To / Cc lines.
+  - **bcc**: one request per address (never in a shared batch), so no other recipient can be shown it. A failure on
+    a later bcc request throws after the earlier requests were accepted; a queue retry resends all of them.
+  - **reply-to**: dropped, the message is sent, and `Twilio Comms email: reply-to dropped…` is logged at warning with
+    `message_id` + `reply_to_count` only. Sending it 400s the whole message (Public_Website found this 2026-07-12).
+    Put a reply address in the body.
+  - **attachments** (PDFs etc.) are sent base64 with filename + content type; **inline images** carry `cid` (the
+    content id Laravel's `embed()` writes, or the name Symfony's `embed($file, 'logo')` lets the HTML use). Over
+    10 MB total is refused before sending.
+  - **custom headers** (List-Unsubscribe, `X-*`) go in `content.headers`; envelope and MIME headers are left out.
+  - **text-only mail** (`Mail::raw`) gets an html part built from the text (Twilio requires html); Twilio builds the
+    text part itself when only html is sent.
+  - **Failures:** a non-2xx throws `TransportException("Twilio Comms email send failed (HTTP {status}, Twilio error
+    {code}).")` with the HTTP status as its code. Twilio's message text is never included (it echoes rejected
+    addresses), nor the body, subject or recipients: mail can carry PHI and these exceptions reach Sentry. 429 and 503
+    are retried twice after `Retry-After` (capped at 5 s); 500s (Twilio says do not retry) and timeouts / connection
+    failures are not retried, because the API has no idempotency key and a resend after an unanswered request could
+    deliver twice; the exception lets the queue's retry decide. Missing credentials throw before any request.
+  - **Liquid:** Twilio documents Liquid templating in subject / html / text, so a literal `{{` or `{%` in a mail body
+    may be read as a template tag. Blade output rarely has one; whether Twilio applies Liquid to a recipient with no
+    `variables` is not verified on a real send.
+  - **Apps with their own copy** (SSO, Public_Website: `app/Mail/Transport/TwilioCommsTransport.php` +
+    `Mail::extend('twilio-comms')` in `AppServiceProvider`): the app provider boots after the package's, so its
+    `extend()` replaces the package's and the app's copy keeps sending until it is deleted; nothing is sent twice.
+    Delete the copy, its `Mail::extend` call and SSO's `mail.twilio_comms.send_custom_headers` flag (headers are now
+    always sent) in the same PR as the package update. Bridge does not use this package and keeps its copy.
+  - **Switching an app from SendGrid:** `composer update unified/sso-client --prefer-dist`, deploy; set
+    `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN`, `MAIL_FROM_ADDRESS`, then `MAIL_MAILER=twilio-comms`; send one test
+    mail; remove `MAIL_HOST` / `MAIL_PORT` / `MAIL_USERNAME` / `MAIL_PASSWORD`. Deploy the package before flipping
+    `MAIL_MAILER` or every send fails with "Unsupported mail transport". Tests: `tests/Feature/Mail/TwilioCommsTransportTest.php`.
 - **Dashboard + action endpoints** — `POST /api/sso/dashboard` (`config('sso.dashboard_provider')`
   implementing `DashboardDataProvider`) and `POST /api/sso/actions/{action}`
   (`config('sso.action_handlers')` map to `SsoActionHandler`), both HMAC-verified.

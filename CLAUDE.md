@@ -811,9 +811,16 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   - **Install sweep per app:** `composer update unified/sso-client --prefer-dist`; add
     `<x-unified-assistant />` (and remove any `<x-intercom-widget />`); confirm `SSO_APP_SLUG` and
     `CORE_APP_API_KEY`; nothing else. Tools are optional and come later per app.
-- **`Concerns\SyncsCompanyRoles`** — `loadRolesForCompany()`, `hasRoleInCompany()`, `companyRoleNames()`
-  plus staff helpers `isStaff()`, `hasStaffRole()`, `isGlobalAdmin()` reading the package-managed
-  `users.staff_roles` column. Apps must delete hand-rolled copies of these.
+- **`Concerns\SyncsCompanyRoles`** — `loadRolesForCompany()`, `refreshRolesForCompany()`, `hasRoleInCompany()`,
+  `companyRoleNames()` plus staff helpers `isStaff()`, `hasStaffRole()`, `isGlobalAdmin()` reading the
+  package-managed `users.staff_roles` column. Apps must delete hand-rolled copies of these.
+  `loadRolesForCompany()` flushes Spatie's app-wide permission cache, then calls `refreshRolesForCompany()`,
+  which rewrites only this user's `model_has_roles` rows from `company_user_roles` (Spatie's cache holds the
+  role/permission catalog, not who holds which role, so one person's change needs no flush).
+  **`model_has_roles` is per user, not per company or session** (Spatie `teams` is off in every app): it holds
+  the roles of whichever company was loaded last. `hasRoleInCompany()` / `companyRoleNames()` read
+  `company_user_roles` live and are never stale; `can()` / `hasRole()` / `@role` / `role:` route middleware
+  go through Spatie and are only as fresh as the last load.
 - **Metrics** — `Metrics` facade (aliased globally) for domain emits and `Metrics\Middleware\TrackSessionMetric`
   (`metrics.session`) for `session.start` heartbeats, appended to an app's `web` group. Context keys
   `local_company_id` / `local_user_id` are translated to SSO ids by `EloquentMetricContextResolver`
@@ -866,6 +873,32 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   which also lost the intended URL because `sso.server_url` is unset there, so a second OAuth trip landed
   on the dashboard 10-15 s later. The fallback now reads `sso.server_url` then `sso.base_url`, and with
   neither sends the person back through the SSO redirect route with `intended` set.
+  **A role change from SSO takes effect on the person's next click (UNI-1818, James 2026-11-23).** Before, a
+  `user.app_role_changed` / `user.company_role_changed` rewrote `company_user_roles` (or removed the
+  membership for No access) but not Spatie's `model_has_roles`, so `can()` / `hasRole()` kept the old role
+  until the next sign-in, company switch or impersonation. `SsoWebhookController::applyRoleChange()` now
+  also queues a `reload_roles` session action `{company_id, removed}` for that user (after the role tables
+  are written; one row per user and company, a newer change replaces it; expires after
+  `max(session.lifetime, 480)` minutes). Writing it fails open: an error is logged and the role change
+  itself still applies. The middleware already reads the user's `sso_session_actions` rows on every
+  authenticated request, so this adds **no query** when nothing changed. Unlike the other actions the row
+  is **not deleted** when applied: each session stores the highest id it applied in
+  `SESSION_ROLES_SEEN_ID` (`sso_roles_seen_action_id`), so every open session (other browsers, other
+  instances, warm Octane workers) applies it once. For a change to the company the session has selected:
+  roles are re-hydrated before the request runs (`refreshRolesForCompany()` for the trait; an app's own
+  `loadRolesForCompany()` override is called instead when it has one, detected by the declaring file); a
+  reload that throws lets the request through with the old roles and retries on the next request. For No
+  access to the selected company: sign out of this app only (never SSO's `/auth/logout`, so an
+  impersonating staff member keeps their SSO session), drop `selected_company_id` (and
+  `impersonated_company_id` when it is that company), and go back through `sso.routes.redirect` with
+  `intended` (JSON requests get a 401): the callback picks a company the person can still use, or the
+  no-access page. A change for a company the session does not have selected is only marked seen; the
+  company switch that selects it loads fresh roles. Impersonating sessions are signed in as the
+  impersonated user, so they get the change too. Known limits: because `model_has_roles` is per user,
+  a person with two sessions on DIFFERENT companies in one app still shares one set of Spatie rows (as
+  before); `user.updated` role changes and membership prunes do not queue a reload; and an Inertia app
+  whose `HandleInertiaRequests` runs before this middleware and computes a role flag eagerly in `share()`
+  shows that flag one click late (route guards are fresh). Tests: `RoleChangeTakesEffectTest`.
 - **Legacy cookie scrub** — `Middleware\PurgeLegacyApexCookies` (`sso.purge-legacy-cookies`), also
   auto-appended to the `web` group. The legacy ASP.NET app set several cookies on `.unified-apps.com`,
   so browsers still send them to every app on the platform; its own logout only wrote host-only

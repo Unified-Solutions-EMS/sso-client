@@ -730,11 +730,51 @@ class SsoWebhookController extends Controller
 
         if ($explicitlyNone) {
             $this->detachCompanyMembership($user, $company);
-
-            return;
+        } else {
+            $this->syncRoles($user, $company, $roles);
         }
 
-        $this->syncRoles($user, $company, $roles);
+        $this->queueRoleReload($user, $company, $explicitlyNone);
+    }
+
+    /**
+     * Tell every session the user has open here that their roles in this
+     * company changed, so the next request re-hydrates Spatie's roles (or,
+     * for No access, leaves the company) instead of waiting for the next
+     * sign-in. Written after the role tables so a session that reads the row
+     * always reloads the new roles. One row per user and company: a newer
+     * change replaces it. It lives as long as a session can stay idle.
+     *
+     * Fail open: the role change above has already been applied, so a
+     * failure here only means the old wait-for-next-sign-in behavior.
+     */
+    protected function queueRoleReload($user, $company, bool $removed): void
+    {
+        try {
+            $stale = SsoSessionAction::query()
+                ->where('user_id', $user->id)
+                ->where('action', SsoSessionAction::ACTION_RELOAD_ROLES)
+                ->get()
+                ->filter(fn (SsoSessionAction $action): bool => (int) ($action->payload['company_id'] ?? 0) === (int) $company->id)
+                ->modelKeys();
+
+            if ($stale !== []) {
+                SsoSessionAction::query()->whereKey($stale)->delete();
+            }
+
+            SsoSessionAction::create([
+                'user_id' => $user->id,
+                'action' => SsoSessionAction::ACTION_RELOAD_ROLES,
+                'payload' => ['company_id' => (int) $company->id, 'removed' => $removed],
+                'expires_at' => now()->addMinutes(max((int) config('session.lifetime', 120), 480)),
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('SSO webhook: could not queue a role reload for open sessions', [
+                'user_id' => $user->id,
+                'company_id' => $company->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     protected function detachCompanyMembership($user, $company): void

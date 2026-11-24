@@ -37,6 +37,18 @@ trait SyncsCompanyRoles
     {
         app(PermissionRegistrar::class)->forgetCachedPermissions();
 
+        $this->refreshRolesForCompany($companyId);
+    }
+
+    /**
+     * Rewrite this user's Spatie roles from company_user_roles without
+     * flushing the app-wide permission cache. That cache holds the role and
+     * permission catalog, not who holds which role, so a change to one
+     * person's roles needs only their own rows rewritten. Used when SSO
+     * changes a signed-in person's role (EnforceSsoSessionActions).
+     */
+    public function refreshRolesForCompany(int $companyId): void
+    {
         $roleModel = $this->companyRoleModelClass();
 
         $roleIds = DB::table('company_user_roles')

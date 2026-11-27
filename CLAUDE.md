@@ -41,7 +41,7 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   same authorization code. SSO's own oauth tables showed it — a successful access token issued one to
   three seconds before every logged failure (UNI-438, reopened). `SsoSingleFlight::claimOAuthState()`
   settles it with `Cache::add()`, one conditional write the store resolves atomically, so it holds
-  across the several instances Laravel Cloud and Vapor run. The loser stands down: it redirects to
+  across the several instances a Laravel Cloud app runs. The loser stands down: it redirects to
   login, does **not** `report()` (a duplicate callback is ordinary browser behaviour, not a fault),
   and does **not** count toward the loop breaker — otherwise a browser that duplicates its callback
   three times would be shown the sign-in-failed page for a login that actually worked.
@@ -1277,7 +1277,7 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
     number, so set the export override in SSO first if the state must keep seeing the old one),
     `unresolved_*`, `partial` and `refused` in SSO Settings > Vehicles; `SSO_MASTER_DATA_VEHICLES=true`;
     `sso:resync-master-data vehicles`; make the app's vehicle editor read-only. Read side:
-    `VehicleCatalog::usableForCompany()`. Fleet is on Vapor (staging is live): James deploys it.
+    `VehicleCatalog::usableForCompany()`. Fleet is on Laravel Cloud (push-to-deploy from `main` since 2026-11-26).
 
   **Facilities** (fifth entity, `MasterData\Facilities\FacilityMirror`, branch `feature/lists-mirrors`;
   SSO side on `feature/vehicles` and later). Destinations (hospitals, nursing homes, other receiving
@@ -1635,7 +1635,7 @@ Nothing changes in an app until it adds the middleware, except forced HTTPS URLs
 `Strict-Transport-Security`, `Referrer-Policy` or `Permissions-Policy`. Laravel Cloud's edge adds
 `X-Content-Type-Options: nosniff` and `X-Frame-Options` (DENY on SSO, Fire, Crew-Scheduling, CheckSheets,
 account, CRM, Reporting, Transport-Portal, the website; SAMEORIGIN on CloudPCR and CAD; only nosniff on the wiki; nothing
-on Billing or Drug-Tracking). The Vapor apps (HR, Fleet-Management, Truck-Checks) send none of them. App code
+on Billing or Drug-Tracking). HR, Fleet-Management and Truck-Checks, then still on Vapor, sent none of them. App code
 sets headers only on single routes: Billing's `frame.self` previews (`frame-ancestors 'self'` + SAMEORIGIN),
 CloudPCR's PCR PDF (SAMEORIGIN), and file downloads in CRM, Reporting, Bridge and the website (nosniff, a
 locked-down CSP on Bridge's document view and CRM's email preview).
@@ -1666,8 +1666,9 @@ overwrites a header already on the response, so a route middleware that sets its
 - **Permissions.** Camera / microphone are used for chart photos, license and med scans, Billing's mail
   capture and dictation; geolocation by CAD, Fire hydrants, SSO dispatch and mobile web views. `payment` is
   left alone for Stripe (Billing, account).
-- **HSTS and the Vapor apps.** HR, Truck-Checks and Fleet-Management run live in their Vapor `staging`
-  environment, where `APP_ENV` is `staging`: set `SECURITY_HSTS=true` and `SECURITY_FORCE_HTTPS=true` there.
+- **HSTS and the apps moved off Vapor.** HR, Truck-Checks and Fleet-Management ran live in their Vapor `staging`
+  environment, where `APP_ENV` was `staging`. Since 2026-11-26 they run on a Laravel Cloud `production`
+  environment; if their `APP_ENV` is still `staging`, set `SECURITY_HSTS=true` and `SECURITY_FORCE_HTTPS=true` there.
   `includeSubDomains` covers subdomains of the app's own host only (`*.cad2.unified-apps.com`), except on the
   website's apex `unified-solutions.io`, where it covers every subdomain: check that each one serves https
   before enabling it there, or set `SECURITY_HSTS_INCLUDE_SUBDOMAINS=false` for that app.
@@ -1682,7 +1683,7 @@ overwrites a header already on the response, so a route middleware that sets its
   page URL, referrer or script sample. Enforcing a CSP is a later, per-app step after tuning from the events.
 - **Rollout order** (lowest risk first; deploy one, look at the app in a browser, then the next): CRM (staff
   only) → Reporting → Crew-Scheduling → Fire → CheckSheets → account → Transport-Portal → Drug-Tracking → SSO → CAD →
-  Billing → CloudPCR → HR, Fleet-Management, Truck-Checks (Vapor: also the two env flags above) → wiki (needs
+  Billing → CloudPCR → HR, Fleet-Management, Truck-Checks (check `APP_ENV`: the two env flags above) → wiki (needs
   `SECURITY_FRAME_ANCESTORS` first) → Public_Website last (apex HSTS). Turn on `SECURITY_CSP_REPORT_ONLY` per
   app after its headers have settled.
 
@@ -1715,8 +1716,8 @@ their own non-credentialed settings; none of those needs the change.
 **Session cookies** are per-app env; recommended in production: `SESSION_SECURE_COOKIE=true`,
 `SESSION_HTTP_ONLY=true` (Laravel's default), `SESSION_SAME_SITE=lax` (not `strict`: the SSO callback is a
 cross-site top-level navigation and must see the session), `SESSION_ENCRYPT=true` (turning it on makes
-existing unencrypted sessions unreadable, so everyone signs in once more; do it out of hours). Vapor apps also
-keep `SESSION_DRIVER=database` and a distinct `SESSION_COOKIE` (DEV_GUIDELINES §12).
+existing unencrypted sessions unreadable, so everyone signs in once more; do it out of hours). Every app also
+keeps a distinct `SESSION_COOKIE` and never the cookie driver (DEV_GUIDELINES §12).
 
 ## Rotating CORE_APP_API_KEY (UNI-1777)
 
@@ -1751,7 +1752,7 @@ refused until both sides hold the same current key, so switch SSO and CRM back t
 sends it:
 
 1. **Accept the new key everywhere.** On every app set `CORE_APP_API_KEY_PREVIOUS` = NEW and leave
-   `CORE_APP_API_KEY` = OLD; redeploy (Laravel Cloud and Vapor both need a deploy for an env change to
+   `CORE_APP_API_KEY` = OLD; redeploy (Laravel Cloud needs a deploy for an env change to
    land). Every app still sends OLD, every app now accepts both. Expect no `previous_key_used` events yet.
 2. **Switch every app to send the new key.** On every app set `CORE_APP_API_KEY` = NEW and
    `CORE_APP_API_KEY_PREVIOUS` = OLD; redeploy. Apps switched so far send NEW (accepted everywhere since
@@ -1777,7 +1778,7 @@ Nothing here reaches an app until it is pushed and the app updates.
 2. Push the branch/merge to `main`.
 3. In each consuming app: `composer update unified/sso-client --prefer-dist`.
 4. Verify the app's `composer.lock` entry for `unified/sso-client` references the **GitHub dist**,
-   not a local path repo. A path-repo lock entry deploys as a broken/missing package on Vapor and
+   not a local path repo. A path-repo lock entry deploys as a broken/missing package on
    Laravel Cloud.
 
 **Lock-fix recipe** when a lock file is stuck on a path repo or an old commit: temporarily remove the

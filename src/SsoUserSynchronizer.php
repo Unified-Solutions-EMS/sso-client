@@ -32,14 +32,6 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
     private static array $timezoneColumnSupport = [];
 
     /**
-     * Cache of whether a company table carries the package's
-     * `release_channel` column, keyed by table name, like the timezone check.
-     *
-     * @var array<string, bool>
-     */
-    private static array $releaseChannelColumnSupport = [];
-
-    /**
      * Whether the qualifications mirror migration has run, memoized per
      * process for the same reason as the timezone column check.
      */
@@ -309,7 +301,9 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
         // Memoized: the schema doesn't change between logins, so don't pay a
         // schema lookup on every sync.
         $syncsTimezone = self::$timezoneColumnSupport[$companyTable] ??= Schema::hasColumn($companyTable, 'timezone');
-        $syncsReleaseChannel = self::$releaseChannelColumnSupport[$companyTable] ??= Schema::hasColumn($companyTable, ReleaseChannel::COLUMN);
+        // ReleaseChannel caches only "the column is there", so a worker that
+        // started before the migration picks it up within a minute.
+        $syncsReleaseChannel = ReleaseChannel::tableHasColumn($companyTable);
 
         $ssoIds = [];
         $tenantIds = [];
@@ -709,7 +703,7 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
     public static function flushSchemaCache(): void
     {
         self::$timezoneColumnSupport = [];
-        self::$releaseChannelColumnSupport = [];
+        ReleaseChannel::flushSchemaCache();
         self::$qualificationMirrorInstalled = null;
         self::$divisionMirrorInstalled = null;
         self::$personnelMirrorInstalled = null;

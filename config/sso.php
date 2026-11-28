@@ -418,8 +418,16 @@ return [
     |                null means "leave the job's queue alone", i.e. the
     |                connection's own default (queue:work --queue=<that>)
     | never_move     paths that stay on whichever deployment opened them
-    |                (staff admin pages, so staff can test on both)
+    |                (staff admin pages, so staff can test on both, and the
+    |                dashboard widget files SSO loads from the app)
+    | never_move_also  paths ADDED to never_move. Use this, not never_move,
+    |                to keep an app's own pages in place: the package's
+    |                defaults (and any it adds later) still apply
     | company_model  the local company model
+    |
+    | An app's own config/sso.php may set any one of these keys alone; the
+    | rest keep the package defaults (merged key by key, urls and queues
+    | per channel). A never_move list the app sets replaces the default one.
     |
     */
     'release' => [
@@ -432,7 +440,8 @@ return [
             'stable' => env('RELEASE_STABLE_QUEUE'),
             'beta' => env('RELEASE_BETA_QUEUE', 'beta'),
         ],
-        'never_move' => ['admin', 'admin/*'],
+        'never_move' => ['admin', 'admin/*', 'widget', 'widget/*'],
+        'never_move_also' => [],
         'company_model' => 'App\\Models\\Company',
     ],
 

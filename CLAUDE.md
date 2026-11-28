@@ -1781,14 +1781,22 @@ job changes queue, and the only new behaviour is the `sso_company` hand-across b
 **Env (per deployment).** `APP_CHANNEL` (`alpha` | `beta` | `stable`, default `stable`), `RELEASE_STABLE_URL`
 (falls back to `APP_URL`), `RELEASE_BETA_URL` (nullable), optional `RELEASE_STABLE_QUEUE` (default unset =
 leave the job's queue alone, i.e. the connection's own default) and `RELEASE_BETA_QUEUE` (default `beta`).
-Config `sso.release.*` (`channel`, `urls`, `queues`, `never_move` = `['admin', 'admin/*']`,
-`company_model` = `App\Models\Company`). Both shared-database deployments set the same two URLs.
+Config `sso.release.*` (`channel`, `urls`, `queues`, `never_move` = `['admin', 'admin/*', 'widget', 'widget/*']`,
+`never_move_also` = `[]`, `company_model` = `App\Models\Company`). Both shared-database deployments set the same two URLs.
+**An app's own `config/sso.php` sets only what differs.** `SsoServiceProvider::mergeReleaseConfig()` merges the
+`release` block key by key over the package defaults (`urls` and `queues` per channel), so `'release' =>
+['never_move_also' => ['reports/*']]` keeps every other default. To keep more paths in place use `never_move_also`:
+it is added to `never_move`, so paths the package adds to the default later still apply. A `never_move` the app
+sets replaces the default list as before (an app that copied the whole block keeps exactly what it wrote; the copy
+can be deleted). Skipped when the config is cached (the cached file already holds the merged block).
 
 **Column.** `companies.release_channel` string(16) default `stable`, from the package migration
 `2026_11_28_000000_add_release_channel_to_companies_table` (loaded like `users.staff_roles`; skipped when the
 table is missing or the column exists). Purely additive, so the older release keeps working on the same
-table. Every reader and writer checks `Schema::hasColumn()` (memoized), so an app that has not migrated reads
-every agency as stable. The model need not list it as fillable; the package uses `forceFill()`.
+table. Every reader and writer checks `ReleaseChannel::tableHasColumn()`, so an app that has not migrated reads
+every agency as stable. Only "the column is there" is remembered for the life of the process (no query after
+that); "not there" is asked again after `MISSING_COLUMN_RECHECK_SECONDS` (60), so an Octane or queue worker started
+before the migration starts routing within a minute without a restart. The sign-in sync uses the same check. The model need not list it as fillable; the package uses `forceFill()`.
 
 **Sync (SSO is the source).** `/api/user` `companies[].releaseChannel` at sign-in (`SsoUserSynchronizer::resolveCompanies`,
 also on a company created there), and `company.updated` `company.release_channel` (a top-level `release_channel`
@@ -1805,16 +1813,54 @@ listens on), `agencyValue()` (the two-value filter the sync uses).
 group AFTER `EnforceSsoSessionActions`, so an impersonation's `set_company` is in the session first. A plain
 page load (GET/HEAD, not ajax / JSON / `X-Livewire`) by a signed-in person whose selected agency is on the other
 channel is redirected to the same path and query on that channel's URL, plus `sso_company=<SSO company id of
-the selected agency>` (left off when the company is unlinked). An Inertia visit (`X-Inertia`) gets Inertia's
-409 + `X-Inertia-Location` full reload instead. Re-read on every page load, so a change from SSO takes effect
-on the next click.
+the selected agency>` (left off when the company is unlinked). Re-read on every page load, so a change from SSO
+takes effect on the next click.
+- **`Sec-Fetch-Dest` decides what a page is.** When the browser sends it and it is not `document`, `iframe` or
+  `frame`, the request is served where it landed: no move, no hand-across, nothing counted. That keeps the
+  script SSO's dashboard loads from the app (`widget/fleet-dashboard.js`, `script`), images and file previews
+  (`image`) and a plain `fetch()` without a JSON Accept header (`empty`) on this deployment. Without the header
+  (older clients, curl, tests) the old rules decide. `widget` and `widget/*` are also in the default never-move list.
+- **Frames** (`iframe` / `frame`; SSO's dashboard loads a hidden warm-up frame of each app at its launch address)
+  are moved like a page and counted, because a frame is a full document and moving it is harmless, but they never
+  start an SSO sign-in: a frame whose `sso_company` does not match the session (or a guest) is served as it is.
+  A background sign-in in a frame would race the person's real launch for the OAuth state and could switch the
+  app session's agency behind their back; the launch the person clicks does the hand-across.
+- **Prefetches** (`Purpose: prefetch`, `Sec-Purpose: prefetch` / `prefetch;prerender`) get the same answer as the
+  page would, are never counted toward the loop breaker and never start a sign-in.
+- **Inertia** (`X-Inertia`) gets Inertia's 409 + `X-Inertia-Location` full reload instead of a redirect. An
+  Inertia prefetch gets the same 409 uncounted: Inertia keeps it and only acts on it if the link is clicked. A
+  visit made with old assets (`X-Inertia-Version` differs from the version Inertia's middleware set) is not
+  counted, because Inertia's own version reload replaces the answer with a full load of this address, which is
+  moved and counted then. That is only knowable when Inertia's middleware runs around this one; when it runs
+  after, the version still reads empty and this answer (counted) is what the browser gets.
+- **Livewire `wire:navigate`** (`X-Livewire-Navigate`, `''` on Livewire 3, `1` on 4) fetches the next page in the
+  background and swaps it in; a cross-origin redirect fails inside that fetch (the click did nothing). Livewire
+  has no server answer that forces a full load to another origin (checked in 3.8.12 and 4.3.0: no header, no
+  status; Livewire 3's fetch has no error path at all), so a move answers 200 with a tiny page (header
+  `X-Sso-Release-Location: <target>`, `no-store`) whose head runs `window.location.replace(<target>)` (carrying
+  `Vite::cspNonce()` when the app sets one) with a `<meta http-equiv="refresh">` after
+  `REFRESH_FALLBACK_SECONDS` (3) as the fallback for a content security policy that blocks inline scripts, and a
+  Continue link. Livewire swaps it in, runs the script, and the browser makes ONE full load of the other
+  deployment, where the hand-across runs; the clicked address is replaced in history. (A 0-second refresh made
+  Livewire 3 load the target twice: it inserts the refresh after the script has started the load.) Pressing a link
+  and a `wire:navigate.hover` prefetch send the identical request, so a navigate fetch is never counted and never
+  starts a sign-in (one carrying `sso_company` gets the same page pointing at its own address, so the full load
+  does the hand-across); a hover that is never clicked only stores the page. Verified 2026-11-27 headless in
+  Chromium and WebKit against the real Livewire 3.8.12 and 4.3.0 bundles on two local origins, with the page this
+  middleware renders: click, click with inline scripts blocked, hover only (no load), hover then click, each one
+  load of the target.
 
 **What never moves.** `api/*`, `up`, `livewire/*`, the package sign-in routes (`sso.routes`), `assistant` and
-`assistant/*` (none of these see the hand-across either); staff admin pages `admin` and `admin/*` (configurable
-`sso.release.never_move`), which stay on whichever deployment opened them so staff can test staff features on
-both; form posts and background requests; guests; a session with no selected agency; anything on an alpha
+`assistant/*` (none of these see the hand-across either); staff admin pages `admin` and `admin/*` and the dashboard
+widget files `widget` and `widget/*` (`sso.release.never_move` plus `never_move_also`), which stay on whichever
+deployment opened them so staff can test staff features on both; anything the browser says is not a page; form
+posts and background requests; guests; a session with no selected agency; anything on an alpha
 deployment; a target with no URL or on this same host. Loop breaker: 3 moves in 60 s per session, then the
-page is served here and `RouteToReleaseChannel: redirect loop detected` is logged.
+page is served here and `RouteToReleaseChannel: redirect loop detected` is logged. Only page loads, frames and
+non-prefetch Inertia visits count. **Filament panels have their own middleware stack** (`->middleware([...])` in the
+panel provider), not the `web` group, so none of the package's web-group middleware (this one, the session
+actions, the legacy cookie scrub, the session metric) runs on panel pages: staff panels stay on whichever
+deployment opened them whatever their path.
 
 **The `sso_company` hand-across (also UNI-1928).** SSO launches an app at the right deployment's address with
 `?sso_company=<SSO company id>`. On a plain page load carrying it (admin pages included):
@@ -1843,9 +1889,10 @@ and stay on `metrics.queue` / `security.queue` (the default). App jobs, queued n
 `onAgencyChannelBySsoCompanyId($id)` in the constructor (requires `Queueable`).
 
 **Workers.** Stable: `queue:work --queue=<default>` exactly as today (`sso:release-channel --list` prints the
-name). Beta: `queue:work --queue=beta`. Both deployments keep the SAME queue connection settings (do not point
-beta's `REDIS_QUEUE` / `SQS_QUEUE` / `DB_QUEUE` at `beta`): a stable agency's job dispatched on beta is left on
-the connection default, which must be stable's queue. Only stable runs the scheduler (DEV_GUIDELINES §21), so
+name). Beta: `queue:work --queue=beta` with the same connection, `--timeout`, `--tries` / `--backoff` and
+`--max-time` as stable's worker, so a beta agency's job is run the way a stable agency's is. Both deployments keep
+the SAME queue connection settings (do not point beta's `REDIS_QUEUE` / `SQS_QUEUE` / `DB_QUEUE` at `beta`): a
+stable agency's job dispatched on beta is left on the connection default, which must be stable's queue. Only stable runs the scheduler (DEV_GUIDELINES §21), so
 scheduled work for beta agencies runs on stable's code unless the job it dispatches is routed.
 
 **Not covered.** API routes, incoming webhooks, the mobile app and Assistant tools always hit the address the
@@ -1863,11 +1910,21 @@ deployment's channel, URLs, worker queues and the agencies not on stable.
 3. The app's own queued jobs / notifications about one agency: add `QueuesOnAgencyChannel` and call it in the
    constructor. Give `App\Jobs\RunTrialPurger` the `Queueable` trait if it lacks it.
 4. Beta deployment: same database, same queue connection settings, `APP_CHANNEL=beta`, `APP_URL` = the beta
-   address, both `RELEASE_*_URL`s, its own `SSO_REDIRECT_URI` (SSO's OAuth client for the app must accept both
-   callback URLs) and its own `SESSION_COOKIE`; no scheduler; worker `queue:work --queue=beta`. Its migrations
-   must stay additive, stable runs on the same tables.
+   address, both `RELEASE_*_URL`s; no scheduler; worker `queue:work --queue=beta` with stable's connection, timeout
+   and retry settings. Its migrations must stay additive, stable runs on the same tables.
+   - **The SAME as stable:** `APP_KEY` (encrypted columns, signed URLs and queued job payloads are read by both),
+     `APP_NAME` (Laravel derives the default cache, Redis and session-cookie prefixes from it), the cache store and **`CACHE_PREFIX`** (do not give beta its own: shared locks, rate limits and
+     single-use tokens such as `SsoSingleFlight`'s OAuth-state claim and refresh lock, the master-data apply lock
+     and the personnel pull guard only work when both deployments see one cache), the same bucket under the same
+     disk names (a file uploaded on one is read on the other).
+   - **Its own:** `SESSION_COOKIE` (the two hosts must not share a session) and `SSO_REDIRECT_URI` (SSO's OAuth
+     client for the app must accept both callback URLs).
 5. Stable deployment: set `RELEASE_BETA_URL`. From then on beta agencies move and their jobs go to `beta`.
-6. Truck-Checks PR #76 carries an app-local first version (`config/release.php`, `App\Support\ReleaseChannel`,
+6. An app with its own agency-switch re-check (Digital Forms' `FollowSsoCompany`, alias `forms.sso-company`,
+   which sends every arrival whose referrer is SSO back through SSO sign-in) should remove it when it adopts: the
+   `sso_company` hand-across does the same job, only when the agency really differs, and the two together send a
+   launch through SSO twice.
+7. Truck-Checks PR #76 carries an app-local first version (`config/release.php`, `App\Support\ReleaseChannel`,
    `App\Http\Middleware\RouteToReleaseChannel`, `release:channel`, its own migration): delete those when it
    adopts the package, or it redirects twice.
 

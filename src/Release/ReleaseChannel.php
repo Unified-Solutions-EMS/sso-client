@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Unified\SsoClient\Release;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Schema;
 
 /**
@@ -32,8 +33,14 @@ final class ReleaseChannel
 
     public const COLUMN = 'release_channel';
 
-    /** @var array<string, bool> */
-    private static array $columnSupport = [];
+    /** How long "the column is not there yet" is believed before asking the database again. */
+    public const MISSING_COLUMN_RECHECK_SECONDS = 60;
+
+    /** @var array<string, true> tables known to have the column */
+    private static array $columnPresent = [];
+
+    /** @var array<string, int> tables last seen without the column, and when */
+    private static array $columnMissingAt = [];
 
     public static function current(): string
     {
@@ -162,8 +169,8 @@ final class ReleaseChannel
     }
 
     /**
-     * Memoized per process: an app that has not run the package migration
-     * yet reads every agency as stable and the sync skips the column.
+     * An app that has not run the package migration yet reads every agency
+     * as stable and the sync skips the column.
      */
     public static function hasColumn(): bool
     {
@@ -173,13 +180,43 @@ final class ReleaseChannel
             return false;
         }
 
-        $table = (new $model)->getTable();
+        return self::tableHasColumn((new $model)->getTable());
+    }
 
-        return self::$columnSupport[$table] ??= Schema::hasColumn($table, self::COLUMN);
+    /**
+     * Only "the column is there" is remembered for the life of the process.
+     * "Not there" is asked again after a minute, so a long-running Octane or
+     * queue worker started before the migration picks the column up without
+     * a restart. Once it exists this is a lookup with no query.
+     */
+    public static function tableHasColumn(string $table): bool
+    {
+        if (isset(self::$columnPresent[$table])) {
+            return true;
+        }
+
+        $now = Carbon::now()->getTimestamp();
+        $missingAt = self::$columnMissingAt[$table] ?? null;
+
+        if ($missingAt !== null && $now - $missingAt < self::MISSING_COLUMN_RECHECK_SECONDS) {
+            return false;
+        }
+
+        if (Schema::hasColumn($table, self::COLUMN)) {
+            self::$columnPresent[$table] = true;
+            unset(self::$columnMissingAt[$table]);
+
+            return true;
+        }
+
+        self::$columnMissingAt[$table] = $now;
+
+        return false;
     }
 
     public static function flushSchemaCache(): void
     {
-        self::$columnSupport = [];
+        self::$columnPresent = [];
+        self::$columnMissingAt = [];
     }
 }

@@ -49,6 +49,42 @@ use Unified\SsoClient\Trial\DefaultTrialMirrorCleanupPolicy;
 
 class SsoServiceProvider extends ServiceProvider
 {
+    /**
+     * mergeConfigFrom() is shallow: an app whose config/sso.php sets
+     * `release` (even one key of it) replaces the package's whole block.
+     * Merge it key by key instead, `urls` and `queues` per channel, so an
+     * app sets only what differs. Lists (`never_move`, `never_move_also`)
+     * are taken whole from the app when it sets them.
+     */
+    protected function mergeReleaseConfig(): void
+    {
+        if ($this->app->configurationIsCached()) {
+            return;
+        }
+
+        $config = $this->app->make('config');
+        $app = $config->get('sso.release');
+        $defaults = (require __DIR__.'/../config/sso.php')['release'];
+
+        if (! is_array($app)) {
+            $config->set('sso.release', $defaults);
+
+            return;
+        }
+
+        $merged = $defaults;
+
+        foreach ($app as $key => $value) {
+            $default = $defaults[$key] ?? null;
+
+            $merged[$key] = is_array($value) && is_array($default) && $default !== [] && ! array_is_list($default)
+                ? array_replace($default, $value)
+                : $value;
+        }
+
+        $config->set('sso.release', $merged);
+    }
+
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__.'/../config/sso.php', 'sso');
@@ -56,6 +92,7 @@ class SsoServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/security.php', 'security');
         $this->mergeConfigFrom(__DIR__.'/../config/security-headers.php', 'security-headers');
         $this->mergeConfigFrom(__DIR__.'/../config/twilio-comms.php', 'twilio-comms');
+        $this->mergeReleaseConfig();
         $this->registerTwilioCommsMailer();
 
         $this->app->singleton(SsoClient::class);

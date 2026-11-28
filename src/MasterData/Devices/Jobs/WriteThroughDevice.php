@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Log;
 use Unified\SsoClient\MasterData\Devices\DeviceMirror;
 use Unified\SsoClient\MasterData\MasterDataClient;
 use Unified\SsoClient\MasterData\MasterDataRegistry;
+use Unified\SsoClient\Release\Concerns\QueuesOnAgencyChannel;
 
 /**
  * Sends one device to SSO's devices import (see DeviceWriteThrough). Best
@@ -23,6 +24,7 @@ class WriteThroughDevice implements ShouldQueue
 {
     use Dispatchable;
     use Queueable;
+    use QueuesOnAgencyChannel;
 
     /** Seconds SSO gets to answer; this runs beside a monitor transmission. */
     public const TIMEOUT = 15;
@@ -35,7 +37,9 @@ class WriteThroughDevice implements ShouldQueue
     public function __construct(
         public int $localCompanyId,
         public array $device,
-    ) {}
+    ) {
+        $this->onAgencyChannel($localCompanyId);
+    }
 
     public function handle(MasterDataRegistry $registry, MasterDataClient $client): void
     {

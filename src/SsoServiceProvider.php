@@ -159,6 +159,7 @@ class SsoServiceProvider extends ServiceProvider
         if ($this->app->runningInConsole()) {
             $this->commands([
                 Console\PurgeFakeUsersCommand::class,
+                Console\ReleaseChannelCommand::class,
                 MasterData\Console\ResyncMasterDataCommand::class,
                 MasterData\Console\PushMasterDataCommand::class,
             ]);
@@ -268,6 +269,7 @@ class SsoServiceProvider extends ServiceProvider
         $router->aliasMiddleware('sso.purge-legacy-cookies', Middleware\PurgeLegacyApexCookies::class);
         $router->aliasMiddleware('metrics.session', Metrics\Middleware\TrackSessionMetric::class);
         $router->aliasMiddleware('sso.security-headers', Middleware\SecurityHeaders::class);
+        $router->aliasMiddleware('sso.release-channel', Middleware\RouteToReleaseChannel::class);
 
         // Auto-register the session-actions middleware in the `web` group
         // so every authenticated route in every consuming app picks up
@@ -277,10 +279,16 @@ class SsoServiceProvider extends ServiceProvider
         // Same treatment for the legacy cookie scrub: the parent-domain
         // cookies the old ASP.NET app left behind are sent to every app on
         // the platform, so every app has to be the one that clears them.
+        //
+        // The release-channel middleware goes after the session actions, so
+        // an impersonation's company change is in the session before it
+        // reads the selected agency. It does nothing until SSO sends a
+        // launch parameter or the app configures a beta deployment.
         $kernel = $this->app->make(HttpKernel::class);
         if (method_exists($kernel, 'appendMiddlewareToGroup')) {
             $kernel->appendMiddlewareToGroup('web', Middleware\EnforceSsoSessionActions::class);
             $kernel->appendMiddlewareToGroup('web', Middleware\PurgeLegacyApexCookies::class);
+            $kernel->appendMiddlewareToGroup('web', Middleware\RouteToReleaseChannel::class);
         }
     }
 

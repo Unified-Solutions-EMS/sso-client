@@ -6,10 +6,12 @@ namespace Unified\SsoClient\Trial\Jobs;
 
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
+use Unified\SsoClient\Release\Concerns\QueuesOnAgencyChannel;
 use Unified\SsoClient\Trial\AppTrialJobs;
 use Unified\SsoClient\Trial\TrialMirrorCleaner;
 
@@ -21,7 +23,7 @@ use Unified\SsoClient\Trial\TrialMirrorCleaner;
  */
 class PurgeTrialThenCleanMirrors implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, QueuesOnAgencyChannel, SerializesModels;
 
     public int $tries = 3;
 
@@ -35,7 +37,9 @@ class PurgeTrialThenCleanMirrors implements ShouldQueue
         public mixed $company,
         public string $adminSsoId,
         public array $seeded,
-    ) {}
+    ) {
+        $this->onAgencyChannel($company instanceof Model ? $company : null);
+    }
 
     public function handle(AppTrialJobs $app, TrialMirrorCleaner $cleaner): void
     {

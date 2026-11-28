@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Unified\SsoClient\Middleware;
 
 use Closure;
+use Illuminate\Contracts\Auth\Guard;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
@@ -75,7 +76,8 @@ class RouteToReleaseChannel
     {
         if (! $request->hasSession()
             || (! $request->isMethod('GET') && ! $request->isMethod('HEAD'))
-            || $request->is(...$this->untouchedPaths())) {
+            || $request->is(...$this->untouchedPaths())
+            || $this->isLivewireEndpoint($request)) {
             return $next($request);
         }
 
@@ -270,7 +272,7 @@ class RouteToReleaseChannel
             return redirect()->to($cleanUrl);
         }
 
-        $selected = Auth::check() ? $this->selectedCompany($request) : null;
+        $selected = $this->guard()->check() ? $this->selectedCompany($request) : null;
         $selectedSsoId = $selected !== null ? trim((string) $selected->getAttribute('sso_company_id')) : '';
 
         if ($selectedSsoId !== '' && $selectedSsoId === $hint) {
@@ -296,7 +298,7 @@ class RouteToReleaseChannel
             Log::warning('RouteToReleaseChannel: SSO selected a different agency than the launch link named, serving the one SSO selected', [
                 'launch_sso_company_id' => $hint,
                 'selected_sso_company_id' => $selectedSsoId !== '' ? $selectedSsoId : null,
-                'user_id' => Auth::id(),
+                'user_id' => $this->guard()->id(),
             ]);
             $request->session()->forget(self::HANDOFF_KEY);
 
@@ -324,7 +326,7 @@ class RouteToReleaseChannel
      */
     protected function moveTarget(Request $request, string $requestUri): ?string
     {
-        if (! ReleaseChannel::routingActive() || ! Auth::check() || $request->is(...$this->neverMovedPaths())) {
+        if (! ReleaseChannel::routingActive() || ! $this->guard()->check() || $request->is(...$this->neverMovedPaths())) {
             return null;
         }
 
@@ -406,6 +408,43 @@ class RouteToReleaseChannel
         $paths[] = $assistant.'/*';
 
         return array_values(array_filter($paths, static fn (string $path): bool => $path !== '' && $path !== '/*'));
+    }
+
+    /**
+     * Livewire 4 serves its endpoints (update, script, uploads, previews)
+     * under `/livewire-<first 8 hex of sha256(APP_KEY.'livewire-endpoint')>`
+     * (`Livewire\Mechanisms\HandleRequests\EndpointResolver::prefix()`), not
+     * `livewire/`. The exact prefix is used when Livewire 4 is installed; the
+     * pattern covers it otherwise.
+     */
+    protected function isLivewireEndpoint(Request $request): bool
+    {
+        $path = ltrim($request->path(), '/');
+
+        if (preg_match('#^livewire-[0-9a-f]{8}(/|$)#', $path) === 1) {
+            return true;
+        }
+
+        $resolver = 'Livewire\\Mechanisms\\HandleRequests\\EndpointResolver';
+
+        if (! class_exists($resolver) || ! method_exists($resolver, 'prefix')) {
+            return false;
+        }
+
+        $prefix = trim((string) $resolver::prefix(), '/');
+
+        return $prefix !== '' && ($path === $prefix || str_starts_with($path, $prefix.'/'));
+    }
+
+    /**
+     * The guard whose sign-in this middleware reads (`sso.release.guard`,
+     * null = the default guard, as Auth::check() reads it).
+     */
+    protected function guard(): Guard
+    {
+        $guard = config('sso.release.guard');
+
+        return Auth::guard(is_string($guard) && trim($guard) !== '' ? trim($guard) : null);
     }
 
     /**

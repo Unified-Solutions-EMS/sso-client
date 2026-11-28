@@ -424,6 +424,17 @@ return [
     |                to keep an app's own pages in place: the package's
     |                defaults (and any it adds later) still apply
     | company_model  the local company model
+    | queue_map      opt-in: which queue a BETA agency's job goes to, per
+    |                the queue it would have used. 'imports' => 'beta-imports'
+    |                for any connection; 'redis-long' => ['imports' => ...]
+    |                for one connection. A job on the connection's default
+    |                queue with no entry goes to queues.beta. Empty = every
+    |                beta agency's job goes to queues.beta (as before)
+    | unmapped_queues  'beta' (default): a named queue with no entry goes to
+    |                queues.beta. 'keep': it stays on its own queue, run by
+    |                stable's worker (safe while adopting gradually)
+    | guard          the auth guard whose sign-in decides who is moved;
+    |                null = the default guard
     |
     | An app's own config/sso.php may set any one of these keys alone; the
     | rest keep the package defaults (merged key by key, urls and queues
@@ -443,6 +454,9 @@ return [
         'never_move' => ['admin', 'admin/*', 'widget', 'widget/*'],
         'never_move_also' => [],
         'company_model' => 'App\\Models\\Company',
+        'queue_map' => [],
+        'unmapped_queues' => 'beta',
+        'guard' => null,
     ],
 
     /*

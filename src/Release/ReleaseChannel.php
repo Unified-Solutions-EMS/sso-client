@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Unified\SsoClient\Release;
 
+use Illuminate\Bus\PendingBatch;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Foundation\Bus\PendingDispatch;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Schema;
 
@@ -32,6 +34,12 @@ final class ReleaseChannel
     public const AGENCY_CHANNELS = [self::STABLE, self::BETA];
 
     public const COLUMN = 'release_channel';
+
+    /** `unmapped_queues`: a named queue with no map entry goes to `queues.beta` (the default). */
+    public const UNMAPPED_TO_BETA = 'beta';
+
+    /** `unmapped_queues`: a named queue with no map entry stays on its own queue (stable's worker). */
+    public const UNMAPPED_KEEP = 'keep';
 
     /** How long "the column is not there yet" is believed before asking the database again. */
     public const MISSING_COLUMN_RECHECK_SECONDS = 60;
@@ -116,50 +124,228 @@ final class ReleaseChannel
 
     /**
      * The queue a job for an agency on this channel goes to, or null for
-     * "leave the job's queue as it is" (stable's default, and always while
-     * routing is not active).
+     * "leave the job's queue as it is" (stable's default, a named queue the
+     * map leaves alone, and always while routing is not active).
+     *
+     * `$queue` / `$connection` are the job's own (null = the connection's
+     * default queue / the default connection). With no `queue_map` every
+     * beta agency's job goes to `queues.beta`, whatever its own queue was.
+     * With one, a beta agency's job goes to the entry for its queue (an
+     * entry for its connection first), a job already on a beta queue stays,
+     * a job on the connection's default queue with no entry goes to
+     * `queues.beta`, and any other queue with no entry goes to
+     * `queues.beta` or, with `unmapped_queues` = `keep`, stays where it is.
+     * The connection is never changed.
      */
-    public static function queue(string $channel): ?string
+    public static function queue(string $channel, ?string $queue = null, ?string $connection = null): ?string
     {
         if (! self::routingActive()) {
             return null;
         }
 
-        $channel = $channel === self::BETA ? self::BETA : self::STABLE;
-        $queue = config("sso.release.queues.{$channel}");
+        if ($channel !== self::BETA) {
+            return self::configuredQueue(self::STABLE);
+        }
 
-        return is_string($queue) && trim($queue) !== '' ? trim($queue) : null;
+        $beta = self::configuredQueue(self::BETA);
+        $connection = self::connectionName($connection);
+        $original = $queue !== null && trim($queue) !== '' ? trim($queue) : self::connectionDefaultQueue($connection);
+        $map = self::queueMap();
+
+        $mapped = $map['connections'][$connection][$original] ?? $map['any'][$original] ?? null;
+
+        if ($mapped !== null) {
+            return $mapped;
+        }
+
+        if ($original === $beta || in_array($original, self::betaQueues(), true)) {
+            return $original;
+        }
+
+        if ($original === self::connectionDefaultQueue($connection) || self::unmappedQueues() !== self::UNMAPPED_KEEP) {
+            return $beta;
+        }
+
+        return null;
     }
 
     /**
      * @param  Model|int|string|null  $company  the local company, or its local id; null = stable
+     * @param  string|null  $queue  the job's own queue (null = the connection default)
+     * @param  string|null  $connection  the job's own connection (null = the default one)
      */
-    public static function queueForCompany(Model|int|string|null $company): ?string
+    public static function queueForCompany(Model|int|string|null $company, ?string $queue = null, ?string $connection = null): ?string
     {
-        return self::routingActive() ? self::queue(self::forCompany($company)) : null;
+        return self::routingActive() ? self::queue(self::forCompany($company), $queue, $connection) : null;
     }
 
-    public static function queueForSsoCompanyId(int|string|null $ssoCompanyId): ?string
+    public static function queueForSsoCompanyId(int|string|null $ssoCompanyId, ?string $queue = null, ?string $connection = null): ?string
     {
-        return self::routingActive() ? self::queue(self::forSsoCompanyId($ssoCompanyId)) : null;
+        return self::routingActive() ? self::queue(self::forSsoCompanyId($ssoCompanyId), $queue, $connection) : null;
+    }
+
+    /**
+     * Puts anything that is queued for one agency on that agency's queue,
+     * read from what it is set to now: a job, a queued mailable or
+     * notification, `dispatch()`'s pending dispatch, a `Bus::chain()` or a
+     * `Bus::batch()` (a batch's jobs all run on the batch's queue, so the
+     * batch is what needs it). Call it after the queue is set. Only the
+     * queue is changed, never the connection; stable agencies and apps
+     * without release channels are left exactly as they were.
+     *
+     *     ReleaseChannel::onAgencyChannel(Bus::batch($jobs)->onQueue('imports'), $company)->dispatch();
+     *     Mail::to($user)->queue(ReleaseChannel::onAgencyChannel(new ClaimPaid($claim), $company));
+     *
+     * @template T of object
+     *
+     * @param  T  $queueable
+     * @param  Model|int|string|null  $company  the local company, or its local id
+     * @return T
+     */
+    public static function onAgencyChannel(object $queueable, Model|int|string|null $company): object
+    {
+        return self::routingActive() ? self::applyChannel($queueable, self::forCompany($company)) : $queueable;
+    }
+
+    /**
+     * @template T of object
+     *
+     * @param  T  $queueable
+     * @return T
+     */
+    public static function onAgencyChannelBySsoCompanyId(object $queueable, int|string|null $ssoCompanyId): object
+    {
+        return self::routingActive() ? self::applyChannel($queueable, self::forSsoCompanyId($ssoCompanyId)) : $queueable;
+    }
+
+    /**
+     * @template T of object
+     *
+     * @param  T  $queueable
+     * @return T
+     */
+    public static function applyChannel(object $queueable, string $channel): object
+    {
+        if ($queueable instanceof PendingDispatch) {
+            self::applyChannel($queueable->getJob(), $channel);
+
+            return $queueable;
+        }
+
+        if (! method_exists($queueable, 'onQueue')) {
+            return $queueable;
+        }
+
+        if ($queueable instanceof PendingBatch) {
+            $current = $queueable->queue();
+            $connection = $queueable->connection();
+        } else {
+            $current = $queueable->queue ?? null;
+            $connection = $queueable->connection ?? null;
+        }
+
+        $queue = self::queue($channel, is_string($current) ? $current : null, is_string($connection) ? $connection : null);
+
+        if ($queue !== null) {
+            $queueable->onQueue($queue);
+        }
+
+        return $queueable;
     }
 
     /**
      * The queue name a channel's worker should listen on, for the command's
      * listing and the worker setup: the configured name, else the default
-     * connection's own queue.
+     * connection's own queue. With a queue map, beta also needs a worker
+     * for each queue in `betaQueues()`.
      */
     public static function workerQueue(string $channel): string
     {
-        $queue = config('sso.release.queues.'.($channel === self::BETA ? self::BETA : self::STABLE));
+        return self::configuredQueue($channel === self::BETA ? self::BETA : self::STABLE)
+            ?? self::connectionDefaultQueue(self::connectionName(null));
+    }
 
-        if (is_string($queue) && trim($queue) !== '') {
-            return trim($queue);
+    /**
+     * `sso.release.queue_map`, split into entries for any connection
+     * (`'dictation' => 'beta-dictation'`) and entries for one connection
+     * (`'redis-long' => ['imports' => 'beta-imports']`).
+     *
+     * @return array{any: array<string, string>, connections: array<string, array<string, string>>}
+     */
+    public static function queueMap(): array
+    {
+        $map = ['any' => [], 'connections' => []];
+
+        foreach ((array) config('sso.release.queue_map', []) as $key => $value) {
+            $key = trim((string) $key);
+
+            if ($key === '') {
+                continue;
+            }
+
+            if (is_string($value) && trim($value) !== '') {
+                $map['any'][$key] = trim($value);
+            } elseif (is_array($value)) {
+                foreach ($value as $queue => $target) {
+                    if (is_string($target) && trim($target) !== '' && trim((string) $queue) !== '') {
+                        $map['connections'][$key][trim((string) $queue)] = trim($target);
+                    }
+                }
+            }
         }
 
-        $connection = (string) config('queue.default', 'sync');
+        return $map;
+    }
 
-        return (string) (config("queue.connections.{$connection}.queue") ?: 'default');
+    /**
+     * Every queue a beta agency's job can be put on: the queue map's
+     * targets and `queues.beta`. Beta runs a worker on each.
+     *
+     * @return list<string>
+     */
+    public static function betaQueues(): array
+    {
+        $map = self::queueMap();
+        $queues = array_values($map['any']);
+
+        foreach ($map['connections'] as $entries) {
+            array_push($queues, ...array_values($entries));
+        }
+
+        $beta = self::configuredQueue(self::BETA);
+
+        if ($beta !== null) {
+            $queues[] = $beta;
+        }
+
+        return array_values(array_unique($queues));
+    }
+
+    /** `beta` (default) or `keep`: what happens to a named queue the map has no entry for. */
+    public static function unmappedQueues(): string
+    {
+        return strtolower(trim((string) config('sso.release.unmapped_queues', self::UNMAPPED_TO_BETA))) === self::UNMAPPED_KEEP
+            ? self::UNMAPPED_KEEP
+            : self::UNMAPPED_TO_BETA;
+    }
+
+    public static function connectionName(?string $connection): string
+    {
+        return $connection !== null && trim($connection) !== '' ? trim($connection) : (string) config('queue.default', 'sync');
+    }
+
+    public static function connectionDefaultQueue(string $connection): string
+    {
+        $queue = config("queue.connections.{$connection}.queue");
+
+        return is_string($queue) && trim($queue) !== '' ? trim($queue) : 'default';
+    }
+
+    private static function configuredQueue(string $channel): ?string
+    {
+        $queue = config("sso.release.queues.{$channel}");
+
+        return is_string($queue) && trim($queue) !== '' ? trim($queue) : null;
     }
 
     /** @return class-string<Model> */

@@ -16,10 +16,17 @@ use Unified\SsoClient\Release\ReleaseChannel;
  * not set up leave the queue exactly as it was, so the job's own `$queue`
  * (or the connection default) still applies there.
  *
+ * The beta queue is chosen from the queue the job is on when this is
+ * called (`sso.release.queue_map`), so call it after `onQueue()`:
+ *
  *     public function __construct(public int $companyId)
  *     {
+ *         $this->onQueue('imports');
  *         $this->onAgencyChannel($companyId);
  *     }
+ *
+ * A job whose queue is set later (after this call in the constructor, or
+ * `->onQueue()` at dispatch) uses `QueuesOnAgencyChannelWhenDispatched`.
  */
 trait QueuesOnAgencyChannel
 {
@@ -28,10 +35,8 @@ trait QueuesOnAgencyChannel
      */
     public function onAgencyChannel(Model|int|string|null $company): static
     {
-        $queue = ReleaseChannel::queueForCompany($company);
-
-        if ($queue !== null) {
-            $this->onQueue($queue);
+        if (ReleaseChannel::routingActive()) {
+            $this->putOnReleaseChannel(ReleaseChannel::forCompany($company));
         }
 
         return $this;
@@ -39,12 +44,19 @@ trait QueuesOnAgencyChannel
 
     public function onAgencyChannelBySsoCompanyId(int|string|null $ssoCompanyId): static
     {
-        $queue = ReleaseChannel::queueForSsoCompanyId($ssoCompanyId);
-
-        if ($queue !== null) {
-            $this->onQueue($queue);
+        if (ReleaseChannel::routingActive()) {
+            $this->putOnReleaseChannel(ReleaseChannel::forSsoCompanyId($ssoCompanyId));
         }
 
         return $this;
+    }
+
+    protected function putOnReleaseChannel(string $channel): void
+    {
+        if (property_exists($this, 'agencyReleaseChannel')) {
+            $this->agencyReleaseChannel = $channel;
+        }
+
+        ReleaseChannel::applyChannel($this, $channel);
     }
 }

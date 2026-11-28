@@ -1782,7 +1782,8 @@ job changes queue, and the only new behaviour is the `sso_company` hand-across b
 (falls back to `APP_URL`), `RELEASE_BETA_URL` (nullable), optional `RELEASE_STABLE_QUEUE` (default unset =
 leave the job's queue alone, i.e. the connection's own default) and `RELEASE_BETA_QUEUE` (default `beta`).
 Config `sso.release.*` (`channel`, `urls`, `queues`, `never_move` = `['admin', 'admin/*', 'widget', 'widget/*']`,
-`never_move_also` = `[]`, `company_model` = `App\Models\Company`). Both shared-database deployments set the same two URLs.
+`never_move_also` = `[]`, `company_model` = `App\Models\Company`, `queue_map` = `[]`, `unmapped_queues` = `beta`,
+`guard` = null). Both shared-database deployments set the same two URLs.
 **An app's own `config/sso.php` sets only what differs.** `SsoServiceProvider::mergeReleaseConfig()` merges the
 `release` block key by key over the package defaults (`urls` and `queues` per channel), so `'release' =>
 ['never_move_also' => ['reports/*']]` keeps every other default. To keep more paths in place use `never_move_also`:
@@ -1850,7 +1851,11 @@ takes effect on the next click.
   middleware renders: click, click with inline scripts blocked, hover only (no load), hover then click, each one
   load of the target.
 
-**What never moves.** `api/*`, `up`, `livewire/*`, the package sign-in routes (`sso.routes`), `assistant` and
+**What never moves.** `api/*`, `up`, `livewire/*`, Livewire 4's endpoints (`livewire-<8 hex>/...`: Livewire 4
+serves update, script, uploads and previews under `EndpointResolver::prefix()` = `/livewire-` + the first 8 hex
+characters of `sha256(APP_KEY.'livewire-endpoint')`, checked in 4.2.2; the exact prefix when Livewire 4 is
+installed, plus that pattern; an app page such as `livewire-demo` still moves, and an older
+`never_move_also = ['livewire-*']` workaround keeps working), the package sign-in routes (`sso.routes`), `assistant` and
 `assistant/*` (none of these see the hand-across either); staff admin pages `admin` and `admin/*` and the dashboard
 widget files `widget` and `widget/*` (`sso.release.never_move` plus `never_move_also`), which stay on whichever
 deployment opened them so staff can test staff features on both; anything the browser says is not a page; form
@@ -1878,6 +1883,14 @@ SSO's agency; should the same link (same clean URL and id, within 300 s) come ba
 second time: it is dropped, `SSO selected a different agency than the launch link named` is logged, and the
 page is served.
 
+**Staff areas and other sign-ins.** A staff area that is not `/admin` (say `/staff`) or a client portal is kept in
+place with `'release' => ['never_move_also' => ['staff', 'staff/*', 'portal', 'portal/*']]` (adds to the defaults).
+The middleware reads ONE guard: `sso.release.guard` (default null = the default guard, the one `Auth::check()` reads
+while the web group runs, normally `web`; route middleware such as `auth:portal` only switches the default after
+this has run). A person signed in only on another guard (`portal`) is a guest here: never moved, and a launch link
+with `sso_company` sends them through the SSO sign-in. Set `sso.release.guard` only when the app's agency sign-in
+itself uses another guard. The selected agency is always `session('selected_company_id')`, whatever the guard.
+
 **Queues.** The package's per-agency jobs go on the agency's channel queue: `SeedTrialAfterMasterDataSync`,
 `PurgeTrialThenCleanMirrors`, `ReportTrialSeedStatus`, `PullPersonnelRecord`, `WriteThroughDevice` (in their
 constructors), the app's `RunTrialSeeder` chain and `RunTrialPurger` (`AppTrialJobs`, when the job has
@@ -1888,6 +1901,50 @@ and stay on `metrics.queue` / `security.queue` (the default). App jobs, queued n
 `Release\Concerns\QueuesOnAgencyChannel`: `$this->onAgencyChannel($companyOrLocalId)` or
 `onAgencyChannelBySsoCompanyId($id)` in the constructor (requires `Queueable`).
 
+**Queue map (opt-in, `sso.release.queue_map` + `unmapped_queues`).** One `beta` queue is not enough when an app
+keeps kinds of work apart (hour-long imports, clearinghouse traffic, per-minute alerts). The map says, per queue
+a job would have used, which queue a BETA agency's job goes to; stable agencies always keep their own queue, and
+the connection is never changed. Set it in the app's `config/sso.php` (code, so both deployments have the same map):
+
+```php
+'release' => [
+    'queue_map' => [
+        'default' => 'beta',                 // the connection's default queue (a job with no queue of its own)
+        'imports' => 'beta-imports',         // a job on 'imports', any connection
+        'redis-long' => ['imports' => 'beta-long-imports'], // only on the redis-long connection (wins)
+    ],
+    'unmapped_queues' => 'keep',             // 'beta' (default) | 'keep'
+],
+```
+Rules, in order: an entry for the job's connection, then a plain entry; a job already on a beta queue (a map
+target or `queues.beta`) stays; the connection's default queue with no entry goes to `queues.beta`; any other named
+queue with no entry goes to `queues.beta`, or with `keep` stays on its own queue and is run by stable's worker on
+stable's code (the safe choice while adopting gradually). No map = every beta agency's job goes to `queues.beta`, as
+before. `ReleaseChannel::queue($channel, $queue, $connection)`, `queueForCompany($company, $queue, $connection)` and
+`queueForSsoCompanyId(...)` take the job's own queue and connection (both optional; null = the connection default /
+`queue.default`). `sso:release-channel --list` prints the map, what happens to unmapped queues, and one
+`queue:work <connection> --queue=<beta queue>` line per beta queue.
+
+What each dispatch style needs:
+- Queue set in the constructor BEFORE `onAgencyChannel()`, or a class with none: the trait reads the queue at the call.
+- Queue set AFTER the call in the constructor, or `Job::dispatch(...)->onQueue('imports')`: use
+  `Release\Concerns\QueuesOnAgencyChannelWhenDispatched` (jobs only) instead. It remembers the agency's channel and
+  chooses the beta queue again from the final queue when Laravel's bus pushes the job (it defines the bus's
+  `queue($queue, $command)` hook), so the order does not matter. It covers `dispatch()`, `Job::dispatch()`,
+  `Bus::dispatch()`, chains and the next job of a chain. With the plain trait, write the agency call last:
+  `Job::dispatch($x)->onQueue('imports')->onAgencyChannel($company)` (dispatch forwards both to the job).
+- `Queue::push($job)` bypasses the bus: call `onAgencyChannel()` after the queue is set.
+- Queued notifications: the trait in the constructor after `onQueue()`. A notification with `viaQueues()` gets its
+  queue per channel from there; return `ReleaseChannel::queueForCompany($company, 'mail') ?? 'mail'` in it.
+- Mail: `Mail::to($u)->queue(ReleaseChannel::onAgencyChannel((new ClaimPaid($c))->onQueue('mail'), $company))`, or
+  the trait in the mailable's constructor after `onQueue()` (the mailable needs `Queueable`). Never pass the queue
+  as `Mail::queue($m, 'mail')`'s second argument: the mailer sets it after the helper ran. Do not put the
+  WhenDispatched trait on a mailable (`Mailable::queue()` is another method of that name).
+- `Bus::batch()`: every job in a batch runs on the BATCH's queue (its own is ignored), so the batch needs it:
+  `ReleaseChannel::onAgencyChannel(Bus::batch($jobs)->onQueue('imports'), $company)->dispatch()`. The helper also takes
+  a `Bus::chain()`, a pending dispatch, a job or a mailable, reads its current queue and connection, and leaves it
+  alone for stable agencies or when routing is off (no query then). `onAgencyChannelBySsoCompanyId()` likewise.
+
 **Workers.** Stable: `queue:work --queue=<default>` exactly as today (`sso:release-channel --list` prints the
 name). Beta: `queue:work --queue=beta` with the same connection, `--timeout`, `--tries` / `--backoff` and
 `--max-time` as stable's worker, so a beta agency's job is run the way a stable agency's is. Both deployments keep
@@ -1895,20 +1952,43 @@ the SAME queue connection settings (do not point beta's `REDIS_QUEUE` / `SQS_QUE
 stable agency's job dispatched on beta is left on the connection default, which must be stable's queue. Only stable runs the scheduler (DEV_GUIDELINES §21), so
 scheduled work for beta agencies runs on stable's code unless the job it dispatches is routed.
 
+Beta needs at least as many worker processes as it has classes of work that must not block each other: one
+`beta` worker runs a 30-minute import and the per-minute alerts one after the other. With a map, run one beta
+worker per beta queue, each with the `--timeout` / `--tries` / `--backoff` of stable's worker for the original
+queue, on the connection those jobs use.
+
+**Found while adopting (rules).**
+- **Batches:** jobs in a `Bus::batch()` take the batch's queue; route the batch, not the jobs (above).
+- **Deploys that write to the database** (seeders, data fixes in the deploy command): never deploy stable and beta of
+  one app at the same moment; they share the tables, and two seeders racing write twice or deadlock.
+- **Deploy steps that stamp or announce a release** (a "new version" row, a cache flag, a broadcast stable's workers
+  or pages react to) must not run from beta, or stable's people get told about beta's release.
+- **Websockets:** beta uses the SAME websocket app (Reverb / Pusher app id, key, host) as stable; with its own,
+  live updates split and a stable dispatcher never sees a beta crew's change.
+- **Work held in the browser** under the stable address (offline save queues, uploads in progress, IndexedDB drafts)
+  stays with that address; a person who is moved does not take it along. An app with such queues drains them
+  before letting the move happen, or keeps those pages in place with `never_move_also`.
+- **Live-operations apps** (dispatch, scheduling on shift): move an agency between shifts, not in the middle of one.
+- **Values keyed by a hash of generated output** (a validation result keyed by the XML a release builds) can miss
+  across releases: the same record builds different bytes on stable and beta, so the cached answer is not found.
+  Expect a recompute, never rely on the hit.
+
 **Not covered.** API routes, incoming webhooks, the mobile app and Assistant tools always hit the address the
 caller holds (SSO and the mobile app call one address); form posts and Livewire/ajax requests are served where
 they land; scheduled commands; broadcasting.
 
 **Command.** `sso:release-channel {ssoCompanyId} {stable|beta}` sets one agency locally (refuses when no row or
 two rows hold that SSO id; SSO's next sign-in sync or `company.updated` replaces it); `--list` prints this
-deployment's channel, URLs, worker queues and the agencies not on stable.
+deployment's channel, URLs, worker queues, the queue map with the beta workers it needs, and the agencies not on stable.
 
 **Per-app adoption.**
 1. `composer update unified/sso-client --prefer-dist`, deploy, `php artisan migrate` (adds the column). Nothing
    moves yet.
 2. A company model other than `App\Models\Company`: set `sso.release.company_model`.
 3. The app's own queued jobs / notifications about one agency: add `QueuesOnAgencyChannel` and call it in the
-   constructor. Give `App\Jobs\RunTrialPurger` the `Queueable` trait if it lacks it.
+   constructor (after any `onQueue()`; `QueuesOnAgencyChannelWhenDispatched` for jobs whose queue is set later).
+   Route batches and queued mail with `ReleaseChannel::onAgencyChannel()`. An app with more than one queue sets
+   `queue_map` (start with `unmapped_queues => 'keep'`) and runs a beta worker per beta queue. Give `App\Jobs\RunTrialPurger` the `Queueable` trait if it lacks it.
 4. Beta deployment: same database, same queue connection settings, `APP_CHANNEL=beta`, `APP_URL` = the beta
    address, both `RELEASE_*_URL`s; no scheduler; worker `queue:work --queue=beta` with stable's connection, timeout
    and retry settings. Its migrations must stay additive, stable runs on the same tables.

@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Unified\SsoClient\Trial;
 
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Bus;
 use Unified\SsoClient\Contracts\ReceivesTrialContext;
 use Unified\SsoClient\Contracts\RepeatableTrialSeeder;
+use Unified\SsoClient\Release\ReleaseChannel;
 use Unified\SsoClient\Trial\Jobs\ReportTrialSeedFailure;
 use Unified\SsoClient\Trial\Jobs\ReportTrialSeedStatus;
 
@@ -61,6 +63,11 @@ class AppTrialJobs
 
         if (class_exists(self::SEEDER_JOB)) {
             $job = new (self::SEEDER_JOB)($company, $userSsoIds, $adminSsoId, $context);
+            $queue = ReleaseChannel::queueForCompany($company instanceof Model ? $company : null);
+
+            if ($queue !== null && method_exists($job, 'onQueue')) {
+                $job->onQueue($queue);
+            }
 
             if ($ssoCompanyId === null || ! method_exists($job, 'chain')) {
                 dispatch($job);
@@ -68,9 +75,14 @@ class AppTrialJobs
                 return 'pending';
             }
 
-            Bus::chain([$job, new ReportTrialSeedStatus($ssoCompanyId, TrialSeedStatusReporter::SEEDED)])
-                ->catch(new ReportTrialSeedFailure($ssoCompanyId))
-                ->dispatch();
+            $chain = Bus::chain([$job, new ReportTrialSeedStatus($ssoCompanyId, TrialSeedStatusReporter::SEEDED)])
+                ->catch(new ReportTrialSeedFailure($ssoCompanyId));
+
+            if ($queue !== null) {
+                $chain->onQueue($queue);
+            }
+
+            $chain->dispatch();
 
             return 'pending';
         }
@@ -133,7 +145,14 @@ class AppTrialJobs
     public function purge(mixed $company, string $adminSsoId): void
     {
         if (class_exists(self::PURGER_JOB)) {
-            (self::PURGER_JOB)::dispatch($company, $adminSsoId);
+            $job = new (self::PURGER_JOB)($company, $adminSsoId);
+            $queue = ReleaseChannel::queueForCompany($company instanceof Model ? $company : null);
+
+            if ($queue !== null && method_exists($job, 'onQueue')) {
+                $job->onQueue($queue);
+            }
+
+            dispatch($job);
 
             return;
         }

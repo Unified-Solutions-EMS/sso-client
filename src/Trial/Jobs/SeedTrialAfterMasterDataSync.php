@@ -6,10 +6,12 @@ namespace Unified\SsoClient\Trial\Jobs;
 
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
+use Unified\SsoClient\Release\Concerns\QueuesOnAgencyChannel;
 use Unified\SsoClient\Trial\AppTrialJobs;
 use Unified\SsoClient\Trial\Exceptions\TrialMasterDataNotReadyException;
 use Unified\SsoClient\Trial\TrialContext;
@@ -29,7 +31,7 @@ use Unified\SsoClient\Trial\TrialSeedStatusReporter;
  */
 class SeedTrialAfterMasterDataSync implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, Queueable, QueuesOnAgencyChannel, SerializesModels;
 
     public int $tries = 6;
 
@@ -55,7 +57,9 @@ class SeedTrialAfterMasterDataSync implements ShouldQueue
         public array $userSsoIds,
         public string $adminSsoId,
         public array $masterData,
-    ) {}
+    ) {
+        $this->onAgencyChannel($company instanceof Model ? $company : null);
+    }
 
     public function handle(TrialMasterDataSync $sync, AppTrialJobs $app): void
     {

@@ -8,6 +8,7 @@ use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
+use Unified\SsoClient\Release\Concerns\QueuesOnAgencyChannel;
 use Unified\SsoClient\Trial\TrialSeedStatusReporter;
 
 /**
@@ -17,14 +18,16 @@ use Unified\SsoClient\Trial\TrialSeedStatusReporter;
  */
 class ReportTrialSeedStatus implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable;
+    use Dispatchable, InteractsWithQueue, Queueable, QueuesOnAgencyChannel;
 
     public int $tries = 1;
 
     public function __construct(
         public int|string $ssoCompanyId,
         public string $status,
-    ) {}
+    ) {
+        $this->onAgencyChannelBySsoCompanyId($ssoCompanyId);
+    }
 
     public function handle(TrialSeedStatusReporter $reporter): void
     {

@@ -16,6 +16,7 @@ use Unified\SsoClient\MasterData\MasterDataRegistry;
 use Unified\SsoClient\MasterData\Personnel\Jobs\PullPersonnelRecord;
 use Unified\SsoClient\MasterData\Personnel\PersonnelMirror;
 use Unified\SsoClient\MasterData\Qualifications\QualificationMirror;
+use Unified\SsoClient\Release\ReleaseChannel;
 
 class SsoUserSynchronizer implements SsoUserSynchronizerContract
 {
@@ -29,6 +30,14 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
      * @var array<string, bool>
      */
     private static array $timezoneColumnSupport = [];
+
+    /**
+     * Cache of whether a company table carries the package's
+     * `release_channel` column, keyed by table name, like the timezone check.
+     *
+     * @var array<string, bool>
+     */
+    private static array $releaseChannelColumnSupport = [];
 
     /**
      * Whether the qualifications mirror migration has run, memoized per
@@ -300,6 +309,7 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
         // Memoized: the schema doesn't change between logins, so don't pay a
         // schema lookup on every sync.
         $syncsTimezone = self::$timezoneColumnSupport[$companyTable] ??= Schema::hasColumn($companyTable, 'timezone');
+        $syncsReleaseChannel = self::$releaseChannelColumnSupport[$companyTable] ??= Schema::hasColumn($companyTable, ReleaseChannel::COLUMN);
 
         $ssoIds = [];
         $tenantIds = [];
@@ -340,6 +350,10 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
             // adopted the timezone column receive it here; others ignore it.
             $timezone = $companyData['timezone'] ?? null;
 
+            // SSO also says which release (stable or beta) the agency runs in
+            // this app. Absent or unknown leaves the local value alone.
+            $releaseChannel = $syncsReleaseChannel ? ReleaseChannel::agencyValue($companyData['releaseChannel'] ?? null) : null;
+
             if ($company) {
                 $updates = [];
                 if (
@@ -359,6 +373,9 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
                 if ($syncsTimezone && $timezone && ($company->timezone ?? null) !== $timezone) {
                     $updates['timezone'] = $timezone;
                 }
+                if ($releaseChannel !== null && ($company->getAttribute(ReleaseChannel::COLUMN) ?? null) !== $releaseChannel) {
+                    $updates[ReleaseChannel::COLUMN] = $releaseChannel;
+                }
                 if ($updates !== []) {
                     $company->forceFill($updates)->save();
                 }
@@ -369,6 +386,12 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
                     'sso_company_id' => $ssoCompanyId,
                     'core_tenant_id' => $legacyTenantId,
                 ], $syncsTimezone && $timezone ? ['timezone' => $timezone] : []));
+
+                // Not through create(): the app's Company model need not list
+                // the package-managed column as fillable. Stable is the column default.
+                if ($releaseChannel !== null && $releaseChannel !== ReleaseChannel::STABLE) {
+                    $company->forceFill([ReleaseChannel::COLUMN => $releaseChannel])->save();
+                }
 
                 // Keep the lookup maps current so a later payload entry that
                 // matches the same row reuses it instead of inserting twice.
@@ -686,6 +709,7 @@ class SsoUserSynchronizer implements SsoUserSynchronizerContract
     public static function flushSchemaCache(): void
     {
         self::$timezoneColumnSupport = [];
+        self::$releaseChannelColumnSupport = [];
         self::$qualificationMirrorInstalled = null;
         self::$divisionMirrorInstalled = null;
         self::$personnelMirrorInstalled = null;

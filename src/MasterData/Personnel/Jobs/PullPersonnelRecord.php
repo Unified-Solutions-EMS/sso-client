@@ -10,6 +10,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Support\Facades\Log;
 use Unified\SsoClient\MasterData\MasterDataRegistry;
 use Unified\SsoClient\MasterData\Personnel\PersonnelMirror;
+use Unified\SsoClient\Release\Concerns\QueuesOnAgencyChannel;
 
 /**
  * Pulls one person's snapshot after a login whose `/api/user` said SSO's
@@ -23,6 +24,7 @@ class PullPersonnelRecord implements ShouldQueue
 {
     use Dispatchable;
     use Queueable;
+    use QueuesOnAgencyChannel;
 
     public int $tries = 1;
 
@@ -30,7 +32,9 @@ class PullPersonnelRecord implements ShouldQueue
         public int $localCompanyId,
         public int|string $ssoCompanyId,
         public int $ssoUserId,
-    ) {}
+    ) {
+        $this->onAgencyChannel($localCompanyId);
+    }
 
     public function handle(MasterDataRegistry $registry): void
     {

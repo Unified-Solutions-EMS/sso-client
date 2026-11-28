@@ -401,6 +401,43 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Release channels
+    |--------------------------------------------------------------------------
+    |
+    | An app can run two production deployments on ONE database, stable and
+    | beta (plus alpha, which has its own database). Each agency's
+    | companies.release_channel (stable or beta, set by SSO per app) decides
+    | which one its people's pages and its queued jobs go to.
+    |
+    | channel        alpha, beta or stable: what THIS deployment runs
+    | urls           base address of each shared-database deployment; a
+    |                channel with no address is never sent anyone, and with
+    |                no beta address on a stable deployment nothing moves and
+    |                no job goes to the beta queue
+    | queues         the queue each channel's worker listens on. Stable's
+    |                null means "leave the job's queue alone", i.e. the
+    |                connection's own default (queue:work --queue=<that>)
+    | never_move     paths that stay on whichever deployment opened them
+    |                (staff admin pages, so staff can test on both)
+    | company_model  the local company model
+    |
+    */
+    'release' => [
+        'channel' => env('APP_CHANNEL', 'stable'),
+        'urls' => [
+            'stable' => env('RELEASE_STABLE_URL', env('APP_URL')),
+            'beta' => env('RELEASE_BETA_URL'),
+        ],
+        'queues' => [
+            'stable' => env('RELEASE_STABLE_QUEUE'),
+            'beta' => env('RELEASE_BETA_QUEUE', 'beta'),
+        ],
+        'never_move' => ['admin', 'admin/*'],
+        'company_model' => 'App\\Models\\Company',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Routes
     |--------------------------------------------------------------------------
     |

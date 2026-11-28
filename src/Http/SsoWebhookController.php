@@ -14,6 +14,7 @@ use Unified\SsoClient\Concerns\PrunesStaleCompanyMemberships;
 use Unified\SsoClient\Http\Concerns\VerifiesSsoWebhookSignature;
 use Unified\SsoClient\MasterData\MasterDataWebhookHandler;
 use Unified\SsoClient\Models\SsoSessionAction;
+use Unified\SsoClient\Release\ReleaseChannel;
 use Unified\SsoClient\Security\SecurityEvents;
 use Unified\SsoClient\Trial\AppTrialJobs;
 use Unified\SsoClient\Trial\Jobs\PurgeTrialThenCleanMirrors;
@@ -228,6 +229,17 @@ class SsoWebhookController extends Controller
                 && ($company->timezone ?? null) !== $companyData['timezone']
             ) {
                 $updates['timezone'] = $companyData['timezone'];
+            }
+
+            // Which release (stable or beta) the agency runs in this app. SSO
+            // sends it per receiving app; absent or unknown leaves it alone.
+            $releaseChannel = ReleaseChannel::agencyValue($companyData['release_channel'] ?? $request->input('release_channel'));
+
+            if ($releaseChannel !== null
+                && Schema::hasColumn($company->getTable(), ReleaseChannel::COLUMN)
+                && $company->getAttribute(ReleaseChannel::COLUMN) !== $releaseChannel
+            ) {
+                $updates[ReleaseChannel::COLUMN] = $releaseChannel;
             }
 
             if ($updates !== []) {
@@ -602,7 +614,11 @@ class SsoWebhookController extends Controller
         $jobClass = 'App\\Jobs\\RunLegacyCadMigration';
 
         if (class_exists($jobClass)) {
-            $jobClass::dispatch($company, $legacyTenantId);
+            $pending = $jobClass::dispatch($company, $legacyTenantId);
+
+            if (($queue = ReleaseChannel::queueForCompany($company)) !== null) {
+                $pending->onQueue($queue);
+            }
         } else {
             Log::info('SSO webhook: RunLegacyCadMigration job not found, skipping cad.migrate_data');
         }

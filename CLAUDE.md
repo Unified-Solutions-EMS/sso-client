@@ -985,7 +985,9 @@ Auto-discovered via `SsoServiceProvider`; config published as `config/sso.php` +
   `companies.timezone` in both the login sync and the `company.updated` webhook, guarded by
   `Schema::hasColumn()` so apps that haven't adopted the column ignore it. Apps must NOT ship their
   own timezone selector.
-- **Migrations** — `sso_session_actions` table and `users.staff_roles` column, loaded from the package.
+- **Migrations** — `sso_session_actions` table, `users.staff_roles` and `companies.release_channel` columns,
+  loaded from the package (each guarded with `Schema::hasColumn()`, so a second copy in an app is harmless).
+- **Release channels** — stable and beta deployments of one app on one database; see "Release channels" below.
 - **Master data mirrors** (`src/MasterData/`) — SSO is canonical for shared master data; apps hold
   a read-only mirror per entity, opted into with `config('sso.master_data.<entity>')` (env
   `SSO_MASTER_DATA_QUALIFICATIONS`, `SSO_MASTER_DATA_DIVISIONS`, `SSO_MASTER_DATA_LOCATIONS`, `SSO_MASTER_DATA_VEHICLES`,
@@ -1767,6 +1769,109 @@ sends it:
 5. **Local development** gets its own dev-only key, never the production value: set a fresh random
    `CORE_APP_API_KEY` in every local `.env` (the same one across local apps, so they can still call each
    other) and keep it out of `.env.example`.
+
+## Release channels
+
+An app can run two production deployments that share ONE production database, **stable** and **beta**,
+plus **alpha** with its own database. Each agency is on stable or beta, per app; SSO owns that choice. A
+person's pages go to the deployment their selected agency is on, and that agency's queued jobs run on that
+deployment's worker. Inert until configured: with no beta address on a stable deployment nothing moves, no
+job changes queue, and the only new behaviour is the `sso_company` hand-across below.
+
+**Env (per deployment).** `APP_CHANNEL` (`alpha` | `beta` | `stable`, default `stable`), `RELEASE_STABLE_URL`
+(falls back to `APP_URL`), `RELEASE_BETA_URL` (nullable), optional `RELEASE_STABLE_QUEUE` (default unset =
+leave the job's queue alone, i.e. the connection's own default) and `RELEASE_BETA_QUEUE` (default `beta`).
+Config `sso.release.*` (`channel`, `urls`, `queues`, `never_move` = `['admin', 'admin/*']`,
+`company_model` = `App\Models\Company`). Both shared-database deployments set the same two URLs.
+
+**Column.** `companies.release_channel` string(16) default `stable`, from the package migration
+`2026_11_28_000000_add_release_channel_to_companies_table` (loaded like `users.staff_roles`; skipped when the
+table is missing or the column exists). Purely additive, so the older release keeps working on the same
+table. Every reader and writer checks `Schema::hasColumn()` (memoized), so an app that has not migrated reads
+every agency as stable. The model need not list it as fillable; the package uses `forceFill()`.
+
+**Sync (SSO is the source).** `/api/user` `companies[].releaseChannel` at sign-in (`SsoUserSynchronizer::resolveCompanies`,
+also on a company created there), and `company.updated` `company.release_channel` (a top-level `release_channel`
+is accepted too). Only `stable` and `beta` are written; absent, null, `alpha` or anything else leaves the local
+value alone. Apps whose synchronizer extends `SsoUserSynchronizer` (CAD, CloudPCR, wiki, University) inherit it.
+
+**`Release\ReleaseChannel`.** `current()`, `forCompany($modelOrLocalId)`, `forSsoCompanyId()`, `url($channel)`,
+`routingActive()` (false on alpha, and on stable until `RELEASE_BETA_URL` is set; true on beta),
+`queue($channel)`, `queueForCompany()`, `queueForSsoCompanyId()` (null = leave the queue alone: stable,
+unknown agency, or routing not active, answered without a query), `workerQueue($channel)` (the name a worker
+listens on), `agencyValue()` (the two-value filter the sync uses).
+
+**What moves (`Middleware\RouteToReleaseChannel`, alias `sso.release-channel`).** Auto-appended to the `web`
+group AFTER `EnforceSsoSessionActions`, so an impersonation's `set_company` is in the session first. A plain
+page load (GET/HEAD, not ajax / JSON / `X-Livewire`) by a signed-in person whose selected agency is on the other
+channel is redirected to the same path and query on that channel's URL, plus `sso_company=<SSO company id of
+the selected agency>` (left off when the company is unlinked). An Inertia visit (`X-Inertia`) gets Inertia's
+409 + `X-Inertia-Location` full reload instead. Re-read on every page load, so a change from SSO takes effect
+on the next click.
+
+**What never moves.** `api/*`, `up`, `livewire/*`, the package sign-in routes (`sso.routes`), `assistant` and
+`assistant/*` (none of these see the hand-across either); staff admin pages `admin` and `admin/*` (configurable
+`sso.release.never_move`), which stay on whichever deployment opened them so staff can test staff features on
+both; form posts and background requests; guests; a session with no selected agency; anything on an alpha
+deployment; a target with no URL or on this same host. Loop breaker: 3 moves in 60 s per session, then the
+page is served here and `RouteToReleaseChannel: redirect loop detected` is logged.
+
+**The `sso_company` hand-across (also UNI-1928).** SSO launches an app at the right deployment's address with
+`?sso_company=<SSO company id>`. On a plain page load carrying it (admin pages included):
+- signed in and the session's selected agency has that SSO id: redirect to the same URL without the parameter
+  (or, when the agency is on the other channel, straight to the other deployment with it);
+- signed in with another agency selected, or a guest: redirect through `sso.routes.redirect` with `intended` =
+  the URL without the parameter, so the callback stores the agency SSO's `/api/user` `selectedCompany` names
+  (this is what fixes an app session that outlived an agency switch in SSO);
+- the parameter is not digits, or there is no company model: dropped.
+The parameter never selects, stores or trusts anything: identity and agency only come from the OAuth handshake,
+and the callback only selects a company the person is a member of in SSO's answer. Naming a stranger's agency
+costs one SSO round trip and changes nothing. Impersonation works because `set_company` is applied before the
+comparison. If SSO answers with a different agency than the link named, the person lands on the clean URL with
+SSO's agency; should the same link (same clean URL and id, within 300 s) come back, it is not handed across a
+second time: it is dropped, `SSO selected a different agency than the launch link named` is logged, and the
+page is served.
+
+**Queues.** The package's per-agency jobs go on the agency's channel queue: `SeedTrialAfterMasterDataSync`,
+`PurgeTrialThenCleanMirrors`, `ReportTrialSeedStatus`, `PullPersonnelRecord`, `WriteThroughDevice` (in their
+constructors), the app's `RunTrialSeeder` chain and `RunTrialPurger` (`AppTrialJobs`, when the job has
+`onQueue()`, i.e. uses `Queueable`), and `RunLegacyCadMigration` from `cad.migrate_data`. For a stable agency
+nothing is set, so a job's own `$queue` still applies; for a beta agency the job (and its chain) goes to
+`beta`, overriding any queue of its own. `SendMetricToUnified` and `SendSecurityEventToUnified` have no agency
+and stay on `metrics.queue` / `security.queue` (the default). App jobs, queued notifications and mailables use
+`Release\Concerns\QueuesOnAgencyChannel`: `$this->onAgencyChannel($companyOrLocalId)` or
+`onAgencyChannelBySsoCompanyId($id)` in the constructor (requires `Queueable`).
+
+**Workers.** Stable: `queue:work --queue=<default>` exactly as today (`sso:release-channel --list` prints the
+name). Beta: `queue:work --queue=beta`. Both deployments keep the SAME queue connection settings (do not point
+beta's `REDIS_QUEUE` / `SQS_QUEUE` / `DB_QUEUE` at `beta`): a stable agency's job dispatched on beta is left on
+the connection default, which must be stable's queue. Only stable runs the scheduler (DEV_GUIDELINES §21), so
+scheduled work for beta agencies runs on stable's code unless the job it dispatches is routed.
+
+**Not covered.** API routes, incoming webhooks, the mobile app and Assistant tools always hit the address the
+caller holds (SSO and the mobile app call one address); form posts and Livewire/ajax requests are served where
+they land; scheduled commands; broadcasting.
+
+**Command.** `sso:release-channel {ssoCompanyId} {stable|beta}` sets one agency locally (refuses when no row or
+two rows hold that SSO id; SSO's next sign-in sync or `company.updated` replaces it); `--list` prints this
+deployment's channel, URLs, worker queues and the agencies not on stable.
+
+**Per-app adoption.**
+1. `composer update unified/sso-client --prefer-dist`, deploy, `php artisan migrate` (adds the column). Nothing
+   moves yet.
+2. A company model other than `App\Models\Company`: set `sso.release.company_model`.
+3. The app's own queued jobs / notifications about one agency: add `QueuesOnAgencyChannel` and call it in the
+   constructor. Give `App\Jobs\RunTrialPurger` the `Queueable` trait if it lacks it.
+4. Beta deployment: same database, same queue connection settings, `APP_CHANNEL=beta`, `APP_URL` = the beta
+   address, both `RELEASE_*_URL`s, its own `SSO_REDIRECT_URI` (SSO's OAuth client for the app must accept both
+   callback URLs) and its own `SESSION_COOKIE`; no scheduler; worker `queue:work --queue=beta`. Its migrations
+   must stay additive, stable runs on the same tables.
+5. Stable deployment: set `RELEASE_BETA_URL`. From then on beta agencies move and their jobs go to `beta`.
+6. Truck-Checks PR #76 carries an app-local first version (`config/release.php`, `App\Support\ReleaseChannel`,
+   `App\Http\Middleware\RouteToReleaseChannel`, `release:channel`, its own migration): delete those when it
+   adopts the package, or it redirects twice.
+
+Tests: `tests/Feature/Release/*`.
 
 ## Release discipline
 

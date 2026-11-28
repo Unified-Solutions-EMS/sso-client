@@ -614,11 +614,7 @@ class SsoWebhookController extends Controller
         $jobClass = 'App\\Jobs\\RunLegacyCadMigration';
 
         if (class_exists($jobClass)) {
-            $pending = $jobClass::dispatch($company, $legacyTenantId);
-
-            if (($queue = ReleaseChannel::queueForCompany($company)) !== null) {
-                $pending->onQueue($queue);
-            }
+            ReleaseChannel::onAgencyChannel($jobClass::dispatch($company, $legacyTenantId), $company);
         } else {
             Log::info('SSO webhook: RunLegacyCadMigration job not found, skipping cad.migrate_data');
         }

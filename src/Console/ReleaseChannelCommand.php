@@ -93,6 +93,8 @@ class ReleaseChannelCommand extends Command
             ));
         }
 
+        $this->listBetaQueues();
+
         $model = ReleaseChannel::companyModel();
         $rows = $model::query()
             ->where(ReleaseChannel::COLUMN, '!=', ReleaseChannel::STABLE)
@@ -116,5 +118,53 @@ class ReleaseChannelCommand extends Command
         );
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Which queue a beta agency's job lands on, and the beta workers that
+     * takes: one per beta queue, on the connection its jobs use.
+     */
+    private function listBetaQueues(): void
+    {
+        $map = ReleaseChannel::queueMap();
+        $beta = ReleaseChannel::workerQueue(ReleaseChannel::BETA);
+        $defaultConnection = ReleaseChannel::connectionName(null);
+
+        if ($map['any'] === [] && $map['connections'] === []) {
+            $this->line("Queue map: none. Every beta agency's job goes to \"{$beta}\".");
+            $this->line("Beta worker: php artisan queue:work {$defaultConnection} --queue={$beta}");
+
+            return;
+        }
+
+        $rows = [];
+        $workers = [];
+
+        foreach ($map['any'] as $queue => $target) {
+            $rows[] = ['(the job\'s own)', $queue, $target];
+            $workers[$defaultConnection.' '.$target] = [$defaultConnection, $target];
+        }
+
+        foreach ($map['connections'] as $connection => $entries) {
+            foreach ($entries as $queue => $target) {
+                $rows[] = [$connection, $queue, $target];
+                $workers[$connection.' '.$target] = [$connection, $target];
+            }
+        }
+
+        $this->line('Queue map (a beta agency\'s job on this queue goes to the beta queue):');
+        $this->table(['Connection', 'Queue', 'Beta queue'], $rows);
+
+        $this->line(ReleaseChannel::unmappedQueues() === ReleaseChannel::UNMAPPED_KEEP
+            ? "Other named queues: stay where they are (stable's worker runs them). The connection's default queue goes to \"{$beta}\"."
+            : "Other queues: go to \"{$beta}\".");
+
+        $workers[$defaultConnection.' '.$beta] ??= [$defaultConnection, $beta];
+
+        $this->line('Beta workers (one each, same --timeout / --tries / --backoff as the stable worker for the original queue; a "(the job\'s own)" entry runs on the connection those jobs use):');
+
+        foreach ($workers as [$connection, $queue]) {
+            $this->line("  php artisan queue:work {$connection} --queue={$queue}");
+        }
     }
 }

@@ -63,7 +63,7 @@ class AppTrialJobs
 
         if (class_exists(self::SEEDER_JOB)) {
             $job = new (self::SEEDER_JOB)($company, $userSsoIds, $adminSsoId, $context);
-            $queue = ReleaseChannel::queueForCompany($company instanceof Model ? $company : null);
+            $queue = ReleaseChannel::queueForCompany($company instanceof Model ? $company : null, $job->queue ?? null, $job->connection ?? null);
 
             if ($queue !== null && method_exists($job, 'onQueue')) {
                 $job->onQueue($queue);
@@ -146,7 +146,7 @@ class AppTrialJobs
     {
         if (class_exists(self::PURGER_JOB)) {
             $job = new (self::PURGER_JOB)($company, $adminSsoId);
-            $queue = ReleaseChannel::queueForCompany($company instanceof Model ? $company : null);
+            $queue = ReleaseChannel::queueForCompany($company instanceof Model ? $company : null, $job->queue ?? null, $job->connection ?? null);
 
             if ($queue !== null && method_exists($job, 'onQueue')) {
                 $job->onQueue($queue);

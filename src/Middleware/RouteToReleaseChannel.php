@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Vite;
 use Inertia\Inertia;
 use Symfony\Component\HttpFoundation\Response;
+use Unified\SsoClient\Contracts\ReleaseHandOff;
 use Unified\SsoClient\Release\ReleaseChannel;
 use Unified\SsoClient\SsoSessionState;
 
@@ -47,7 +48,10 @@ use Unified\SsoClient\SsoSessionState;
  * `never_move_also`). Nothing moves on alpha, for guests, without a
  * selected agency, or toward a channel with no address. A browser bounced
  * three times in a minute stops being moved and the loop is logged;
- * prefetches and wire:navigate fetches never count toward that.
+ * prefetches and wire:navigate fetches never count toward that. An app may
+ * bind `sso.release.hand_off` (Contracts\ReleaseHandOff) to keep pages in
+ * place and to answer a move itself; without it every answer is the
+ * package's own.
  */
 class RouteToReleaseChannel
 {
@@ -165,7 +169,11 @@ class RouteToReleaseChannel
 
         $target = $this->moveTarget($request, (string) $request->getRequestUri());
 
-        return $target === null ? $next($request) : $this->fullPageLoad($target);
+        if ($target === null) {
+            return $next($request);
+        }
+
+        return $this->handOff()?->response($request, $target, ReleaseHandOff::KIND_NAVIGATE) ?? $this->fullPageLoad($target);
     }
 
     /**
@@ -347,6 +355,10 @@ class RouteToReleaseChannel
             return null;
         }
 
+        if ($this->handOff()?->keepInPlace($request) === true) {
+            return null;
+        }
+
         $ssoCompanyId = trim((string) $company->getAttribute('sso_company_id'));
 
         if ($ssoCompanyId === '') {
@@ -358,11 +370,33 @@ class RouteToReleaseChannel
 
     protected function moveTo(Request $request, string $target): Response
     {
-        if ($request->hasHeader('X-Inertia')) {
+        $inertia = $request->hasHeader('X-Inertia');
+        $answer = $this->handOff()?->response($request, $target, $inertia ? ReleaseHandOff::KIND_INERTIA : ReleaseHandOff::KIND_REDIRECT);
+
+        if ($answer !== null) {
+            return $answer;
+        }
+
+        if ($inertia) {
             return response('', 409, ['X-Inertia-Location' => $target]);
         }
 
         return redirect()->away($target);
+    }
+
+    /**
+     * The app's `sso.release.hand_off`, or null when it binds none (or names
+     * a class that is not a ReleaseHandOff).
+     */
+    protected function handOff(): ?ReleaseHandOff
+    {
+        $class = config('sso.release.hand_off');
+
+        if (! is_string($class) || trim($class) === '' || ! is_a(trim($class), ReleaseHandOff::class, true)) {
+            return null;
+        }
+
+        return app(trim($class));
     }
 
     protected function selectedCompany(Request $request): ?Model

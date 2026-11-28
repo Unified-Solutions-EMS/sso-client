@@ -1783,7 +1783,7 @@ job changes queue, and the only new behaviour is the `sso_company` hand-across b
 leave the job's queue alone, i.e. the connection's own default) and `RELEASE_BETA_QUEUE` (default `beta`).
 Config `sso.release.*` (`channel`, `urls`, `queues`, `never_move` = `['admin', 'admin/*', 'widget', 'widget/*']`,
 `never_move_also` = `[]`, `company_model` = `App\Models\Company`, `queue_map` = `[]`, `unmapped_queues` = `beta`,
-`guard` = null). Both shared-database deployments set the same two URLs.
+`guard` = null, `hand_off` = null). Both shared-database deployments set the same two URLs.
 **An app's own `config/sso.php` sets only what differs.** `SsoServiceProvider::mergeReleaseConfig()` merges the
 `release` block key by key over the package defaults (`urls` and `queues` per channel), so `'release' =>
 ['never_move_also' => ['reports/*']]` keeps every other default. To keep more paths in place use `never_move_also`:
@@ -1850,6 +1850,19 @@ takes effect on the next click.
   Chromium and WebKit against the real Livewire 3.8.12 and 4.3.0 bundles on two local origins, with the page this
   middleware renders: click, click with inline scripts blocked, hover only (no load), hover then click, each one
   load of the target.
+
+**The app's hand-off (opt-in, `sso.release.hand_off`).** A class implementing `Contracts\ReleaseHandOff`, resolved from
+the container, asked only for a signed-in person whose agency is on the other channel while routing is active (never for
+someone staying, guests, admin or never-move paths). `keepInPlace(Request): bool` true = serve this page here and move
+the person at a later page load: nothing is redirected and nothing counts toward the loop breaker (for pages that edit
+work the browser holds, such as a chart form with an offline save queue; the middleware runs after routing, so the
+route name can decide). `response(Request, string $target, string $kind): ?Response` answers the move itself, `$kind`
+= `KIND_REDIRECT` (a page load or frame, also the launch-link move), `KIND_NAVIGATE` (`wire:navigate`; the answer must
+make the browser load an address itself, like the package's page) or `KIND_INERTIA` (answer with Inertia's 409 +
+`X-Inertia-Location`); null = the package's own answer. A typical answer is a page on THIS address that sends what the
+browser still holds and only then goes on to `$target` (CloudPCR's `/release/hand-off`); that page's path must be in
+`never_move_also`. Answers count toward the loop breaker exactly like the package's redirects. Unset, or set to a class
+that does not implement the contract, every answer is the package's own. Tests: `ReleaseHandOffTest`.
 
 **What never moves.** `api/*`, `up`, `livewire/*`, Livewire 4's endpoints (`livewire-<8 hex>/...`: Livewire 4
 serves update, script, uploads and previews under `EndpointResolver::prefix()` = `/livewire-` + the first 8 hex
@@ -1966,8 +1979,10 @@ queue, on the connection those jobs use.
 - **Websockets:** beta uses the SAME websocket app (Reverb / Pusher app id, key, host) as stable; with its own,
   live updates split and a stable dispatcher never sees a beta crew's change.
 - **Work held in the browser** under the stable address (offline save queues, uploads in progress, IndexedDB drafts)
-  stays with that address; a person who is moved does not take it along. An app with such queues drains them
-  before letting the move happen, or keeps those pages in place with `never_move_also`.
+  stays with that address; a person who is moved does not take it along. An app with such queues binds
+  `sso.release.hand_off`: it keeps the editing pages in place (`keepInPlace`) and answers every other move with a page
+  on the old address that drains the queues first (`response`). `never_move_also` alone keeps a page in place but
+  leaves anything queued for other records behind on the next page that is moved.
 - **Live-operations apps** (dispatch, scheduling on shift): move an agency between shifts, not in the middle of one.
 - **Values keyed by a hash of generated output** (a validation result keyed by the XML a release builds) can miss
   across releases: the same record builds different bytes on stable and beta, so the cached answer is not found.

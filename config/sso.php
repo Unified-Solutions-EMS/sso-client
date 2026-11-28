@@ -435,6 +435,10 @@ return [
     |                stable's worker (safe while adopting gradually)
     | guard          the auth guard whose sign-in decides who is moved;
     |                null = the default guard
+    | hand_off       opt-in: a class implementing Contracts\ReleaseHandOff
+    |                that may keep pages in place and answer the move itself
+    |                (an app that holds work in the browser drains it on the
+    |                old address first). null = the package's own answers
     |
     | An app's own config/sso.php may set any one of these keys alone; the
     | rest keep the package defaults (merged key by key, urls and queues
@@ -457,6 +461,7 @@ return [
         'queue_map' => [],
         'unmapped_queues' => 'beta',
         'guard' => null,
+        'hand_off' => null,
     ],
 
     /*

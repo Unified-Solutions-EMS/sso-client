@@ -95,7 +95,7 @@ class ReleaseConfigMergeTest extends ReleaseChannelTestCase
 
         $this->bootWithAppRelease($copied);
 
-        $this->assertEquals($copied + ['never_move_also' => [], 'queue_map' => [], 'unmapped_queues' => 'beta', 'guard' => null], config('sso.release'));
+        $this->assertEquals($copied + ['never_move_also' => [], 'queue_map' => [], 'unmapped_queues' => 'beta', 'guard' => null, 'hand_off' => null], config('sso.release'));
     }
 
     public function test_an_app_without_a_release_block_gets_the_defaults(): void
